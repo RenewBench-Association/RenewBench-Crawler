@@ -17,7 +17,6 @@ def test_config_validates(source: str, source_configs: dict) -> None:
         source (str): Name of the data source.
         source_configs (dict): Dictionary of all source configurations.
     """
-    assert source in source_configs, f"Missing test cfg for source '{source}'"
     schema = SCHEMA_REGISTRY[source]
     cfg_dict = source_configs[source]
 

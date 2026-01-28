@@ -35,6 +35,7 @@ def test_load_config_with_overrides(
         source_configs (dict): Dictionary of source configurations.
         source (str): Name of the data source (input to "load_config").
     """
+    assert source in source_configs, f"Missing test cfg for source '{source}'"
     cfg_dict = source_configs[source]
     overrides = {
         k: ({sub_k: "override" for sub_k in v} if isinstance(v, dict) else "override")
