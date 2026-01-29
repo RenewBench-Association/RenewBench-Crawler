@@ -26,7 +26,7 @@ exec > "$LOG_FILE" 2>&1
 fail_and_print_log() {
     echo "Script failed. Sending alert..."
 
-    $MAIL_CMD -s "⚠️ FAILED: Taipower Crawler" \
+    $MAIL_CMD -s "RenewBench FAILED: Taipower Crawler" \
               -S from="RenewBench Taiwan Bot <RenewBench-bot@kit.edu>" \
               "$RECIPIENTS" < "$LOG_FILE"
 
