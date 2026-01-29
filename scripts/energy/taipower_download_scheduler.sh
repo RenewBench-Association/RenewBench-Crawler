@@ -2,7 +2,17 @@
 
 # Configuration Paramters.
 URL="https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json"
-ROOT_DATA_DIRECTORY="./raw/taipower/"
+
+ROOT_DIRECTORY="./raw/taipower/"
+PYTHON_EXE="$ROOT_DIRECTORY/.venv-dev/bin/python3"
+SCRIPT_PATH="$ROOT_DIRECTORY/scripts/energy/taipower_download.py"
+
+if [ ! -f "$PYTHON_EXE" ]; then
+    echo "ERROR: Python not found at $PYTHON_EXE"
+    exit 1
+fi
+
+ROOT_DATA_DIRECTORY="$ROOT_DIRECTORY/outputs/taipower"
 TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
 MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
 LOG_FILE="$TEMP_DIR/current_run.log"
@@ -14,8 +24,8 @@ exec 3>&1
 exec > "$LOG_FILE" 2>&1
 
 # Ensure directories exist.
-mkdir -p "$TEMP_DIR"
 mkdir -p "$ROOT_DATA_DIRECTORY"
+mkdir -p "$TEMP_DIR"
 
 # Helper function to handle failure.
 fail_and_print_log() {
@@ -39,21 +49,18 @@ if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
     if [ "$HTTP_CODE" -eq 304 ]; then
         # 304 = Not Modified, we have the latest data.
         echo "No update detected (Server returned 304). Exiting."
-        rm -f "$LOG_FILE"
         exit 0
     elif [ "$HTTP_CODE" -eq 200 ]; then
         echo "Update detected (Server returned 200). Proceeding to download..."
 
         # Download, process, and save data with download script.
-        ~/venv/bin/python3 -u ~/RenewBench-Crawler/rbc/energy/taipower/downloader.py "$ROOT_DATA_DIRECTORY"
+        $PYTHON_EXE -u $SCRIPT_PATH "$ROOT_DATA_DIRECTORY"
         PYTHON_EXIT_CODE=$?
 
         if [ $PYTHON_EXIT_CODE -eq 0 ]; then
           echo "Downloading most recent data was successful - updating most recent file!"
           # Update most recently downloaded file.
           curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
-          # Remove log file - no errors!
-          rm -f "$LOG_FILE"
           exit 0
         else
           echo "OH NO - The download failed with the errors above!."
@@ -67,15 +74,13 @@ if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
 else
     echo "First run detected (no recently downloaded file found). Downloading anyway..."
     # Download, process, and save data with download script.
-    ~/venv/bin/python3 -u ~/RenewBench-Crawler/rbc/energy/taipower/downloader.py "$ROOT_DATA_DIRECTORY"
+    $PYTHON_EXE -u $SCRIPT_PATH "$ROOT_DATA_DIRECTORY"
     PYTHON_EXIT_CODE=$?
 
     if [ $PYTHON_EXIT_CODE -eq 0 ]; then
       echo "Downloading the data for the first time was a success - creating most recent file!"
       # Update most recently downloaded file.
       curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
-      # Remove log file - no errors!
-      rm -f "$LOG_FILE"
       exit 0
     else
       echo "OH NO - The download failed with the errors above!."
