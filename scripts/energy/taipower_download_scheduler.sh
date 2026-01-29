@@ -43,6 +43,18 @@ fail_and_print_log() {
 
     exit 1
 }
+# Check for Zombie Mount.
+if mountpoint -q "$MOUNT_POINT"; then
+    # Try to list the directory with a 5-second timeout.
+    timeout 5s ls "$MOUNT_POINT" > /dev/null 2>&1
+
+    if [ $? -ne 0 ]; then
+        echo "Zombie mount detected! Forcing cleanup..."
+        fusermount -uz "$MOUNT_POINT"
+        # Give it a second to clean up
+        sleep 2
+    fi
+fi
 
 # Mount LSDF for saving data if not already mounted.
 echo "Checking if LSDF is already mounted..."
