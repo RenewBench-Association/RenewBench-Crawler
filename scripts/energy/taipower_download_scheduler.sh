@@ -13,7 +13,8 @@ ROOT_DATA_DIRECTORY="/lsdf/kit/scc/projects/renewbench/raw/taipower"
 TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
 MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
 LOG_FILE="$TEMP_DIR/current_run.log"
-
+RECIPIENTS="kaleb.phipps@kit.edu, elena.vollmer@kit.edu"
+MAIL_CMD="/usr/bin/mail"
 
 # Mount LSDF for saving data if not already mounted.
 echo "Checking if LSDF is already mounted..."
@@ -33,12 +34,14 @@ else
   fi
 fi
 
-# Helper function to handle failure.
+# Helper function to handle failure and notify us.
 fail_and_print_log() {
-    # Print the log file contents to File Descriptor 3 for Cron.
-    cat "$LOG_FILE" >&3
+    echo "Script failed. Sending alert..."
 
-    # Exit with error so Cron knows it failed.
+    $MAIL_CMD -s "⚠️ FAILED: Taipower Crawler" \
+              -S from="RenewBench Taiwan Bot <RenewBench-bot@kit.edu>" \
+              "$RECIPIENTS" < "$LOG_FILE"
+
     exit 1
 }
 
