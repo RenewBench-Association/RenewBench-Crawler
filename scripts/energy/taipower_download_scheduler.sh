@@ -19,7 +19,7 @@ MAIL_CMD="/usr/bin/mail"
 # Mount LSDF for saving data if not already mounted.
 echo "Checking if LSDF is already mounted..."
 if mountpoint -q "$MOUNT_POINT"; then
-  echo "LSDF is already mounted."
+  echo "The LSDF is already mounted."
 else
   echo "Mounting to the LSDF..."
   # Mount using SSHFS with the specific key file.
