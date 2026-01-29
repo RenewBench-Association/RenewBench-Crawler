@@ -3,19 +3,50 @@
 # Configuration Paramters.
 URL="https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json"
 
-ROOT_DIRECTORY="./raw/taipower/"
-PYTHON_EXE="$ROOT_DIRECTORY/.venv-dev/bin/python3"
-SCRIPT_PATH="$ROOT_DIRECTORY/scripts/energy/taipower_download.py"
-
-if [ ! -f "$PYTHON_EXE" ]; then
-    echo "ERROR: Python not found at $PYTHON_EXE"
-    exit 1
-fi
-
-ROOT_DATA_DIRECTORY="$ROOT_DIRECTORY/outputs/taipower"
+REMOTE_USER="svc-renewbench-00001"
+REMOTE_HOST="os-login.lsdf.kit.edu"
+SSH_KEY="$HOME/.ssh/id_rsa_lsdf"
+MOUNT_POINT="$HOME/mnt/lsdf"
+PYTHON_EXE="$HOME/venv/bin/python3"
+SCRIPT_PATH="$HOME/RenewBench-Crawler/scripts/energy/taipower_download.py"
+ROOT_DATA_DIRECTORY="/lsdf/kit/scc/projects/renewbench/raw/taipower"
 TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
 MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
 LOG_FILE="$TEMP_DIR/current_run.log"
+
+
+# Mount LSDF for saving data if not already mounted.
+echo "Checking if LSDF is already mounted..."
+if mountpoint -q "$MOUNT_POINT"; then
+  echo "LSDF is already mounted."
+else
+  echo "Mounting to the LSDF..."
+  # Mount using SSHFS with the specific key file.
+    sshfs -o IdentityFile="$SSH_KEY" \
+          -o StrictHostKeyChecking=no \
+          -o allow_other \
+          "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" "$MOUNT_POINT"
+  if [ $? -eq 0 ]; then
+    echo "Mount successful."
+  else
+    echo "Failed to mount."
+  fi
+fi
+
+# Helper function to handle failure.
+fail_and_print_log() {
+    # Print the log file contents to File Descriptor 3 for Cron.
+    cat "$LOG_FILE" >&3
+
+    # Exit with error so Cron knows it failed.
+    exit 1
+}
+
+
+if [ ! -f "$PYTHON_EXE" ]; then
+    echo "ERROR: Python not found at $PYTHON_EXE"
+    fail_and_print_log
+fi
 
 # Save the original standard output to File Descriptor 3 so Cron receives it.
 exec 3>&1
@@ -27,14 +58,7 @@ exec > "$LOG_FILE" 2>&1
 mkdir -p "$ROOT_DATA_DIRECTORY"
 mkdir -p "$TEMP_DIR"
 
-# Helper function to handle failure.
-fail_and_print_log() {
-    # Print the log file contents to File Descriptor 3 for Cron.
-    cat "$LOG_FILE" >&3
 
-    # Exit with error so Cron knows it failed.
-    exit 1
-}
 
 # Check if most recent download file exists.
 if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
@@ -74,7 +98,7 @@ if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
 else
     echo "First run detected (no recently downloaded file found). Downloading anyway..."
     # Download, process, and save data with download script.
-    $PYTHON_EXE -u $SCRIPT_PATH "$ROOT_DATA_DIRECTORY"
+    $PYTHON_EXE -u "$SCRIPT_PATH" "$ROOT_DATA_DIRECTORY"
     PYTHON_EXIT_CODE=$?
 
     if [ $PYTHON_EXIT_CODE -eq 0 ]; then
