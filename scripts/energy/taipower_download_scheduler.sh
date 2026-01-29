@@ -12,7 +12,7 @@ SCRIPT_PATH="$HOME/RenewBench-Crawler/scripts/energy/taipower_download.py"
 ROOT_DATA_DIRECTORY="/lsdf/kit/scc/projects/renewbench/raw/taipower"
 TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
 MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
-LOG_FILE="$TEMP_DIR/current_run.log"
+LOG_FILE="$HOME/current_run.log"
 RECIPIENTS="kaleb.phipps@kit.edu, elena.vollmer@kit.edu"
 MAIL_CMD="/usr/bin/mail"
 
