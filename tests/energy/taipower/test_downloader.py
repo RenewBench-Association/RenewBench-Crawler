@@ -13,7 +13,11 @@ from rbc.energy.taipower.downloader import download_realtime_data
 # ----------------------------------
 @pytest.fixture
 def mock_response() -> MagicMock:
-    """Mock requests response object."""
+    """Mock requests response object.
+
+    Returns:
+        MagicMock: Fixture that mocks a successful requests response.
+    """
     mock = MagicMock()
     mock.status_code = 200
     return mock
