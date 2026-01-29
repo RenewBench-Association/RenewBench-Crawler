@@ -16,6 +16,17 @@ LOG_FILE="$TEMP_DIR/current_run.log"
 RECIPIENTS="kaleb.phipps@kit.edu, elena.vollmer@kit.edu"
 MAIL_CMD="/usr/bin/mail"
 
+# Helper function to handle failure and notify us.
+fail_and_print_log() {
+    echo "Script failed. Sending alert..."
+
+    $MAIL_CMD -s "⚠️ FAILED: Taipower Crawler" \
+              -S from="RenewBench Taiwan Bot <RenewBench-bot@kit.edu>" \
+              "$RECIPIENTS" < "$LOG_FILE"
+
+    exit 1
+}
+
 # Mount LSDF for saving data if not already mounted.
 echo "Checking if LSDF is already mounted..."
 if mountpoint -q "$MOUNT_POINT"; then
@@ -34,18 +45,6 @@ else
     fail_and_print_log
   fi
 fi
-
-# Helper function to handle failure and notify us.
-fail_and_print_log() {
-    echo "Script failed. Sending alert..."
-
-    $MAIL_CMD -s "⚠️ FAILED: Taipower Crawler" \
-              -S from="RenewBench Taiwan Bot <RenewBench-bot@kit.edu>" \
-              "$RECIPIENTS" < "$LOG_FILE"
-
-    exit 1
-}
-
 
 if [ ! -f "$PYTHON_EXE" ]; then
     echo "ERROR: Python not found at $PYTHON_EXE"
