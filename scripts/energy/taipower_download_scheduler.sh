@@ -2,15 +2,31 @@
 
 # Configuration Paramters.
 URL="https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json"
-ROOT_DIRECTORY="./raw/taipower/"
-MOST_RECENT_DOWNLOAD="$ROOT_DIRECTORY/temp/most_recent_download.json"
-TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-NEW_FILE="$ROOT_DIRECTORY/data_$TIMESTAMP.json"
-LOG_FILE="$ROOT_DIRECTORY/temp/current_run.log"
+ROOT_DATA_DIRECTORY="./raw/taipower/"
+TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
+MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
+LOG_FILE="$TEMP_DIR/current_run.log"
+
+# Save the original standard output to File Descriptor 3 so Cron receives it.
+exec 3>&1
 
 # Redirect ALL output (stdout) and errors (stderr) to the log file.
 exec > "$LOG_FILE" 2>&1
 
+# Ensure directories exist.
+mkdir -p "$TEMP_DIR"
+mkdir -p "$ROOT_DATA_DIRECTORY"
+
+# Helper function to handle failure.
+fail_and_print_log() {
+    # Print the log file contents to File Descriptor 3 for Cron.
+    cat "$LOG_FILE" >&3
+
+    # Exit with error so Cron knows it failed.
+    exit 1
+}
+
+# Check if most recent download file exists.
 if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
 
     # -I: Fetch headers only (HEAD request).
@@ -28,49 +44,41 @@ if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
     elif [ "$HTTP_CODE" -eq 200 ]; then
         echo "Update detected (Server returned 200). Proceeding to download..."
 
-        # Update most recently downloaded file
-        curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
+        # Download, process, and save data with download script.
+        ~/venv/bin/python3 -u ~/RenewBench-Crawler/rbc/energy/taipower/downloader.py "$ROOT_DATA_DIRECTORY"
+        PYTHON_EXIT_CODE=$?
+
+        if [ $PYTHON_EXIT_CODE -eq 0 ]; then
+          echo "Downloading most recent data was successful - updating most recent file!"
+          # Update most recently downloaded file.
+          curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
+          # Remove log file - no errors!
+          rm -f "$LOG_FILE"
+          exit 0
+        else
+          echo "OH NO - The download failed with the errors above!."
+          fail_and_print_log
+        fi
     else
-        echo "CRITICAL: Metadata check via curl failed. Server returned HTTP $HTTP_CODE"
+        echo "DANGER ZONE: The metadata check via curl failed. Server returned HTTP $HTTP_CODE"
+        echo "As a result the download could not be started! If this happened I'm sorry - but we are screwed!"
+        fail_and_print_log
     fi
 else
-    echo "First run detected (No recently downloaded file found). Downloading anyway..."
-fi
-
-
-if [ $CURL_EXIT_CODE -ne 0 ]; then
-    echo "CRITICAL: Curl failed to download. Exit code: $CURL_EXIT_CODE"
-    send_failure_email
-    rm -f "$LOG_FILE"
-    exit 1
-fi
-
-# 2. Check if a new file was actually downloaded
-if [ -s "$NEW_FILE" ]; then
-    echo "New data detected ($NEW_FILE). Starting processing..."
-
-    # 3. Run Python Script
-    # We add '-u' (unbuffered) so prints appear in the log instantly.
-    # We use '2>&1' to ensure Python errors are treated as standard output for the log.
-    /usr/bin/python3 -u "$ROOT_DIRECTORY/process_data.py" "$NEW_FILE"
-
+    echo "First run detected (no recently downloaded file found). Downloading anyway..."
+    # Download, process, and save data with download script.
+    ~/venv/bin/python3 -u ~/RenewBench-Crawler/rbc/energy/taipower/downloader.py "$ROOT_DATA_DIRECTORY"
     PYTHON_EXIT_CODE=$?
 
-    # 4. Check Python Success
     if [ $PYTHON_EXIT_CODE -eq 0 ]; then
-        echo "Python processing complete. Committing changes."
-        cp -p "$NEW_FILE" "$MOST_RECENT_DOWNLOAD"
-
-        # Success! Remove the log file (unless you want a log of successes too)
-        rm -f "$LOG_FILE"
+      echo "Downloading the data for the first time was a success - creating most recent file!"
+      # Update most recently downloaded file.
+      curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
+      # Remove log file - no errors!
+      rm -f "$LOG_FILE"
+      exit 0
     else
-        echo "CRITICAL: Python script failed. See above for stack trace."
-        send_failure_email
-        exit 1
+      echo "OH NO - The download failed with the errors above!."
+      fail_and_print_log
     fi
-
-else
-    # No new data (304 Not Modified). Cleanup.
-    [ -f "$NEW_FILE" ] && rm "$NEW_FILE"
-    rm -f "$LOG_FILE"
 fi
