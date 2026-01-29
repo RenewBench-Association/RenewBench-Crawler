@@ -16,6 +16,12 @@ LOG_FILE="$HOME/current_run.log"
 RECIPIENTS="kaleb.phipps@kit.edu, elena.vollmer@kit.edu"
 MAIL_CMD="/usr/bin/mail"
 
+# Save the original standard output to File Descriptor 3 so Cron receives it.
+exec 3>&1
+
+# Redirect ALL output (stdout) and errors (stderr) to the log file.
+exec > "$LOG_FILE" 2>&1
+
 # Helper function to handle failure and notify us.
 fail_and_print_log() {
     echo "Script failed. Sending alert..."
@@ -50,12 +56,6 @@ if [ ! -f "$PYTHON_EXE" ]; then
     echo "ERROR: Python not found at $PYTHON_EXE"
     fail_and_print_log
 fi
-
-# Save the original standard output to File Descriptor 3 so Cron receives it.
-exec 3>&1
-
-# Redirect ALL output (stdout) and errors (stderr) to the log file.
-exec > "$LOG_FILE" 2>&1
 
 # Ensure directories exist.
 mkdir -p "$ROOT_DATA_DIRECTORY"
