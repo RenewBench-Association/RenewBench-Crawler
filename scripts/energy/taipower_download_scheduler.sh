@@ -31,6 +31,7 @@ else
     echo "Mount successful."
   else
     echo "Failed to mount."
+    fail_and_print_log
   fi
 fi
 
