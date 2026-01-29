@@ -13,8 +13,8 @@ ROOT_DATA_DIRECTORY="/lsdf/kit/scc/projects/renewbench/raw/taipower"
 TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
 MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
 LOG_FILE="$HOME/current_run.log"
-RECIPIENTS="kaleb.phipps@kit.edu, elena.vollmer@kit.edu"
 MAIL_CMD="/usr/bin/mail"
+CONFIG_FILE="$HOME/recipients.env"
 
 # Save the original standard output to File Descriptor 3 so Cron receives it.
 exec 3>&1
@@ -22,11 +22,21 @@ exec 3>&1
 # Redirect ALL output (stdout) and errors (stderr) to the log file.
 exec > "$LOG_FILE" 2>&1
 
+# --- [NEW] Load Secrets ---
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    # Fallback/Error if the file is missing on the server
+    echo "CRITICAL: Config file with emails not found!" >> "$CONFIG_FILE"
+    # Optional: Set a default or exit
+    RECIPIENTS="renewbench@lists.kit.edu"
+fi
+
 # Helper function to handle failure and notify us.
 fail_and_print_log() {
     echo "Script failed. Sending alert..."
 
-    $MAIL_CMD -s "RenewBench FAILED: Taipower Crawler" \
+    $MAIL_CMD -s "⚠️ FAILED: Taipower Crawler" \
               -S from="RenewBench Taiwan Bot <RenewBench-bot@kit.edu>" \
               "$RECIPIENTS" < "$LOG_FILE"
 
