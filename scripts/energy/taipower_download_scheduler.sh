@@ -16,6 +16,7 @@ MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
 LOG_FILE="$HOME/current_run.log"
 MAIL_CMD="/usr/bin/mail"
 CONFIG_FILE="$HOME/recipients.env"
+FUSERMOUNT_CMD="/usr/bin/fusermount"
 
 # Save the original standard output to File Descriptor 3 so Cron receives it.
 exec 3>&1
@@ -50,7 +51,7 @@ if mountpoint -q "$MOUNT_POINT"; then
 
     if [ $? -ne 0 ]; then
         echo "Zombie mount detected! Forcing cleanup..."
-        fusermount -uz "$MOUNT_POINT"
+        $FUSERMOUNT_CMD -uz "$MOUNT_POINT"
         # Give it a second to clean up
         sleep 2
     fi
