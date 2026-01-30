@@ -2,7 +2,7 @@ name: Post coverage report to PR
 
 on:
   workflow_run:
-    workflows: ["Save coverage report and PR number"]
+    workflows: ["Python test"]
     types:
       - completed
 
