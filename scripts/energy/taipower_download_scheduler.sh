@@ -1,22 +1,16 @@
 #!/bin/bash
 
-# Configuration Paramters.
+# Configuration Parameters.
 URL="https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json"
 
-REMOTE_USER="svc-renewbench-00001"
-REMOTE_HOST="os-login.lsdf.kit.edu"
-REMOTE_DIR="/lsdf/kit/scc/projects/renewbench"
-SSH_KEY="$HOME/.ssh/id_rsa_lsdf"
-MOUNT_POINT="$HOME/mnt/lsdf"
 PYTHON_EXE="$HOME/venv/bin/python3"
 SCRIPT_PATH="$HOME/RenewBench-Crawler/scripts/energy/taipower_download.py"
-ROOT_DATA_DIRECTORY="$MOUNT_POINT/taipower/raw"
-TEMP_DIR="$ROOT_DATA_DIRECTORY/temp"
+ROOT_DATA_DIRECTORY="$HOME/raw_data"
+TEMP_DIR="$HOME/temp"
 MOST_RECENT_DOWNLOAD="$TEMP_DIR/most_recent_download.json"
-LOG_FILE="$HOME/current_run.log"
+LOG_FILE="$TEMP_DIR/current_download.log"
 MAIL_CMD="/usr/bin/mail"
 CONFIG_FILE="$HOME/recipients.env"
-FUSERMOUNT_CMD="/usr/bin/fusermount"
 
 # Save the original standard output to File Descriptor 3 so Cron receives it.
 exec 3>&1
@@ -44,37 +38,6 @@ fail_and_print_log() {
 
     exit 1
 }
-# Check for Zombie Mount.
-if mountpoint -q "$MOUNT_POINT"; then
-    # Try to list the directory with a 5-second timeout.
-    timeout 5s ls "$MOUNT_POINT" > /dev/null 2>&1
-
-    if [ $? -ne 0 ]; then
-        echo "Zombie mount detected! Forcing cleanup..."
-        $FUSERMOUNT_CMD -uz "$MOUNT_POINT"
-        # Give it a second to clean up
-        sleep 2
-    fi
-fi
-
-# Mount LSDF for saving data if not already mounted.
-echo "Checking if LSDF is already mounted..."
-if mountpoint -q "$MOUNT_POINT"; then
-  echo "The LSDF is already mounted."
-else
-  echo "Mounting to the LSDF..."
-  # Mount using SSHFS with the specific key file.
-    sshfs -o IdentityFile="$SSH_KEY" \
-          -o StrictHostKeyChecking=no \
-          -o allow_other \
-          "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" "$MOUNT_POINT"
-  if [ $? -eq 0 ]; then
-    echo "Mount successful."
-  else
-    echo "Failed to mount."
-    fail_and_print_log
-  fi
-fi
 
 if [ ! -f "$PYTHON_EXE" ]; then
     echo "ERROR: Python not found at $PYTHON_EXE"
@@ -84,8 +47,6 @@ fi
 # Ensure directories exist.
 mkdir -p "$ROOT_DATA_DIRECTORY"
 mkdir -p "$TEMP_DIR"
-
-
 
 # Check if most recent download file exists.
 if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
@@ -138,3 +99,4 @@ else
       fail_and_print_log
     fi
 fi
+
