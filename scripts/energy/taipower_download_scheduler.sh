@@ -24,7 +24,7 @@ exec 3>&1
 # Redirect ALL output (stdout) and errors (stderr) to the log file.
 exec > "$LOG_FILE" 2>&1
 
-# --- [NEW] Load Secrets ---
+# Load recipients.
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 else
