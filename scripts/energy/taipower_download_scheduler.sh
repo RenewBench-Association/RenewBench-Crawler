@@ -99,4 +99,3 @@ else
       fail_and_print_log
     fi
 fi
-
