@@ -81,9 +81,24 @@ class EntsoeConfig(AccessValidation, BaseModel):
     access: AccessAPI
 
 
+class Era5Config(AccessValidation, BaseModel):
+    """Configuration schema for the ERA5 reanalysis data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAPI): Access pydantic model for access settings.
+    """
+
+    source: Literal["era5"] = "era5"
+    paths: Paths
+    access: AccessAPI
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
+    "era5": Era5Config,
 }
