@@ -24,7 +24,7 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Coordinating Entso-E data download."""
+    """Coordinating Taipower data download."""
     args = parse_arguments()
     dst_dir = Path(args.dst_dir)
 
