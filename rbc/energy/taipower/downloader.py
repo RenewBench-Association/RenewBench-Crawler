@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import requests.exceptions
 from requests import Session
 from zoneinfo import ZoneInfo
 
@@ -49,11 +50,17 @@ def download_realtime_data(dst_dir: Path) -> None:
         )
         sys.exit(1)
 
-    data = response.json()
-    dt = data[""]
-    df = pd.DataFrame(data["dataset"])
+    try:
+        data = response.json()
+        dt = data[""]
+        dt = (
+            datetime.strptime(dt, "%Y-%m-%d %H:%M").replace(tzinfo=TIMEZONE).isoformat()
+        )
+        df = pd.DataFrame(data["dataset"])
 
-    dt = datetime.strptime(dt, "%Y-%m-%d %H:%M").replace(tzinfo=TIMEZONE).isoformat()
+    except (requests.exceptions.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        print(f"Failed parsing of JSON from {URL} with a {type(e).__name__}!")
+        sys.exit(1)
 
     csv_path = Path(dst_dir, dt + ".csv")
 
