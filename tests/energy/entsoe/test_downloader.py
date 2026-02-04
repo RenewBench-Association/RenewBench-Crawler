@@ -1,4 +1,4 @@
-# tests/energy/taipower/test_downloader.py
+# tests/energy/entsoe/test_downloader.py
 import pickle
 from pathlib import Path
 from typing import Generator

@@ -137,6 +137,7 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+.eptr2-tgt
 .venv
 env/
 venv/
@@ -145,6 +146,9 @@ venv*/
 ENV/
 env.bak/
 venv.bak/
+
+# General stuff
+outputs/
 
 # Spyder project settings
 .spyderproject
