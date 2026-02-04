@@ -1,5 +1,5 @@
 paths:
-  dst_dir_raw: /lsdf/raw/epias/
+  dst_dir_raw: /lsdf/raw/energy/epias/
 access:
   username: "YOUR-SECRET-USERNAME---DON'T-COMMIT!!!"
   password: "YOUR-SECRET-PASSWORD---DON'T-COMMIT!!!"
