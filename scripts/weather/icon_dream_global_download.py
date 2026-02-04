@@ -26,6 +26,12 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--download-metadata",
+        action="store_true",
+        help="Download grid metadata files and exit",
+    )
+
+    parser.add_argument(
         "-y",
         "--years",
         type=int,
@@ -48,8 +54,8 @@ def main() -> None:
         "--variables",
         type=str,
         nargs="+",
-        default=["T"],
-        help="Variables to download (default: T)",
+        default=["temperature"],
+        help="Variables to download (default: temperature)",
     )
 
     parser.add_argument(
@@ -93,6 +99,12 @@ def main() -> None:
         dry_run=args.dry_run,
         resume=args.resume,
     )
+
+    # Handle --download-metadata
+    if args.download_metadata:
+        logger.info(f"Config loaded for icon_dream_global: {config}")
+        downloader.download_metadata(dry_run=args.dry_run)
+        return
 
     # Start download
     logger.info(f"Config loaded for icon_dream_global: {config}")

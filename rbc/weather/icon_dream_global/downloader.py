@@ -12,6 +12,16 @@ import numpy as np
 import requests
 from loguru import logger
 
+from rbc.weather.icon_dream_global.mappings import (
+    ALL_MODEL_LEVEL_VARIABLES,
+    ALL_SINGLE_LEVEL_VARIABLES,
+    DEFAULT_VARIABLES,
+    VARIABLE_TO_DWD_PARAM,
+)
+
+# Base URL for ICON-DREAM Global data
+BASE_URL = "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly"
+
 
 class IconDreamGlobalDownloader:
     """ICON-DREAM Global NWP data downloader.
@@ -31,11 +41,6 @@ class IconDreamGlobalDownloader:
         available_variables (set[str]): Set of available variables from DWD.
         available_dates (dict): Dict of variables to available year-months.
     """
-
-    # Base URL for ICON-DREAM Global data
-    BASE_URL = (
-        "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly"
-    )
 
     def __init__(
         self,
@@ -63,9 +68,7 @@ class IconDreamGlobalDownloader:
         self.months = (
             months if months is not None else [f"{i:02d}" for i in range(1, 13)]
         )
-        self.variables = (
-            variables if variables is not None else self._get_default_variables()
-        )
+        self.variables = variables if variables is not None else DEFAULT_VARIABLES
         self.dry_run = dry_run
         self.resume = resume
 
@@ -103,15 +106,6 @@ class IconDreamGlobalDownloader:
             )
             logger.info("Starting fresh download (no checkpoint found).")
 
-    def _get_default_variables(self) -> list[str]:
-        """Get default variables to download.
-
-        Returns:
-            list[str]: List of default variables.
-        """
-        # Default: common variables like temperature
-        return ["T"]  # Temperature is the most common variable
-
     def _discover_available_variables(self) -> set[str]:
         """Discover available variables from DWD open data portal.
 
@@ -120,7 +114,7 @@ class IconDreamGlobalDownloader:
         """
         try:
             # List directory to find available variables
-            response = requests.get(self.BASE_URL, timeout=30)
+            response = requests.get(BASE_URL, timeout=30)
             response.raise_for_status()
 
             # Extract variable folder names from HTML directory listing
@@ -132,51 +126,14 @@ class IconDreamGlobalDownloader:
 
             if not variables:
                 logger.warning("No variables found in DWD directory, using defaults")
-                return self._get_default_variable_set()
+                return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
 
             logger.info(f"Discovered {len(variables)} available variables from DWD")
             return variables
 
         except Exception as e:
             logger.warning(f"Error discovering variables: {e}, using defaults")
-            return self._get_default_variable_set()
-
-    @staticmethod
-    def _get_default_variable_set() -> set[str]:
-        """Get the default set of variables as fallback.
-
-        Returns:
-            set[str]: Set of commonly available ICON-DREAM variables.
-        """
-        return {
-            # 3D Pressure-Level Variables
-            "T",
-            "U",
-            "V",
-            "W",
-            "P",
-            "QV",
-            "TKE",
-            "WS",
-            "DEN",
-            # 2D Surface Variables
-            "T_2M",
-            "U_10M",
-            "V_10M",
-            "TD_2M",
-            "TOT_PREC",
-            "PS",
-            "PMSL",
-            "CLCT",
-            "ASWDIR_S",
-            "ASWDIFD_S",
-            "QV_S",
-            "TMAX_2M",
-            "TMIN_2M",
-            "VMAX_10M",
-            "WS_10M",
-            "Z0",
-        }
+            return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
 
     def _validate_variables(self) -> None:
         """Validate that all requested variables are available.
@@ -184,12 +141,27 @@ class IconDreamGlobalDownloader:
         Raises:
             ValueError: If any requested variable is not available.
         """
-        invalid_vars = [v for v in self.variables if v not in self.available_variables]
+        # Check that all requested variables exist in our mapping
+        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_DWD_PARAM]
 
         if invalid_vars:
             raise ValueError(
-                f"Invalid variables: {', '.join(invalid_vars)}. "
-                f"Available variables: {', '.join(sorted(self.available_variables))}"
+                f"Invalid variables: {', '.join(invalid_vars)}. \n"
+                f"Run 'print_available_variables()' to see available variables."
+            )
+
+        # Check that the DWD codes are available on the server
+        unavailable_vars = [
+            v
+            for v in self.variables
+            if self._get_dwd_param(v) not in self.available_variables
+        ]
+
+        if unavailable_vars:
+            dwd_codes = [self._get_dwd_param(v) for v in unavailable_vars]
+            raise ValueError(
+                f"Variables not available on DWD server: {', '.join(unavailable_vars)} "
+                f"(DWD codes: {', '.join(dwd_codes)})"
             )
 
         logger.info(f"All {len(self.variables)} requested variables are available.")
@@ -209,7 +181,7 @@ class IconDreamGlobalDownloader:
                         continue
 
                     # Download the file
-                    status = self._download_file(year, month, variable)
+                    status = self._download_variables(year, month, variable)
 
                     # Update checkpoint
                     if status == 1:
@@ -218,20 +190,37 @@ class IconDreamGlobalDownloader:
 
         logger.info("All downloads completed!")
 
-    def _download_file(self, year: int, month: str, variable: str) -> int:
+    def _get_dwd_param(self, variable: str) -> str:
+        """Convert variable name to DWD parameter code.
+
+        Args:
+            variable (str): ICON-DREAM variable name
+
+        Returns:
+            str: DWD parameter code
+        """
+        if variable in VARIABLE_TO_DWD_PARAM:
+            return VARIABLE_TO_DWD_PARAM[variable]
+        # Fallback: use variable name directly
+        return variable
+
+    def _download_variables(self, year: int, month: str, variable: str) -> int:
         """Download a single data file.
 
         Args:
             year (int): Year to download.
             month (str): Month to download (format: '01' to '12').
-            variable (str): Variable code (e.g., 'T').
+            variable (str): Variable name (e.g., 'temperature', '2m_temperature').
 
         Returns:
             int: 1 if successful, 0 if failed.
         """
+        # Translate variable name to DWD parameter code
+        dwd_code = self._get_dwd_param(variable)
+
         # Build filename and URL
-        filename = f"ICON-DREAM-Global_{year}{month}_{variable}_hourly.grb"
-        url = f"{self.BASE_URL}/{variable}/{filename}"
+        filename = f"ICON-DREAM-Global_{year}{month}_{dwd_code}_hourly.grb"
+        url = f"{BASE_URL}/{dwd_code}/{filename}"
         output_file = self.output_path / filename
 
         # Check if file already exists
@@ -303,6 +292,101 @@ class IconDreamGlobalDownloader:
         with open(self.checkpoint_path, "wb") as f:
             pickle.dump(self.checkpoint, f)
 
+    def download_metadata(self, dry_run: Optional[bool] = None) -> None:
+        """Download ICON-DREAM Global grid metadata files.
+
+        Downloads the grid definition and connectivity information for the
+        ICON-DREAM Global R03B07 (~13km resolution) grid.
+
+        Args:
+            dry_run (bool, optional): If True, print download info without downloading.
+                If None, uses the downloader's dry_run setting.
+        """
+        if dry_run is None:
+            dry_run = self.dry_run
+
+        metadata_dir = self.output_path / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        # Metadata file URLs for ICON-DREAM Global R03B07 grid
+        metadata_files = {
+            "icon_grid_0026_R03B07_G.nc": (
+                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G.nc",
+                "ICON-DREAM Global grid definition",
+            ),
+            "icon_grid_0026_R03B07_G-grfinfo.nc": (
+                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G-grfinfo.nc",
+                "ICON-DREAM Global grid connectivity information",
+            ),
+        }
+
+        logger.info("Downloading ICON-DREAM Global metadata files...")
+        logger.info(f"Metadata destination: {metadata_dir}")
+
+        for filename, (url, description) in metadata_files.items():
+            output_file = metadata_dir / filename
+
+            # Check if file already exists
+            if output_file.exists():
+                logger.info(
+                    f"Metadata: {description} ({filename}) already exists, skipping"
+                )
+                continue
+
+            if dry_run:
+                logger.info(
+                    f"Metadata DRY RUN: Would download {description} from {url}"
+                )
+                continue
+
+            try:
+                logger.info(f"Metadata: Downloading {description} ({filename})...")
+
+                # Download with streaming
+                response = requests.get(url, stream=True, timeout=300)
+                response.raise_for_status()
+
+                # Get total file size
+                total_size = int(response.headers.get("content-length", 0))
+                size_mb = total_size / (1024**2)
+
+                logger.info(f"Metadata: File size: {size_mb:.2f} MB")
+
+                # Download with progress tracking
+                downloaded = 0
+                chunk_size = 8192  # 8KB chunks
+
+                with open(output_file, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+
+                            # Log progress every 10MB
+                            if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:
+                                progress = downloaded / total_size * 100
+                                logger.info(
+                                    f"Metadata: {description} - "
+                                    f"Downloaded {downloaded / (1024**2):.2f}MB / "
+                                    f"{size_mb:.2f}MB ({progress:.1f}%)"
+                                )
+
+                logger.info(
+                    f"Metadata: Successfully downloaded {description} to {output_file}"
+                )
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Metadata: Download failed for {description}: {e}")
+                # Clean up partial file
+                if output_file.exists():
+                    output_file.unlink()
+            except Exception as e:
+                logger.error(f"Metadata: Error downloading {description}: {e}")
+                if output_file.exists():
+                    output_file.unlink()
+
+        logger.info("Metadata download completed!")
+
     @staticmethod
     def print_available_variables() -> None:
         """Print all available ICON-DREAM Global variables."""
@@ -314,39 +398,27 @@ class IconDreamGlobalDownloader:
         print("Temporal: Hourly data")
         print("Time period: 2010-01 to present\n")
 
-        # Try to discover available variables
-        try:
-            downloader = IconDreamGlobalDownloader(
-                output_path=Path("/tmp"),
-                years=[2020],
-            )
-            variables = sorted(downloader.available_variables)
-            print(f"Available variables ({len(variables)}):\n")
+        # Separate variables by type
+        model_3d_vars = [
+            (name, code)
+            for name, code in VARIABLE_TO_DWD_PARAM.items()
+            if code in ALL_MODEL_LEVEL_VARIABLES
+        ]
+        surface_2d_vars = [
+            (name, code)
+            for name, code in VARIABLE_TO_DWD_PARAM.items()
+            if code in ALL_SINGLE_LEVEL_VARIABLES
+        ]
 
-            # Group variables by type
-            pressure_3d = [
-                v
-                for v in variables
-                if v in ["T", "U", "V", "P", "QV", "W", "TKE", "WS", "DEN"]
-            ]
-            surface_2d = [v for v in variables if v != ".." and v not in pressure_3d]
+        if model_3d_vars:
+            print(f"  3D Model-Level Variables ({len(model_3d_vars)}):")
+            for name, code in sorted(model_3d_vars):
+                print(f"    - {name} ({code})")
+            print()
 
-            if pressure_3d:
-                print("  3D Pressure-Level Variables:")
-                for var in sorted(pressure_3d):
-                    print(f"    - {var}")
-                print()
-
-            if surface_2d:
-                print("  2D Surface Variables:")
-                for var in sorted(surface_2d):
-                    print(f"    - {var}")
-
-        except Exception as e:
-            logger.error(f"Could not discover variables: {e}")
-            print("Common ICON-DREAM variables:")
-            default_vars = IconDreamGlobalDownloader._get_default_variable_set()
-            for var in sorted(default_vars):
-                print(f"  - {var}")
+        if surface_2d_vars:
+            print(f"  2D Single-Level Variables ({len(surface_2d_vars)}):")
+            for name, code in sorted(surface_2d_vars):
+                print(f"    - {name} ({code})")
 
         print("\n" + "=" * 80)
