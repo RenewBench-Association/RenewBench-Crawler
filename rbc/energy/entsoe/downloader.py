@@ -120,7 +120,8 @@ class EntsoeDownloader:
             for zone in self.bidding_zones:
                 task = (year, zone)
 
-                if self.checkpoint.get(task) != 0:
+                # check if task was previously run and was unsuccessful before (= 0)
+                if self.checkpoint.get(task) == 0:
                     success_code = self._download_year_zone_data(zone=zone, year=year)
 
                     self.checkpoint[task] = success_code
