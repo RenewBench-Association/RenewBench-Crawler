@@ -1,0 +1,5 @@
+paths:
+  dst_dir_raw: /lsdf/raw/epias/
+access:
+  username: "YOUR-SECRET-USERNAME---DON'T-COMMIT!!!"
+  password: "YOUR-SECRET-PASSWORD---DON'T-COMMIT!!!"
