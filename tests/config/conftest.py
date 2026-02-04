@@ -21,6 +21,10 @@ def source_configs() -> dict:
             "paths": {"dst_dir_raw": "/path/raw/epias"},
             "access": {"username": "name", "password": "pw"},
         },
+        "era5": {
+            "paths": {"dst_dir_raw": "/path/raw/weather/era5"},
+            "access": {"api_key": "token"},
+        },
     }
 
 
