@@ -17,6 +17,10 @@ def source_configs() -> dict:
             "paths": {"dst_dir_raw": "/path/raw/entsoe"},
             "access": {"api_key": "token"},
         },
+        "epias": {
+            "paths": {"dst_dir_raw": "/path/raw/epias"},
+            "access": {"username": "name", "password": "pw"},
+        },
     }
 
 

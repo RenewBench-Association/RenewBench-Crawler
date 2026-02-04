@@ -32,6 +32,18 @@ class AccessAPI(BaseModel):
     api_key: str
 
 
+class AccessAccount(BaseModel):
+    """Access settings for a data source requiring an account username & password.
+
+    Attributes:
+        username (str): Account username.
+        password (str): Account password.
+    """
+
+    username: str
+    password: str
+
+
 class AccessValidation:
     """Validator for "access" fields to ensure strings contain non-placeholder content."""
 
@@ -81,9 +93,24 @@ class EntsoeConfig(AccessValidation, BaseModel):
     access: AccessAPI
 
 
+class EpiasConfig(AccessValidation, BaseModel):
+    """Configuration schema for the EPIAS data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAccount): Access pydantic model for access settings.
+    """
+
+    source: Literal["epias"] = "epias"
+    paths: Paths
+    access: AccessAccount
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
+    "epias": EpiasConfig,
 }
