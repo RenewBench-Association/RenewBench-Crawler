@@ -102,7 +102,7 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
         init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
     """
     # save a fake checkpoint file
-    checkpoint = {(init_args["years"][0], init_args["bidding_zones"][0]): 0}
+    checkpoint = {(init_args["years"][0], init_args["bidding_zones"][0]): 1}
     checkpoint_path = Path(init_args["output_path"], "status.pickle")
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -111,6 +111,7 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
     downloader = EntsoeDownloader(**init_args)
 
     with patch.object(downloader, "_download_year_zone_data") as mock_dump:
+        mock_dump.return_value = 1
         downloader.download_data()
 
         assert mock_dump.call_count == 0
