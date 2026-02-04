@@ -1,0 +1,64 @@
+#!/usr/bin/env python
+"""EPIAS DATA DOWNLOAD SCRIPT.
+
+Download data from EPIAS Transparency Platform for Turkey.
+"""
+
+import argparse
+from argparse import ArgumentParser
+
+from loguru import logger
+
+from rbc.config.loader import load_config, parse_key_value_pairs
+from rbc.energy.epias import EpiasDownloader
+
+SOURCE = "epias"
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments.
+
+    Returns:
+        argparse.Namespace: Namespace parsed command line arguments.
+    """
+    parser = ArgumentParser(prog="EPIAS data download")
+    parser.add_argument(
+        "-y",
+        "--years",
+        nargs="+",
+        type=int,
+        default=list(range(2010, 2026)),
+        help=f"Years to download. Example: -y 2020 2021. "
+        f"Default: {list(range(2010, 2026))}",
+    )
+    parser.add_argument(
+        "-o",
+        "--cfg_options",
+        action="append",
+        help="Override YAML config values (supports nested keys). "
+        "Example: -o paths.dst_dir_raw=/your/path/ -o "
+        "access.username=YOUR-SECRET-USERNAME",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Coordinating EPIAS data download."""
+    args = parse_arguments()
+    overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
+
+    cfg = load_config(source=SOURCE, overrides=overrides)
+    logger.info(f"Config loaded for {SOURCE}:\n{cfg}")
+
+    downloader = EpiasDownloader(
+        username=cfg.access.username,
+        password=cfg.access.password,
+        output_path=cfg.paths.dst_dir_raw,
+        years=args.years,
+        resume=True,
+    )
+    downloader.download_data()
+
+
+if __name__ == "__main__":
+    main()
