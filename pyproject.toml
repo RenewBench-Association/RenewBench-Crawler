@@ -21,6 +21,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "cdsapi",
     "entsoe-apy",
     "eptr2",
     "geopandas",

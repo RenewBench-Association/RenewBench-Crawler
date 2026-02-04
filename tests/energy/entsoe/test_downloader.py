@@ -1,4 +1,4 @@
-# tests/downloaders/test_downloader.py
+# tests/energy/taipower/test_downloader.py
 import pickle
 from pathlib import Path
 from typing import Generator
@@ -17,7 +17,11 @@ from rbc.energy.entsoe import EntsoeDownloader
 # ----------------------------------
 @pytest.fixture
 def api_config() -> Generator:
-    """Fixture that patches the entsoe-apy package configuration."""
+    """Fixture that patches the entsoe-apy package configuration.
+
+    Yields:
+       patched successful api configuration.
+    """
     with patch("rbc.energy.entsoe.downloader.set_config"):
         with patch("rbc.energy.entsoe.downloader.get_config") as mock_get:
             mock_get.return_value.security_token = "fake_token"
@@ -26,7 +30,14 @@ def api_config() -> Generator:
 
 @pytest.fixture
 def init_args(tmp_path: Path) -> dict:
-    """Creates a basic setup with a temporary directory."""
+    """Creates a basic setup with a temporary directory.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+
+    Returns:
+        dict: Initialisation arguments.
+    """
     return {
         "token": "fake_token",
         "output_path": tmp_path,
@@ -37,8 +48,16 @@ def init_args(tmp_path: Path) -> dict:
 
 
 @pytest.fixture
-def downloader(api_config, init_args: dict) -> EntsoeDownloader:
-    """Returns an instantiated EntsoeDownloader."""
+def downloader(api_config: Generator, init_args: dict) -> EntsoeDownloader:
+    """Returns an instantiated EntsoeDownloader.
+
+    Args:
+        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
+        init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
+
+    Returns:
+        dl (EntsoeDownloader): Instance of EntsoeDownloader class.
+    """
     dl = EntsoeDownloader(**init_args)
     return dl
 
@@ -48,14 +67,14 @@ def downloader(api_config, init_args: dict) -> EntsoeDownloader:
 # ----------------------------------
 @pytest.mark.parametrize("bz, valid", [("10YES-REE------0", True), (" ", False)])
 def test_downloader_initialization(
-    api_config, init_args: dict, bz: str, valid: bool
+    api_config: Generator, init_args: dict, bz: str, valid: bool
 ) -> None:
     """Happy path for class initialization.
 
     Check that the EntsoeDownloader sets up paths and checkpoint correctly.
 
     Args:
-        api_config: Fixture that patches the ENTSO-E global configuration.
+        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
         bz (str): The bidding zone to use.
         valid (bool): Whether the bidding zone is valid (True) or not (False).
@@ -80,7 +99,7 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
     Args:
-        api_config: Fixture that patches the ENTSO-E global configuration.
+        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
     """
     # save a fake checkpoint file

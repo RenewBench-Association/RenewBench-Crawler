@@ -61,7 +61,7 @@ Coming soon :fire:
 
 | Region      | Source   | Platform                                                                            | Docs                                                                                                                 |
 |-------------|----------|-------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-
+| World      | ERA5  | [TP](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1)                                               | [API guide](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5) |
 
 ## Guides
 
