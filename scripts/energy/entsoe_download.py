@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """ENTSOE-E DATA DOWNLOAD SCRIPT.
 
-Schema definitions for different data sources.
+Download data from ENTSO-E Transparency Platform for European bidding zones.
 """
 
 import argparse
