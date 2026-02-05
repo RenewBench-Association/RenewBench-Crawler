@@ -32,6 +32,53 @@ class AccessAPI(BaseModel):
     api_key: str
 
 
+class AccessAccount(BaseModel):
+    """Access settings for a data source requiring an account username & password.
+
+    Attributes:
+        username (str): Account username.
+        password (str): Account password.
+    """
+
+    username: str
+    password: str
+
+
+# ----------------------------------
+# General schema validators
+# ----------------------------------
+class PathValidation:
+    """Validator for Path fields to ensure they are safe and writable."""
+
+    @field_validator("paths", mode="after")
+    @classmethod
+    def check_paths(cls, paths: BaseModel) -> BaseModel:
+        """Validate that destination directories are accessible.
+
+        Args:
+            paths (BaseModel): Parsed paths configuration.
+
+        Returns:
+            BaseModel: The validated paths object.
+
+        Raises:
+            ValueError: If the path is not writable.
+        """
+        for field, path in paths.model_dump().items():
+            if not isinstance(path, (str, Path)):
+                continue
+
+            try:
+                Path(path).mkdir(parents=True, exist_ok=True)
+            except (PermissionError, OSError) as e:
+                raise ValueError(
+                    f"Path '{field}' ('{path}') is not writable or cannot be created. "
+                    f"System error: {e}"
+                )
+
+        return paths
+
+
 class AccessValidation:
     """Validator for "access" fields to ensure strings contain non-placeholder content."""
 
@@ -67,7 +114,7 @@ class AccessValidation:
 # ----------------------------------
 # Per-source schemas
 # ----------------------------------
-class EntsoeConfig(AccessValidation, BaseModel):
+class EntsoeConfig(PathValidation, AccessValidation, BaseModel):
     """Configuration schema for the ENTSO-E data source.
 
     Attributes:
@@ -81,7 +128,21 @@ class EntsoeConfig(AccessValidation, BaseModel):
     access: AccessAPI
 
 
-class Era5Config(AccessValidation, BaseModel):
+class EpiasConfig(PathValidation, AccessValidation, BaseModel):
+    """Configuration schema for the EPIAS data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAccount): Access pydantic model for access settings.
+    """
+
+    source: Literal["epias"] = "epias"
+    paths: Paths
+    access: AccessAccount
+
+
+class Era5Config(PathValidation, AccessValidation, BaseModel):
     """Configuration schema for the ERA5 reanalysis data source.
 
     Attributes:
@@ -100,5 +161,6 @@ class Era5Config(AccessValidation, BaseModel):
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
+    "epias": EpiasConfig,
     "era5": Era5Config,
 }
