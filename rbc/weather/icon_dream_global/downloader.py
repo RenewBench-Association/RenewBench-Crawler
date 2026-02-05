@@ -393,32 +393,42 @@ class IconDreamGlobalDownloader:
         print("\n" + "=" * 80)
         print("AVAILABLE ICON-DREAM GLOBAL VARIABLES")
         print("=" * 80)
+
+        print("\n--- SINGLE-LEVEL (2D) VARIABLES ---")
         print("Dataset: ICON-DREAM-Global (DWD Open Data)")
         print("Resolution: ~13km (icosahedral grid)")
         print("Temporal: Hourly data")
-        print("Time period: 2010-01 to present\n")
+        print("Time period: 2010-01 to present")
+        print(f"Total: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n")
+        for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
+            if code not in ALL_SINGLE_LEVEL_VARIABLES:
+                continue
+            marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
+            print(f"  • {name}{marker}")
 
-        # Separate variables by type
-        model_3d_vars = [
-            (name, code)
-            for name, code in VARIABLE_TO_DWD_PARAM.items()
-            if code in ALL_MODEL_LEVEL_VARIABLES
-        ]
-        surface_2d_vars = [
-            (name, code)
-            for name, code in VARIABLE_TO_DWD_PARAM.items()
-            if code in ALL_SINGLE_LEVEL_VARIABLES
-        ]
-
-        if model_3d_vars:
-            print(f"  3D Model-Level Variables ({len(model_3d_vars)}):")
-            for name, code in sorted(model_3d_vars):
-                print(f"    - {name} ({code})")
-            print()
-
-        if surface_2d_vars:
-            print(f"  2D Single-Level Variables ({len(surface_2d_vars)}):")
-            for name, code in sorted(surface_2d_vars):
-                print(f"    - {name} ({code})")
+        print("\n--- MODEL-LEVEL (3D) VARIABLES ---")
+        print("Dataset: ICON-DREAM-Global (DWD Open Data)")
+        print("Resolution: ~13km (icosahedral grid)")
+        print("Temporal: Hourly data")
+        print("Time period: 2010-01 to present")
+        print(f"Total: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n")
+        for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
+            if code not in ALL_MODEL_LEVEL_VARIABLES:
+                continue
+            marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
+            print(f"  • {name}{marker}")
 
         print("\n" + "=" * 80)
+        print("USAGE EXAMPLES:")
+        print("=" * 80)
+        print("\n1. Download data with metadata (default):")
+        print(
+            "   python scripts/weather/icon_dream_global_download.py -y 2020 -m 01 -v 2m_temperature surface_pressure\n"
+        )
+        print("2. Download data without metadata:")
+        print(
+            "   python scripts/weather/icon_dream_global_download.py -y 2020 -m 01 -v temperature --no-metadata\n"
+        )
+        print("3. Download metadata only:")
+        print("   python scripts/weather/icon_dream_global_download.py\n")
+        print("=" * 80 + "\n")

@@ -6,6 +6,7 @@ from DWD open data portal.
 """
 
 import argparse
+import sys
 
 from loguru import logger
 
@@ -26,9 +27,9 @@ def main() -> None:
     )
 
     parser.add_argument(
-        "--download-metadata",
+        "--no-metadata",
         action="store_true",
-        help="Download grid metadata files and exit",
+        help="Skip downloading grid metadata files (downloaded by default)",
     )
 
     parser.add_argument(
@@ -100,15 +101,24 @@ def main() -> None:
         resume=args.resume,
     )
 
-    # Handle --download-metadata
-    if args.download_metadata:
-        logger.info(f"Config loaded for icon_dream_global: {config}")
-        downloader.download_metadata(dry_run=args.dry_run)
-        return
-
-    # Start download
     logger.info(f"Config loaded for icon_dream_global: {config}")
-    downloader.download_data()
+
+    # Check if only metadata download is requested
+    explicit_data_flags = {"-y", "--years", "-m", "--months", "-v", "--variables"}
+    has_explicit_data_args = any(arg in explicit_data_flags for arg in sys.argv[1:])
+
+    # Download metadata (unless explicitly disabled) if downloading data, or if no data args provided
+    if not args.no_metadata:
+        if not has_explicit_data_args or has_explicit_data_args:
+            downloader.download_metadata(dry_run=args.dry_run)
+
+        # If only --no-metadata or no explicit data args, stop here (metadata only)
+        if not has_explicit_data_args:
+            return
+
+    # Start download if data arguments were provided
+    if has_explicit_data_args:
+        downloader.download_data()
 
 
 if __name__ == "__main__":
