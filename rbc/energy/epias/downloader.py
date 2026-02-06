@@ -75,17 +75,31 @@ class EpiasDownloader:
 
     def download_data(self):
         """Parse data for all given years from EPIAS Platform and save to CSV."""
+        yesterday = (pd.Timestamp.now() - pd.Timedelta(days=1)).normalize()
+
         all_dates = []
         for year in self.years:
-            dates = (
-                pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31")
+            year_start = pd.Timestamp(f"{year}-01-01")
+            year_end = pd.Timestamp(f"{year}-12-31")
+
+            if year_start > yesterday:  # don't evaluate future years
+                continue
+
+            actual_end = min(year_end, yesterday)  # don't evaluate beyond yesterday
+
+            all_dates.extend(
+                pd.date_range(start=year_start, end=actual_end)
                 .strftime("%Y-%m-%d")
                 .tolist()
             )
-            all_dates.extend(dates)
 
-        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            executor.map(self._threading_wrapper, all_dates)
+        try:
+            logger.info(f"Downloading data for: {all_dates[0]} to {all_dates[-1]}")
+            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+                executor.map(self._threading_wrapper, all_dates)
+
+        except IndexError:
+            logger.info(f"Provided years '{self.years}' lie in the future!")
 
     def _threading_wrapper(self, date: str) -> None:
         """Threading wrapper for data download and checkpoint reading/saving.
