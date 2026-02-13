@@ -1,4 +1,4 @@
-"""Tests for ICON-DREAM Global NWP data downloader."""
+"""Tests for ICON-DREAM NWP data downloader."""
 
 import pickle
 from pathlib import Path
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from rbc.weather.icon_dream_global import IconDreamGlobalDownloader
+from rbc.weather.icon_dream import IconDreamGlobalDownloader
 
 
 # ----------------------------------
@@ -35,13 +35,13 @@ def basic_args(tmp_output_path: Path) -> dict:
 @pytest.fixture
 def downloader(basic_args: dict) -> IconDreamGlobalDownloader:
     """Initialize IconDreamGlobalDownloader with mocked requests."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         # Mock the directory listing for variable discovery
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a><a href="/hourly/U/">U</a>'
         mock_get.return_value = mock_response
 
-        with patch("rbc.weather.icon_dream_global.downloader.requests.head"):
+        with patch("rbc.weather.icon_dream.downloader.requests.head"):
             dl = IconDreamGlobalDownloader(**basic_args)
     return dl
 
@@ -51,7 +51,7 @@ def downloader(basic_args: dict) -> IconDreamGlobalDownloader:
 # ----------------------------------
 def test_downloader_initialization(basic_args: dict) -> None:
     """Test basic initialization."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -71,7 +71,7 @@ def test_downloader_initialization(basic_args: dict) -> None:
 
 def test_downloader_initialization_default_months(tmp_output_path: Path) -> None:
     """Test initialization with default months (all 12)."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -88,7 +88,7 @@ def test_downloader_initialization_default_months(tmp_output_path: Path) -> None
 
 def test_downloader_initialization_custom_variables(tmp_output_path: Path) -> None:
     """Test initialization with custom variables."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a><a href="/hourly/U/">U</a>'
         mock_get.return_value = mock_response
@@ -108,7 +108,7 @@ def test_downloader_initialization_custom_variables(tmp_output_path: Path) -> No
 # ----------------------------------
 def test_checkpoint_initialization_shape(basic_args: dict) -> None:
     """Test checkpoint has correct shape."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -132,7 +132,7 @@ def test_checkpoint_resume(tmp_output_path: Path) -> None:
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -156,7 +156,7 @@ def test_checkpoint_no_resume_fresh_start(tmp_output_path: Path) -> None:
     with open(checkpoint_path, "wb") as f:
         pickle.dump(old_checkpoint, f)
 
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -186,7 +186,7 @@ def test_validate_variables_valid(downloader: IconDreamGlobalDownloader) -> None
 def test_validate_variables_invalid(tmp_output_path: Path) -> None:
     """Test validation with invalid variable."""
     with pytest.raises(ValueError, match="Invalid variables"):
-        with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+        with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
             mock_response = MagicMock()
             mock_response.text = '<a href="/hourly/T/">T</a>'
             mock_get.return_value = mock_response
@@ -209,7 +209,7 @@ def test_discover_available_variables(downloader: IconDreamGlobalDownloader) -> 
 
 def test_discover_available_variables_fallback(tmp_output_path: Path) -> None:
     """Test variable discovery fallback when request fails."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_get.side_effect = Exception("Network error")
 
         downloader = IconDreamGlobalDownloader(
@@ -256,7 +256,7 @@ def test_download_variables_already_exists(
 
 def test_download_variables_success(downloader: IconDreamGlobalDownloader) -> None:
     """Test _download_variables with successful download."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         # Mock successful response
         mock_response = MagicMock()
         mock_response.headers = {"content-length": "1000000"}
@@ -278,7 +278,7 @@ def test_download_variables_network_error(
     downloader: IconDreamGlobalDownloader,
 ) -> None:
     """Test _download_variables with network error."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_get.side_effect = Exception("Network error")
 
         status = downloader._download_variables(
@@ -318,7 +318,7 @@ def test_download_data_respects_checkpoint(
 
 def test_download_data_multiple_variables(tmp_output_path: Path) -> None:
     """Test download_data with multiple variables."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a><a href="/hourly/U/">U</a>'
         mock_get.return_value = mock_response
@@ -365,7 +365,7 @@ def test_print_available_variables() -> None:
 
 def test_get_default_variables(tmp_output_path: Path) -> None:
     """Test _get_default_variables returns default."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -385,7 +385,7 @@ def test_get_default_variables(tmp_output_path: Path) -> None:
 # ----------------------------------
 def test_multi_year_download(tmp_output_path: Path) -> None:
     """Test download with multiple years."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -403,7 +403,7 @@ def test_multi_year_download(tmp_output_path: Path) -> None:
 
 def test_multi_month_download(tmp_output_path: Path) -> None:
     """Test download with multiple months."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -421,7 +421,7 @@ def test_multi_month_download(tmp_output_path: Path) -> None:
 
 def test_download_metadata_dry_run(downloader: IconDreamGlobalDownloader) -> None:
     """Test metadata download in dry-run mode."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         downloader.download_metadata(dry_run=True)
         # No actual requests should be made in dry-run mode
         mock_get.assert_not_called()
@@ -429,7 +429,7 @@ def test_download_metadata_dry_run(downloader: IconDreamGlobalDownloader) -> Non
 
 def test_download_metadata_creates_directory(tmp_output_path: Path) -> None:
     """Test that metadata download creates the metadata directory."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
@@ -455,7 +455,7 @@ def test_download_metadata_creates_directory(tmp_output_path: Path) -> None:
 
 def test_download_metadata_success(tmp_output_path: Path) -> None:
     """Test successful metadata file download."""
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         # Mock variable discovery
         discovery_response = MagicMock()
         discovery_response.text = '<a href="/hourly/T/">T</a>'
@@ -496,7 +496,7 @@ def test_download_metadata_file_exists(tmp_output_path: Path) -> None:
     existing_file = metadata_dir / "icon_grid_0026_R03B07_G.nc"
     existing_file.write_text("existing content")
 
-    with patch("rbc.weather.icon_dream_global.downloader.requests.get") as mock_get:
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         discovery_response = MagicMock()
         discovery_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = discovery_response

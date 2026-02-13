@@ -1,6 +1,6 @@
-"""ICON-DREAM Global NWP data downloader.
+"""ICON-DREAM NWP data downloader.
 
-Download ICON-DREAM Global reanalysis data from DWD open data portal.
+Download ICON-DREAM reanalysis data (Global or EU) from DWD open data portal.
 """
 
 import pickle
@@ -12,24 +12,73 @@ import numpy as np
 import requests
 from loguru import logger
 
-from rbc.weather.icon_dream_global.mappings import (
+from rbc.weather.icon_dream.mappings import (
     ALL_MODEL_LEVEL_VARIABLES,
     ALL_SINGLE_LEVEL_VARIABLES,
     DEFAULT_VARIABLES,
     VARIABLE_TO_DWD_PARAM,
 )
 
-# Base URL for ICON-DREAM Global data
-BASE_URL = "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly"
+REGION_CONFIG = {
+    "global": {
+        "label": "ICON-DREAM-Global",
+        "dataset": "ICON-DREAM-Global (DWD Open Data)",
+        "resolution": "~13km (icosahedral grid)",
+        "base_url": "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly",
+        "metadata_files": {
+            "icon_grid_0026_R03B07_G.nc": (
+                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G.nc",
+                "ICON-DREAM Global grid definition",
+            ),
+            "icon_grid_0026_R03B07_G-grfinfo.nc": (
+                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G-grfinfo.nc",
+                "ICON-DREAM Global grid connectivity information",
+            ),
+        },
+    },
+    "eu": {
+        "label": "ICON-DREAM-EU",
+        "dataset": "ICON-DREAM-EU (DWD Open Data)",
+        "resolution": "~6.5km (icosahedral grid)",
+        "base_url": "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-EU/hourly",
+        "metadata_files": {
+            "icon_grid_0027_R03B08_N02.nc": (
+                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0027_R03B08_N02.nc",
+                "ICON-DREAM EU grid definition",
+            ),
+            "icon_grid_0027_R03B08_N02-grfinfo.nc": (
+                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0027_R03B08_N02-grfinfo.nc",
+                "ICON-DREAM EU grid connectivity information",
+            ),
+        },
+    },
+}
 
 
-class IconDreamGlobalDownloader:
-    """ICON-DREAM Global NWP data downloader.
+def _normalize_region(region: str) -> str:
+    region_key = region.strip().lower()
+    if region_key == "europe":
+        return "eu"
+    return region_key
 
-    Downloads hourly ICON-DREAM Global weather data from DWD open data portal.
+
+def _get_region_config(region: str) -> dict:
+    region_key = _normalize_region(region)
+    if region_key not in REGION_CONFIG:
+        raise ValueError(
+            f"Unknown region '{region}'. Choose from: {', '.join(REGION_CONFIG)}"
+        )
+    return REGION_CONFIG[region_key]
+
+
+class IconDreamDownloader:
+    """ICON-DREAM NWP data downloader.
+
+    Downloads hourly ICON-DREAM weather data from DWD open data portal.
     Supports checkpoint-based resume and dry-run modes.
 
     Attributes:
+        region (str): Region identifier ("global" or "eu").
         years (list[int]): List of years to download data for.
         months (list[str]): List of months to download data for (01-12).
         variables (list[str]): List of variables to download.
@@ -48,22 +97,26 @@ class IconDreamGlobalDownloader:
         years: list[int],
         months: Optional[list[str]] = None,
         variables: Optional[list[str]] = None,
+        region: str = "global",
         dry_run: bool = False,
         resume: bool = False,
     ) -> None:
-        """Initialize the IconDreamGlobalDownloader.
+        """Initialize the IconDreamDownloader.
 
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to download.
             months (list[str], optional): List of months (01-12). Defaults to all months.
             variables (list[str], optional): List of variables. Defaults to common variables.
+            region (str, optional): Region ("global" or "eu"). Defaults to "global".
             dry_run (bool, optional): If True, print requests without downloading. Defaults to False.
             resume (bool, optional): If True, resume from checkpoint. Defaults to False.
 
         Raises:
             ValueError: If invalid parameters are provided.
         """
+        self.region = _normalize_region(region)
+        self.region_config = _get_region_config(self.region)
         self.years = years
         self.months = (
             months if months is not None else [f"{i:02d}" for i in range(1, 13)]
@@ -81,6 +134,7 @@ class IconDreamGlobalDownloader:
         dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
         logger.info(
             f"ICON-DREAM Downloader initialised for:{dry_run_str}"
+            f"\n- region:\t\t{self.region}"
             f"\n- years:\t\t{years}"
             f"\n- months:\t\t{self.months}"
             f"\n- variables:\t\t{self.variables}"
@@ -114,7 +168,7 @@ class IconDreamGlobalDownloader:
         """
         try:
             # List directory to find available variables
-            response = requests.get(BASE_URL, timeout=30)
+            response = requests.get(self.region_config["base_url"], timeout=30)
             response.raise_for_status()
 
             # Extract variable folder names from HTML directory listing
@@ -219,8 +273,8 @@ class IconDreamGlobalDownloader:
         dwd_code = self._get_dwd_param(variable)
 
         # Build filename and URL
-        filename = f"ICON-DREAM-Global_{year}{month}_{dwd_code}_hourly.grb"
-        url = f"{BASE_URL}/{dwd_code}/{filename}"
+        filename = f"{self.region_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
+        url = f"{self.region_config['base_url']}/{dwd_code}/{filename}"
         output_file = self.output_path / filename
 
         # Check if file already exists
@@ -293,10 +347,10 @@ class IconDreamGlobalDownloader:
             pickle.dump(self.checkpoint, f)
 
     def download_metadata(self, dry_run: Optional[bool] = None) -> None:
-        """Download ICON-DREAM Global grid metadata files.
+        """Download ICON-DREAM grid metadata files.
 
         Downloads the grid definition and connectivity information for the
-        ICON-DREAM Global R03B07 (~13km resolution) grid.
+        selected ICON-DREAM region.
 
         Args:
             dry_run (bool, optional): If True, print download info without downloading.
@@ -308,30 +362,13 @@ class IconDreamGlobalDownloader:
         metadata_dir = self.output_path / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
-        # Metadata file URLs for ICON-DREAM Global R03B07 grid
-        metadata_files = {
-            "icon_grid_0026_R03B07_G.nc": (
-                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G.nc",
-                "ICON-DREAM Global grid definition",
-            ),
-            "icon_grid_0026_R03B07_G-grfinfo.nc": (
-                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G-grfinfo.nc",
-                "ICON-DREAM Global grid connectivity information",
-            ),
-        }
+        metadata_files = self.region_config["metadata_files"]
 
-        logger.info("Downloading ICON-DREAM Global metadata files...")
+        logger.info(f"Downloading {self.region_config['label']} metadata files...")
         logger.info(f"Metadata destination: {metadata_dir}")
 
         for filename, (url, description) in metadata_files.items():
             output_file = metadata_dir / filename
-
-            # Check if file already exists
-            if output_file.exists():
-                logger.info(
-                    f"Metadata: {description} ({filename}) already exists, skipping"
-                )
-                continue
 
             if dry_run:
                 logger.info(
@@ -340,6 +377,23 @@ class IconDreamGlobalDownloader:
                 continue
 
             try:
+                # Check if file already exists with the expected size
+                if output_file.exists():
+                    head_response = requests.head(url, timeout=30)
+                    head_response.raise_for_status()
+                    remote_size = int(head_response.headers.get("content-length", 0))
+                    local_size = output_file.stat().st_size
+
+                    if remote_size > 0 and local_size == remote_size:
+                        logger.info(
+                            f"Metadata: {description} ({filename}) already exists with matching size, skipping"
+                        )
+                        continue
+
+                    logger.info(
+                        f"Metadata: {description} ({filename}) exists but size differs, re-downloading"
+                    )
+
                 logger.info(f"Metadata: Downloading {description} ({filename})...")
 
                 # Download with streaming
@@ -388,47 +442,130 @@ class IconDreamGlobalDownloader:
         logger.info("Metadata download completed!")
 
     @staticmethod
-    def print_available_variables() -> None:
-        """Print all available ICON-DREAM Global variables."""
-        print("\n" + "=" * 80)
-        print("AVAILABLE ICON-DREAM GLOBAL VARIABLES")
-        print("=" * 80)
+    def print_available_variables(region: str = "global") -> None:
+        """Print all available ICON-DREAM variables for a region."""
+        region_key = _normalize_region(region)
+        regions = ["global", "eu"] if region_key == "all" else [region_key]
 
-        print("\n--- SINGLE-LEVEL (2D) VARIABLES ---")
-        print("Dataset: ICON-DREAM-Global (DWD Open Data)")
-        print("Resolution: ~13km (icosahedral grid)")
-        print("Temporal: Hourly data")
-        print("Time period: 2010-01 to present")
-        print(f"Total: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n")
-        for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
-            if code not in ALL_SINGLE_LEVEL_VARIABLES:
-                continue
-            marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
-            print(f"  • {name}{marker}")
+        for idx, region_name in enumerate(regions):
+            region_config = _get_region_config(region_name)
+            if idx:
+                print("\n")
+            print("\n" + "=" * 80)
+            print(f"AVAILABLE {region_config['label']} VARIABLES")
+            print("=" * 80)
 
-        print("\n--- MODEL-LEVEL (3D) VARIABLES ---")
-        print("Dataset: ICON-DREAM-Global (DWD Open Data)")
-        print("Resolution: ~13km (icosahedral grid)")
-        print("Temporal: Hourly data")
-        print("Time period: 2010-01 to present")
-        print(f"Total: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n")
-        for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
-            if code not in ALL_MODEL_LEVEL_VARIABLES:
-                continue
-            marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
-            print(f"  • {name}{marker}")
+            print("\n--- SINGLE-LEVEL (2D) VARIABLES ---")
+            print(f"Dataset: {region_config['dataset']}")
+            print(f"Resolution: {region_config['resolution']}")
+            print("Temporal: Hourly data")
+            print("Time period: 2010-01 to present")
+            print(f"Total: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n")
+            for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
+                if code not in ALL_SINGLE_LEVEL_VARIABLES:
+                    continue
+                marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
+                print(f"  • {name}{marker}")
+
+            print("\n--- MODEL-LEVEL (3D) VARIABLES ---")
+            print(f"Dataset: {region_config['dataset']}")
+            print(f"Resolution: {region_config['resolution']}")
+            print("Temporal: Hourly data")
+            print("Time period: 2010-01 to present")
+            print(f"Total: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n")
+            for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
+                if code not in ALL_MODEL_LEVEL_VARIABLES:
+                    continue
+                marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
+                print(f"  • {name}{marker}")
 
         print("\n" + "=" * 80)
         print("USAGE EXAMPLES:")
         print("=" * 80)
         print("\n1. Download data with metadata (default):")
         print(
-            "   python scripts/weather/icon_dream_global_download.py -y 2020 -m 01 -v 2m_temperature surface_pressure\n"
+            "   python scripts/weather/icon_dream_download.py --region global -y 2020 -m 01 -v 2m_temperature surface_pressure\n"
         )
-        print("2. Download data without metadata:")
+        print("2. Download EU data without metadata:")
         print(
-            "   python scripts/weather/icon_dream_global_download.py -y 2020 -m 01 -v temperature --no-metadata\n"
+            "   python scripts/weather/icon_dream_download.py --region eu -y 2020 -m 01 -v temperature --no-metadata\n"
         )
-        print("3. Download metadata only:")
-        print("   python scripts/weather/icon_dream_global_download.py\n")
+        print("3. Download metadata for both regions:")
+        print("   python scripts/weather/icon_dream_download.py\n")
+        print("4. Download data for both regions:")
+        print(
+            "   python scripts/weather/icon_dream_download.py --region all -y 2020 -m 01 -v temperature\n"
+        )
         print("=" * 80 + "\n")
+
+
+class IconDreamGlobalDownloader(IconDreamDownloader):
+    """Backwards-compatible downloader for ICON-DREAM Global.
+
+    Uses the unified ICON-DREAM downloader with the global region preset.
+    """
+
+    def __init__(
+        self,
+        output_path: Path,
+        years: list[int],
+        months: Optional[list[str]] = None,
+        variables: Optional[list[str]] = None,
+        dry_run: bool = False,
+        resume: bool = False,
+    ) -> None:
+        """Initialize the global ICON-DREAM downloader.
+
+        Args:
+            output_path (Path): Path to the output directory.
+            years (list[int]): List of years to download.
+            months (list[str], optional): List of months (01-12). Defaults to all months.
+            variables (list[str], optional): List of variables. Defaults to common variables.
+            dry_run (bool, optional): If True, print requests without downloading. Defaults to False.
+            resume (bool, optional): If True, resume from checkpoint. Defaults to False.
+        """
+        super().__init__(
+            output_path=output_path,
+            years=years,
+            months=months,
+            variables=variables,
+            region="global",
+            dry_run=dry_run,
+            resume=resume,
+        )
+
+
+class IconDreamEuropeDownloader(IconDreamDownloader):
+    """Downloader for ICON-DREAM Europe.
+
+    Uses the unified ICON-DREAM downloader with the EU region preset.
+    """
+
+    def __init__(
+        self,
+        output_path: Path,
+        years: list[int],
+        months: Optional[list[str]] = None,
+        variables: Optional[list[str]] = None,
+        dry_run: bool = False,
+        resume: bool = False,
+    ) -> None:
+        """Initialize the EU ICON-DREAM downloader.
+
+        Args:
+            output_path (Path): Path to the output directory.
+            years (list[int]): List of years to download.
+            months (list[str], optional): List of months (01-12). Defaults to all months.
+            variables (list[str], optional): List of variables. Defaults to common variables.
+            dry_run (bool, optional): If True, print requests without downloading. Defaults to False.
+            resume (bool, optional): If True, resume from checkpoint. Defaults to False.
+        """
+        super().__init__(
+            output_path=output_path,
+            years=years,
+            months=months,
+            variables=variables,
+            region="eu",
+            dry_run=dry_run,
+            resume=resume,
+        )

@@ -439,8 +439,8 @@ class Era5Downloader:
         """
         if variable in VARIABLE_TO_MARS_PARAM:
             return VARIABLE_TO_MARS_PARAM[variable]
-        # Fallback: try to use variable name directly
-        return variable.replace("_", "")[:10]
+        # Fallback: use variable name directly
+        return variable
 
     def _build_mars_request_batch(
         self, variables: list[str], year: int, month: str, level_type: str = "single"

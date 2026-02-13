@@ -107,11 +107,24 @@ class IconDreamGlobalConfig(BaseModel):
     paths: Paths
 
 
+class IconDreamEuConfig(BaseModel):
+    """Configuration schema for the ICON-DREAM EU weather data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["icon_dream_eu"] = "icon_dream_eu"
+    paths: Paths
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
-    "icon_dream_global": IconDreamGlobalConfig,
     "era5": Era5Config,
+    "icon_dream_global": IconDreamGlobalConfig,
+    "icon_dream_eu": IconDreamEuConfig,
 }

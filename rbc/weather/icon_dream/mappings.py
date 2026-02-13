@@ -1,6 +1,6 @@
-"""ICON-DREAM Global variable mappings.
+"""ICON-DREAM variable mappings.
 
-Constants for ICON-DREAM Global variables and metadata.
+Constants for ICON-DREAM variables and metadata.
 """
 
 # All available 3D model-level ICON-DREAM variables
