@@ -1,1 +1,1 @@
-"""Tests for ICON-DREAM Global downloader."""
+"""Tests for ICON-DREAM downloader."""
