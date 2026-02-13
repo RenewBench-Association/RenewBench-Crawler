@@ -75,7 +75,6 @@ class IconDreamDownloader:
     """ICON-DREAM NWP data downloader.
 
     Downloads hourly ICON-DREAM weather data from DWD open data portal.
-    Supports checkpoint-based resume and dry-run modes.
 
     Attributes:
         region (str): Region identifier ("global" or "eu").
