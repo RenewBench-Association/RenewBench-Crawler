@@ -1,10 +1,9 @@
-# tests/energy/taipower/test_downloader.py
+# tests/energy/entsoe/test_downloader.py
 import pickle
 from pathlib import Path
 from typing import Generator
 from unittest.mock import patch
 
-import numpy as np
 import pandas as pd
 import pytest
 from entsoe.query.decorators import ServiceUnavailableError
@@ -92,7 +91,7 @@ def test_downloader_initialization(
         assert downloader.years == args["years"]
         assert downloader.output_path == args["output_path"]
         assert downloader.checkpoint_path == Path(args["output_path"], "status.pickle")
-        np.testing.assert_array_equal(downloader.checkpoint, np.zeros((1, 1)))
+        assert downloader.checkpoint == {}
 
 
 def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
@@ -103,7 +102,7 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
         init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
     """
     # save a fake checkpoint file
-    checkpoint = np.ones((1, 1))
+    checkpoint = {(init_args["years"][0], init_args["bidding_zones"][0]): 1}
     checkpoint_path = Path(init_args["output_path"], "status.pickle")
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -112,10 +111,11 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
     downloader = EntsoeDownloader(**init_args)
 
     with patch.object(downloader, "_download_year_zone_data") as mock_dump:
+        mock_dump.return_value = 1
         downloader.download_data()
 
         assert mock_dump.call_count == 0
-        np.testing.assert_array_equal(downloader.checkpoint, checkpoint)
+        assert downloader.checkpoint == checkpoint
 
 
 def test_download_year_zone_data(downloader: EntsoeDownloader) -> None:

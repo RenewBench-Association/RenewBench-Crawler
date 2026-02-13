@@ -6,7 +6,6 @@ Remote API access of ENTSO-E Platform using the entsoe-apy package.
 import pickle
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from entsoe.config import get_config, set_config
 from entsoe.Generation import ActualGenerationPerGenerationUnit
@@ -73,7 +72,7 @@ class EntsoeDownloader:
         output_path: Path,
         years: list[int],
         bidding_zones: list[str] = mappings.keys(),
-        resume: bool = False,
+        resume: bool = True,
     ) -> None:
         """Initializes the instance.
 
@@ -83,10 +82,10 @@ class EntsoeDownloader:
             years (list[int]): List of years to get data for.
             bidding_zones (list[str]): List of bidding zones to get data for.
             resume (bool, optional): Whether to resume from a previous
-             download (True) or start from scratch (False). Defaults to False.
+             download (True) or start from scratch (False). Defaults to True.
 
         Raises:
-            ValueError: If token is invalid.
+            ValueError: If bidding zone is unsupported or token is invalid.
         """
         self.years = years
         self.bidding_zones = list(bidding_zones)
@@ -113,18 +112,19 @@ class EntsoeDownloader:
             with open(self.checkpoint_path, "rb") as f:
                 self.checkpoint = pickle.load(f)
         else:
-            self.checkpoint = np.zeros((len(years), len(bidding_zones)))
+            self.checkpoint = {}
 
     def download_data(self) -> None:
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""
-        for idx, year in enumerate(self.years):
-            logger.info(f"Going through {year}...")
+        for year in self.years:
+            for zone in self.bidding_zones:
+                task = (year, zone)
 
-            for ibz, zone in enumerate(self.bidding_zones):
-                if self.checkpoint[idx, ibz] == 0:
-                    self.checkpoint[idx, ibz] = self._download_year_zone_data(
-                        zone=zone, year=year
-                    )
+                # check if task was previously run and was unsuccessful before (= 0)
+                if self.checkpoint.get(task) == 0:
+                    success_code = self._download_year_zone_data(zone=zone, year=year)
+
+                    self.checkpoint[task] = success_code
                     with open(self.checkpoint_path, "wb") as f:
                         pickle.dump(self.checkpoint, f)
                 else:

@@ -6,23 +6,33 @@ import yaml
 
 
 @pytest.fixture()
-def source_configs() -> dict:
+def source_configs(tmp_path: Path) -> dict:
     """Create a dictionary with example dict configs for all sources.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
 
     Returns:
         dict: Dictionary of example source config dicts.
     """
     return {
         "entsoe": {
-            "paths": {"dst_dir_raw": "/path/raw/entsoe"},
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "entsoe"))},
             "access": {"api_key": "token"},
         },
+        "epias": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "epias"))},
+            "access": {"username": "name", "password": "pw"},
+        },
         "era5": {
-            "paths": {"dst_dir_raw": "/path/raw/weather/era5"},
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "era5"))},
             "access": {"api_key": "token"},
         },
         "icon_dream_global": {
-            "paths": {"dst_dir_raw": "/path/raw/weather/icon_dream_global"},
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
+        },
+        "icon_dream_eu": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_eu"))},
         },
     }
 
