@@ -358,7 +358,7 @@ class IconDreamDownloader:
         if dry_run is None:
             dry_run = self.dry_run
 
-        metadata_dir = self.output_path / "metadata"
+        metadata_dir = Path(self.output_path, "metadata")
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
         metadata_files = self.region_config["metadata_files"]

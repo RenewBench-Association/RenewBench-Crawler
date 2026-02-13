@@ -365,9 +365,9 @@ class Era5Downloader:
         # Build combined filename with short names separated by "-"
         short_names = [self._get_mars_param(var) for var in variables_to_download]
         variables_str = "-".join(short_names)
-        output_file = (
-            self.output_path
-            / f"era5_{year}_{month}{level_suffix}_{variables_str}.{self.file_extension}"
+        output_file = Path(
+            self.output_path,
+            f"era5_{year}_{month}{level_suffix}_{variables_str}.{self.file_extension})",
         )
 
         try:
