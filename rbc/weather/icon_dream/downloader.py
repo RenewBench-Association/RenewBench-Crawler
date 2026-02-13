@@ -378,20 +378,29 @@ class IconDreamDownloader:
             try:
                 # Check if file already exists with the expected size
                 if output_file.exists():
-                    head_response = requests.head(url, timeout=30)
-                    head_response.raise_for_status()
-                    remote_size = int(head_response.headers.get("content-length", 0))
-                    local_size = output_file.stat().st_size
+                    try:
+                        head_response = requests.head(url, timeout=30)
+                        head_response.raise_for_status()
+                        remote_size = int(
+                            head_response.headers.get("content-length", 0)
+                        )
+                        local_size = output_file.stat().st_size
 
-                    if remote_size > 0 and local_size == remote_size:
+                        if remote_size > 0 and local_size == remote_size:
+                            logger.info(
+                                f"Metadata: {description} ({filename}) already exists with matching size, skipping"
+                            )
+                            continue
+
                         logger.info(
-                            f"Metadata: {description} ({filename}) already exists with matching size, skipping"
+                            f"Metadata: {description} ({filename}) exists but size differs, re-downloading"
+                        )
+                    except requests.exceptions.RequestException as e:
+                        logger.warning(
+                            f"Metadata: Could not verify size for {description} ({filename}): {e}. "
+                            "Keeping existing file and skipping download."
                         )
                         continue
-
-                    logger.info(
-                        f"Metadata: {description} ({filename}) exists but size differs, re-downloading"
-                    )
 
                 logger.info(f"Metadata: Downloading {description} ({filename})...")
 

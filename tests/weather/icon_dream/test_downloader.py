@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+import requests
 
 from rbc.weather.icon_dream import IconDreamDownloader
 
@@ -534,3 +535,36 @@ def test_download_metadata_file_exists(tmp_output_path: Path) -> None:
 
             # Existing file should not be modified
             assert existing_file.read_text() == existing_content
+
+
+def test_download_metadata_head_failure_keeps_file(tmp_output_path: Path) -> None:
+    """Test that existing metadata files are preserved when HEAD fails."""
+    metadata_dir = tmp_output_path / "metadata"
+    metadata_dir.mkdir()
+    existing_file = metadata_dir / "icon_grid_0026_R03B07_G.nc"
+    existing_content = "existing content"
+    existing_file.write_text(existing_content)
+
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        with patch("rbc.weather.icon_dream.downloader.requests.head") as mock_head:
+            discovery_response = MagicMock()
+            discovery_response.text = '<a href="/hourly/T/">T</a>'
+            mock_get.return_value = discovery_response
+            mock_head.side_effect = requests.exceptions.RequestException("HEAD failed")
+
+            downloader = IconDreamDownloader(
+                region="global",
+                output_path=tmp_output_path,
+                years=[2020],
+                months=["01"],
+                variables=["temperature"],
+                dry_run=False,
+            )
+
+            downloader.download_metadata(dry_run=False)
+
+            assert existing_file.read_text() == existing_content
+            assert any(
+                call.args[0].endswith("icon_grid_0026_R03B07_G-grfinfo.nc")
+                for call in mock_get.call_args_list
+            )
