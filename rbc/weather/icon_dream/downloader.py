@@ -125,7 +125,7 @@ class IconDreamDownloader:
         self.resume = resume
 
         self.output_path = Path(output_path)
-        self.checkpoint_path = self.output_path / "status.pickle"
+        self.checkpoint_path = Path(self.output_path, "status.pickle")
 
         # Create output directory if it doesn't exist
         self.output_path.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,7 @@ class IconDreamDownloader:
         # Build filename and URL
         filename = f"{self.region_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
         url = f"{self.region_config['base_url']}/{dwd_code}/{filename}"
-        output_file = self.output_path / filename
+        output_file = Path(self.output_path, filename)
 
         # Check if file already exists
         if output_file.exists():
