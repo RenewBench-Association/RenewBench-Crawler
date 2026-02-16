@@ -109,17 +109,17 @@ class EpiasDownloader:
         """
         with self._lock:
             if self.checkpoint.get(date) == 1:
-                logger.info(f"{date}: Data already downloaded.")
+                logger.info(f"{date}: Data already downloaded. Skipping.")
                 return
 
         try:
-            success_code = self._download_day_data(date=date)
+            status = self._download_day_data(date=date)
         except Exception as e:
             logger.error(f"Unexpected error in thread for {date}: {e}")
-            success_code = 0
+            status = 0
 
         with self._lock:
-            self.checkpoint[date] = success_code
+            self.checkpoint[date] = status
             with open(self.checkpoint_path, "wb") as f:
                 pickle.dump(self.checkpoint, f)
 
