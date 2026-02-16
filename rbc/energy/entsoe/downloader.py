@@ -120,15 +120,16 @@ class EntsoeDownloader:
             for zone in self.bidding_zones:
                 task = (year, zone)
 
-                # check if task was previously run and was unsuccessful before (= 0)
-                if self.checkpoint.get(task) == 0:
-                    success_code = self._download_year_zone_data(zone=zone, year=year)
+                # check if task was previously run and successful
+                if self.checkpoint.get(task) == 1:
+                    logger.info(f"{zone} in {year}: Data already downloaded. Skipping.")
+                    continue
 
-                    self.checkpoint[task] = success_code
+                status = self._download_year_zone_data(zone=zone, year=year)
+                if status == 1:
+                    self.checkpoint[task] = status
                     with open(self.checkpoint_path, "wb") as f:
                         pickle.dump(self.checkpoint, f)
-                else:
-                    logger.info(f"{zone} in {year}: Data previously downloaded.")
 
     def _download_year_zone_data(self, zone: str, year: int) -> int:
         """Parse data for specific zone and year from ENTSO-E and dump to CSV.
