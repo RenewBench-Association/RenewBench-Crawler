@@ -56,13 +56,14 @@ def download_realtime_data(dst_dir: Path) -> None:
         dt = (
             datetime.strptime(dt, "%Y-%m-%d %H:%M").replace(tzinfo=TIMEZONE).isoformat()
         )
+        dt_str = dt.replace(":", "-")  # Windows-safe string
         df = pd.DataFrame(data["dataset"])
 
     except (requests.exceptions.JSONDecodeError, KeyError, TypeError, ValueError) as e:
         print(f"Failed parsing of JSON from {URL} with a {type(e).__name__}!")
         sys.exit(1)
 
-    csv_path = Path(dst_dir, dt + ".csv")
+    csv_path = Path(dst_dir, dt_str + ".csv")
 
     # check correct number of columns
     if len(df.iloc[0]) != len(COLUMNS):
