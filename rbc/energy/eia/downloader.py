@@ -196,21 +196,11 @@ class EiaDownloader:
             "length": 5000,  # This is the maximum possible to get at one time!
         }
 
-        response = requests.get(URL, params=params)
-        if response.status_code != 200:
-            raise HTTPError(
-                f"API request failed: {response.status_code} - {response.text}"
-            )
-
         all_data = []
-        offset = 0
-        limit = 5000
         total_available = None
+        limit = 5000
 
         while True:
-            params["offset"] = offset
-            params["length"] = limit
-
             try:
                 response = requests.get(URL, params=params, timeout=30)
             except (
@@ -220,7 +210,8 @@ class EiaDownloader:
                 raise ConnectionError(f"API request timed out: {e}")
 
             if response.status_code != 200:
-                if response.status_code == 429:  # rate limit reached
+                if response.status_code == 429:
+                    logger.warning("Rate limit reached. Sleeping...")
                     time.sleep(10)
                     continue
 
@@ -244,14 +235,20 @@ class EiaDownloader:
                     f"{type(e).__name__}!"
                 )
 
-            if len(all_data) >= total_available or len(dict_data) < limit:
+            # Stop if total has been reached
+            if len(all_data) >= total_available:
                 break
 
-            offset += limit
+            # Stop if API sent less than the limit (we've reached the end of what's there)
+            if len(dict_data) < limit:
+                break
+
+            params["offset"] += limit
             time.sleep(0.1)
 
+        # Check all available data was downloaded
         if len(all_data) != total_available:
-            raise ValueError("Not all rows downloaded!")
+            raise ValueError(f"Incomplete download: {len(all_data)}/{total_available}")
 
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
