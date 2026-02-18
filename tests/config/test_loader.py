@@ -1,4 +1,5 @@
 # tests/config/test_loader.py
+import argparse
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,9 @@ import rbc.config.loader as loader
 from rbc.config.schema import SCHEMA_REGISTRY
 
 
+# ----------------------------------
+# Tests
+# ----------------------------------
 @pytest.mark.parametrize("source", list(SCHEMA_REGISTRY.keys()))
 def test_load_config(tmp_configs_dir: Path, source: str) -> None:
     """Happy path for "load_config" function.
@@ -79,3 +83,53 @@ def test_load_config_unknown_source(tmp_configs_dir: Path) -> None:
 
     with pytest.raises(ValueError, match="Unknown source"):
         loader.load_config(source="unknown", configs_dir=tmp_configs_dir)
+
+
+# ----------------------------------
+# Tests - Helper functions
+# ----------------------------------
+@pytest.mark.parametrize(
+    "inputs, expected_outputs",
+    [
+        ([], {}),
+        (["a=1"], {"a": "1"}),
+        (["a.b=x"], {"a": {"b": "x"}}),
+        (["a.b=x", "c.d=y"], {"a": {"b": "x"}, "c": {"d": "y"}}),
+        (["a.b.c=deep"], {"a": {"b": {"c": "deep"}}}),
+    ],
+)
+def test_parse_key_value_pairs(inputs: list, expected_outputs: dict) -> None:
+    """Happy path for "parse_key_value_pairs" function.
+
+    Args:
+        inputs (list): List of pairs to parse.
+        expected_outputs (dict): Dictionary of expected outputs pairs.
+    """
+    returned_outputs = loader.parse_key_value_pairs(inputs)
+    assert type(returned_outputs) is dict
+    assert expected_outputs == returned_outputs
+
+
+@pytest.mark.parametrize(
+    "invalid_input, msg",
+    [
+        (["no_equals_sign"], "Invalid format"),
+        (
+            ["a=1", "a.b=2"],
+            "Conflict at 'a': cannot overwrite key",
+        ),  # Scalar turned dict
+        (["a.b=2", "a=1"], "Conflict at 'a': cannot overwrite a"),  # Dict turned scalar
+    ],
+)
+def test_parse_key_value_pairs_invalid_input(invalid_input: list, msg: str) -> None:
+    """Failure path for "parse_key_value_pairs" function when the input is invalid.
+
+    Inputs are invalid if either the format isn't correct (no "=") or there is a
+    conflict because key combinations were provided that can't overwrite one another.
+
+    Args:
+        invalid_input (list): List of invalid pairs to parse.
+        msg (str): Message describing the error.
+    """
+    with pytest.raises(argparse.ArgumentTypeError, match=msg):
+        loader.parse_key_value_pairs(invalid_input)
