@@ -8,6 +8,16 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+WORKERS = 4
+MAX_RETRIES = 3
+RETRY_DELAY = 5
+
+
+class DataStructureError(Exception):
+    """Raised when a data source changes its structure significantly."""
+
+    pass
+
 
 def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> None:
     """Write dataframe to csv file.
@@ -19,7 +29,7 @@ def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> N
             csv (True) or not (False). Defaults to False.
     """
     if file_path.suffix != ".csv":
-        file_path.with_suffix(".csv")
+        file_path = file_path.with_suffix(".csv")
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(file_path, index=index)
