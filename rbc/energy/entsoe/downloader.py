@@ -16,7 +16,7 @@ from entsoe.Generation import ActualGenerationPerGenerationUnit
 from entsoe.query.decorators import ServiceUnavailableError
 from entsoe.utils import add_timestamps, extract_records, mappings
 from loguru import logger
-from requests.models import ReadTimeoutError
+from requests.exceptions import ReadTimeout
 
 from rbc.energy.utils import (
     MAX_RETRIES,
@@ -171,7 +171,7 @@ class EntsoeDownloader:
                 logger.error(f"Missing data for {task}: {e}")
                 return 1  # skip day
 
-            except (ReadTimeoutError, ConnectionError):
+            except (ReadTimeout, ConnectionError):
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY)
                 else:
