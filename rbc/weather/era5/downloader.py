@@ -8,7 +8,6 @@ from calendar import monthrange
 from pathlib import Path
 
 import cdsapi  # type: ignore[import-untyped]
-import numpy as np
 from loguru import logger
 
 from rbc.weather.era5.mappings import (
@@ -157,25 +156,12 @@ class Era5Downloader:
         self._validate_variables()
 
         # Initialize or load checkpoint
-        # Determine checkpoint dimensions based on which level types are requested
-        has_single = True  # Always true
-        has_pressure = self.pressure_levels is not None
-        has_model = self.model_levels is not None
-
-        num_level_types = sum([has_single, has_pressure, has_model])
-
         if resume and self.checkpoint_path.is_file():
             with open(self.checkpoint_path, "rb") as f:
                 self.checkpoint = pickle.load(f)
             logger.info(f"Resuming from checkpoint: {self.checkpoint_path}")
         else:
-            if num_level_types > 1:
-                # Shape: (years, months, level_types)
-                self.checkpoint = np.zeros(
-                    (len(years), len(self.months), num_level_types)
-                )
-            else:
-                self.checkpoint = np.zeros((len(years), len(self.months)))
+            self.checkpoint = {}
             logger.info("Starting fresh download (no checkpoint found).")
 
     def _validate_variables(self) -> None:
@@ -328,22 +314,11 @@ class Era5Downloader:
         if not variables_to_download:
             return 1
 
-        # Check checkpoint
-        year_idx = self.years.index(year)
-        month_idx = self.months.index(month)
-
-        if self.checkpoint.ndim == 3:
-            if self.checkpoint[year_idx, month_idx, checkpoint_idx] != 0:
-                logger.info(
-                    f"{year}-{month} ({level_type}): Data previously downloaded."
-                )
-                return 1
-        else:
-            if self.checkpoint[year_idx, month_idx] != 0:
-                logger.info(
-                    f"{year}-{month} ({level_type}): Data previously downloaded."
-                )
-                return 1
+        # Check checkpoint using tuple key
+        task = (year, month, level_type)
+        if self.checkpoint.get(task, 0) != 0:
+            logger.info(f"{year}-{month} ({level_type}): Data previously downloaded.")
+            return 1
 
         # Build filename suffix
         level_suffix = f"_{level_prefix}"
@@ -367,7 +342,7 @@ class Era5Downloader:
         variables_str = "-".join(short_names)
         output_file = Path(
             self.output_path,
-            f"era5_{year}_{month}{level_suffix}_{variables_str}.{self.file_extension})",
+            f"era5_{year}_{month}{level_suffix}_{variables_str}.{self.file_extension}",
         )
 
         try:
@@ -416,12 +391,10 @@ class Era5Downloader:
             )
             all_success = False
 
-        # Update checkpoint
+        # Update checkpoint using tuple key
         status = 1 if all_success else 0
-        if self.checkpoint.ndim == 3:
-            self.checkpoint[year_idx, month_idx, checkpoint_idx] = status
-        else:
-            self.checkpoint[year_idx, month_idx] = status
+        task = (year, month, level_type)
+        self.checkpoint[task] = status
 
         with open(self.checkpoint_path, "wb") as f:
             pickle.dump(self.checkpoint, f)

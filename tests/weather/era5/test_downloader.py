@@ -138,21 +138,16 @@ def test_checkpoint_initialization_single_level_only(
             model_levels=None,
         )
 
-        # When defaults are used (pressure_levels default, no model_levels),
-        # checkpoint has 3 dimensions: (years, months, level_types)
-        # With DEFAULT_PRESSURE_LEVELS: has pressure-level data
-        assert downloader.checkpoint.ndim == 3
-        assert downloader.checkpoint.shape == (
-            2,
-            2,
-            2,
-        )  # 2 level types: single, pressure
+        # Checkpoint should be a dict initialized as empty (lazy population)
+        assert isinstance(downloader.checkpoint, dict)
+        # On fresh initialization, checkpoint is empty
+        assert downloader.checkpoint == {}
 
 
 def test_checkpoint_initialization_with_pressure_and_model(
     api_credentials: dict, tmp_path: Path
 ) -> None:
-    """Test checkpoint shape when both pressure and model levels are requested.
+    """Test checkpoint structure when both pressure and model levels are requested.
 
     Args:
         api_credentials (dict): API credentials.
@@ -169,10 +164,10 @@ def test_checkpoint_initialization_with_pressure_and_model(
             model_levels=["137"],
         )
 
-        # Should have 3 dimensions: (years, months, level_types)
-        # level_types: single, pressure, model
-        assert downloader.checkpoint.ndim == 3
-        assert downloader.checkpoint.shape == (1, 1, 3)
+        # Checkpoint should be a dict initialized as empty (lazy population)
+        assert isinstance(downloader.checkpoint, dict)
+        # On fresh initialization, checkpoint is empty
+        assert downloader.checkpoint == {}
 
 
 def test_checkpoint_resume(api_credentials: dict, tmp_path: Path) -> None:

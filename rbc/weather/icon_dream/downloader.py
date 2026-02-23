@@ -8,9 +8,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import requests
 from loguru import logger
+from tqdm import tqdm
 
 from rbc.weather.icon_dream.mappings import (
     ALL_MODEL_LEVEL_VARIABLES,
@@ -63,12 +63,11 @@ def _normalize_region(region: str) -> str:
 
 
 def _get_region_config(region: str) -> dict:
-    region_key = _normalize_region(region)
-    if region_key not in REGION_CONFIG:
+    if region not in REGION_CONFIG:
         raise ValueError(
             f"Unknown region '{region}'. Choose from: {', '.join(REGION_CONFIG)}"
         )
-    return REGION_CONFIG[region_key]
+    return REGION_CONFIG[region]
 
 
 class IconDreamDownloader:
@@ -98,7 +97,7 @@ class IconDreamDownloader:
         variables: Optional[list[str]] = None,
         region: str = "global",
         dry_run: bool = False,
-        resume: bool = False,
+        resume: bool = True,
     ) -> None:
         """Initialize the IconDreamDownloader.
 
@@ -153,10 +152,7 @@ class IconDreamDownloader:
                 self.checkpoint = pickle.load(f)
             logger.info(f"Resuming from checkpoint: {self.checkpoint_path}")
         else:
-            # Create checkpoint: (years, months, variables)
-            self.checkpoint = np.zeros(
-                (len(self.years), len(self.months), len(self.variables)), dtype=int
-            )
+            self.checkpoint = {}
             logger.info("Starting fresh download (no checkpoint found).")
 
     def _discover_available_variables(self) -> set[str]:
@@ -219,30 +215,6 @@ class IconDreamDownloader:
 
         logger.info(f"All {len(self.variables)} requested variables are available.")
 
-    def download_data(self) -> None:
-        """Download ICON-DREAM data for all specified years, months, and variables."""
-        for year_idx, year in enumerate(self.years):
-            logger.info(f"Processing year {year}...")
-
-            for month_idx, month in enumerate(self.months):
-                for var_idx, variable in enumerate(self.variables):
-                    # Check checkpoint
-                    if self.checkpoint[year_idx, month_idx, var_idx] != 0:
-                        logger.info(
-                            f"{year}-{month} ({variable}): Already downloaded, skipping"
-                        )
-                        continue
-
-                    # Download the file
-                    status = self._download_variables(year, month, variable)
-
-                    # Update checkpoint
-                    if status == 1:
-                        self.checkpoint[year_idx, month_idx, var_idx] = 1
-                        self._save_checkpoint()
-
-        logger.info("All downloads completed!")
-
     def _get_dwd_param(self, variable: str) -> str:
         """Convert variable name to DWD parameter code.
 
@@ -256,6 +228,31 @@ class IconDreamDownloader:
             return VARIABLE_TO_DWD_PARAM[variable]
         # Fallback: use variable name directly
         return variable
+
+    def download_data(self) -> None:
+        """Download ICON-DREAM data for all specified years, months, and variables."""
+        for year in self.years:
+            logger.info(f"Processing year {year}...")
+
+            for month in self.months:
+                for var in self.variables:
+                    task = (year, month, var)
+
+                    # check if task was previously run and was unsuccessful before (= 0)
+                    if self.checkpoint.get(task, 0) == 0:
+                        success_code = self._download_variables(
+                            year=year, month=month, variable=var
+                        )
+
+                        self.checkpoint[task] = success_code
+                        with open(self.checkpoint_path, "wb") as f:
+                            pickle.dump(self.checkpoint, f)
+                    else:
+                        logger.info(
+                            f"{year}-{month} ({var}): Data previously downloaded."
+                        )
+
+        logger.info("All downloads completed!")
 
     def _download_variables(self, year: int, month: str, variable: str) -> int:
         """Download a single data file.
@@ -302,26 +299,22 @@ class IconDreamDownloader:
 
             logger.info(f"{year}-{month} ({variable}): File size: {size_gb:.2f} GB")
 
-            # Download with progress tracking
-            downloaded = 0
+            # Download with progress tracking using tqdm
             chunk_size = 8192  # 8KB chunks
+            progress_bar = tqdm(
+                total=total_size,
+                unit="B",
+                unit_scale=True,
+                desc=f"{year}-{month} ({variable})",
+                unit_divisor=1024,
+            )
 
             with open(output_file, "wb") as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
-                        downloaded += len(chunk)
-
-                        # Log progress every 100MB
-                        if downloaded % (100 * 1024 * 1024) == 0:
-                            progress = (
-                                (downloaded / total_size * 100) if total_size > 0 else 0
-                            )
-                            logger.info(
-                                f"{year}-{month} ({variable}): "
-                                f"Downloaded {downloaded / (1024**3):.2f}GB / "
-                                f"{size_gb:.2f}GB ({progress:.1f}%)"
-                            )
+                        progress_bar.update(len(chunk))
+            progress_bar.close()
 
             logger.info(
                 f"{year}-{month} ({variable}): Successfully downloaded to {output_file}"
@@ -339,11 +332,6 @@ class IconDreamDownloader:
             if output_file.exists():
                 output_file.unlink()
             return 0
-
-    def _save_checkpoint(self) -> None:
-        """Save checkpoint to disk."""
-        with open(self.checkpoint_path, "wb") as f:
-            pickle.dump(self.checkpoint, f)
 
     def download_metadata(self, dry_run: Optional[bool] = None) -> None:
         """Download ICON-DREAM grid metadata files.
@@ -414,24 +402,22 @@ class IconDreamDownloader:
 
                 logger.info(f"Metadata: File size: {size_mb:.2f} MB")
 
-                # Download with progress tracking
-                downloaded = 0
+                # Download with progress tracking using tqdm
                 chunk_size = 8192  # 8KB chunks
+                progress_bar = tqdm(
+                    total=total_size,
+                    unit="B",
+                    unit_scale=True,
+                    desc=f"Metadata: {description}",
+                    unit_divisor=1024,
+                )
 
                 with open(output_file, "wb") as f:
                     for chunk in response.iter_content(chunk_size=chunk_size):
                         if chunk:
                             f.write(chunk)
-                            downloaded += len(chunk)
-
-                            # Log progress every 10MB
-                            if total_size > 0 and downloaded % (10 * 1024 * 1024) == 0:
-                                progress = downloaded / total_size * 100
-                                logger.info(
-                                    f"Metadata: {description} - "
-                                    f"Downloaded {downloaded / (1024**2):.2f}MB / "
-                                    f"{size_mb:.2f}MB ({progress:.1f}%)"
-                                )
+                            progress_bar.update(len(chunk))
+                progress_bar.close()
 
                 logger.info(
                     f"Metadata: Successfully downloaded {description} to {output_file}"
@@ -451,7 +437,11 @@ class IconDreamDownloader:
 
     @staticmethod
     def print_available_variables(region: str = "global") -> None:
-        """Print all available ICON-DREAM variables for a region."""
+        """Print all available ICON-DREAM variables for a region.
+
+        Args:
+            region (str): Region identifier ("global", "eu", or "all").
+        """
         region_key = _normalize_region(region)
         regions = ["global", "eu"] if region_key == "all" else [region_key]
 
