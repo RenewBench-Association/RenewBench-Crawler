@@ -56,7 +56,7 @@ def downloader(basic_args: dict) -> IconDreamDownloader:
 
 
 # ----------------------------------
-# Tests - Initialization
+# Test - Initialization & Configuration
 # ----------------------------------
 def test_downloader_initialization(basic_args: dict) -> None:
     """Happy path for class initialization.
@@ -132,8 +132,45 @@ def test_downloader_initialization_custom_variables(tmp_path: Path) -> None:
         assert downloader.variables == ["temperature", "u_component_of_wind"]
 
 
+def test_normalize_region_europe(tmp_path: Path) -> None:
+    """Test that 'europe' region is normalized to 'eu'.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        mock_response = MagicMock()
+        mock_response.text = '<a href="/hourly/T/">T</a>'
+        mock_get.return_value = mock_response
+
+        downloader = IconDreamDownloader(
+            region="europe",
+            output_path=tmp_path,
+            years=[2020],
+            variables=["temperature"],
+        )
+
+        # Should normalize to 'eu'
+        assert downloader.region == "eu"
+
+
+def test_invalid_region_error(tmp_path: Path) -> None:
+    """Test that invalid region raises ValueError.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with pytest.raises(ValueError, match="Unknown region"):
+        IconDreamDownloader(
+            region="invalid_region",
+            output_path=tmp_path,
+            years=[2020],
+            variables=["temperature"],
+        )
+
+
 # ----------------------------------
-# Tests - Checkpoint handling
+# Test - Checkpoint Handling
 # ----------------------------------
 def test_checkpoint_initialization_shape(basic_args: dict) -> None:
     """Test checkpoint structure upon initialization.
@@ -224,8 +261,66 @@ def test_checkpoint_no_resume_fresh_start(tmp_path: Path) -> None:
 
 
 # ----------------------------------
-# Tests - Variable validation
+# Test - Variable Discovery & Validation
 # ----------------------------------
+def test_discover_available_variables(downloader: IconDreamDownloader) -> None:
+    """Test variable discovery from DWD.
+
+    Check that available variables are correctly discovered from the DWD data server.
+
+    Args:
+        downloader (IconDreamDownloader): Instance of IconDreamDownloader.
+    """
+    assert "T" in downloader.available_variables
+    assert "U" in downloader.available_variables
+
+
+def test_discover_available_variables_fallback(tmp_path: Path) -> None:
+    """Test variable discovery fallback when request fails.
+
+    Check that default variables are used when DWD discovery fails.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        mock_get.side_effect = Exception("Network error")
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+            variables=["temperature"],
+        )
+
+        # Should fall back to default variables
+        assert len(downloader.available_variables) > 0
+        assert "T" in downloader.available_variables
+
+
+def test_variable_discovery_no_variables_found(tmp_path: Path) -> None:
+    """Test fallback when no variables are found in DWD directory.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        # Return empty response (no variables found)
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>No variables</body></html>"
+        mock_get.return_value = mock_response
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+            variables=["temperature"],
+        )
+
+        # Should fall back to default variables
+        assert len(downloader.available_variables) > 0
+
+
 def test_validate_variables_valid(downloader: IconDreamDownloader) -> None:
     """Test validation of valid variables.
 
@@ -260,31 +355,71 @@ def test_validate_variables_invalid(tmp_path: Path) -> None:
             )
 
 
-# ----------------------------------
-# Tests - Variable discovery
-# ----------------------------------
-def test_discover_available_variables(downloader: IconDreamDownloader) -> None:
-    """Test variable discovery from DWD.
+def test_validate_variables_invalid_variable(tmp_path: Path) -> None:
+    """Test that unavailable variables (not on DWD server) raise ValueError.
 
-    Check that available variables are correctly discovered from the THREDDS catalog.
-
-    Args:
-        downloader (IconDreamDownloader): Instance of IconDreamDownloader.
-    """
-    assert "T" in downloader.available_variables
-    assert "U" in downloader.available_variables
-
-
-def test_discover_available_variables_fallback(tmp_path: Path) -> None:
-    """Test variable discovery fallback when request fails.
-
-    Check that default variables are used when DWD discovery fails.
+    Test that variables exist in our mapping but are not
+    available on the DWD server should raise an error.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
     """
     with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
-        mock_get.side_effect = Exception("Network error")
+        mock_response = MagicMock()
+        # Mock server response with some variables, but NOT T_2M (which 2m_temperature maps to)
+        mock_response.text = (
+            '<a href="T/">T/</a>\n'
+            '<a href="U/">U/</a>\n'
+            '<a href="V/">V/</a>\n'
+            '<a href="P/">P/</a>\n'
+        )
+        mock_get.return_value = mock_response
+
+        with pytest.raises(ValueError, match="Variables not available on DWD server"):
+            IconDreamDownloader(
+                region="global",
+                output_path=tmp_path,
+                years=[2020],
+                variables=[
+                    "2m_temperature"
+                ],  # Maps to T_2M, which is NOT in server response
+            )
+
+
+def test_get_default_variables(tmp_path: Path) -> None:
+    """Test that default variables are used when none specified.
+
+    Check that IconDreamDownloader uses default variables on initialization.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        mock_response = MagicMock()
+        mock_response.text = '<a href="/hourly/T/">T</a>'
+        mock_get.return_value = mock_response
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+        )
+
+        # Should use default variables (descriptive names, not codes)
+        assert "temperature" in downloader.variables
+        assert "2m_temperature" in downloader.variables
+
+
+def test_get_dwd_param_fallback(tmp_path: Path) -> None:
+    """Test _get_dwd_param fallback for unmapped variables.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        mock_response = MagicMock()
+        mock_response.text = '<a href="/hourly/CUSTOM/">CUSTOM</a>'
+        mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
             region="global",
@@ -293,13 +428,13 @@ def test_discover_available_variables_fallback(tmp_path: Path) -> None:
             variables=["temperature"],
         )
 
-        # Should fall back to default variables
-        assert len(downloader.available_variables) > 0
-        assert "T" in downloader.available_variables
+        # Test fallback: unmapped variable should return variable name
+        result = downloader._get_dwd_param("unmapped_variable")
+        assert result == "unmapped_variable"
 
 
 # ----------------------------------
-# Tests - Download functionality
+# Test - Variable Download (Single File)
 # ----------------------------------
 def test_download_variables_dry_run(downloader: IconDreamDownloader) -> None:
     """Test download in dry-run mode.
@@ -387,8 +522,75 @@ def test_download_variables_network_error(
         assert status == 0
 
 
+def test_download_variables_request_exception(tmp_path: Path) -> None:
+    """Test that request exceptions are handled properly.
+
+    Check that _download_variables returns 0 when a RequestException occurs.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        # First call for discovery
+        discovery_response = MagicMock()
+        discovery_response.text = '<a href="/hourly/T/">T</a>'
+
+        # Second call for download - raise exception
+        mock_get.side_effect = [
+            discovery_response,
+            requests.exceptions.RequestException("Network error"),
+        ]
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+            months=["01"],
+            variables=["temperature"],
+        )
+
+        status = downloader._download_variables(
+            year=2020, month="01", variable="temperature"
+        )
+
+        # Should return 0 for failure
+        assert status == 0
+
+
+def test_download_variables_general_exception(tmp_path: Path) -> None:
+    """Test that general exceptions are handled properly.
+
+    Check that _download_variables returns 0 when a general exception occurs.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        # First call for discovery
+        discovery_response = MagicMock()
+        discovery_response.text = '<a href="/hourly/T/">T</a>'
+
+        # Second call for download - raise general exception
+        mock_get.side_effect = [discovery_response, Exception("Unexpected error")]
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+            months=["01"],
+            variables=["temperature"],
+        )
+
+        status = downloader._download_variables(
+            year=2020, month="01", variable="temperature"
+        )
+
+        # Should return 0 for failure
+        assert status == 0
+
+
 # ----------------------------------
-# Tests - Download data workflow
+# Test - Data Download Workflow (Batch)
 # ----------------------------------
 def test_download_data_single_file(downloader: IconDreamDownloader) -> None:
     """Test download_data workflow with single file.
@@ -459,46 +661,6 @@ def test_download_data_multiple_variables(tmp_path: Path) -> None:
             assert mock_download.call_count == 2
 
 
-# ----------------------------------
-# Tests - Utility methods
-# ----------------------------------
-def test_print_available_variables() -> None:
-    """Test print_available_variables static method.
-
-    Check that print_available_variables executes without errors.
-    """
-    with patch("builtins.print"):
-        IconDreamDownloader.print_available_variables()
-        # Should not raise any exception
-
-
-def test_get_default_variables(tmp_path: Path) -> None:
-    """Test that default variables are used when none specified.
-
-    Check that IconDreamDownloader uses default variables on initialization.
-
-    Args:
-        tmp_path (Path): Path to the temporary directory.
-    """
-    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.text = '<a href="/hourly/T/">T</a>'
-        mock_get.return_value = mock_response
-
-        downloader = IconDreamDownloader(
-            region="global",
-            output_path=tmp_path,
-            years=[2020],
-        )
-
-        # Should use default variables (descriptive names, not codes)
-        assert "temperature" in downloader.variables
-        assert "2m_temperature" in downloader.variables
-
-
-# ----------------------------------
-# Tests - Multi-year/month scenarios
-# ----------------------------------
 def test_multi_year_download(tmp_path: Path) -> None:
     """Test download with multiple years.
 
@@ -557,6 +719,9 @@ def test_multi_month_download(tmp_path: Path) -> None:
         assert "temperature" in downloader.variables
 
 
+# ----------------------------------
+# Test -Metadata Download
+# ----------------------------------
 def test_download_metadata_dry_run(downloader: IconDreamDownloader) -> None:
     """Test metadata download in dry-run mode.
 
@@ -725,3 +890,137 @@ def test_download_metadata_head_failure_keeps_file(tmp_path: Path) -> None:
                 call.args[0].endswith("icon_grid_0026_R03B07_G-grfinfo.nc")
                 for call in mock_get.call_args_list
             )
+
+
+def test_download_metadata_inherits_dry_run(tmp_path: Path) -> None:
+    """Test that download_metadata uses downloader's dry_run when not specified.
+
+    Check that download_metadata respects the downloader's dry_run flag when not explicitly provided.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        mock_response = MagicMock()
+        mock_response.text = '<a href="/hourly/T/">T</a>'
+        mock_get.return_value = mock_response
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+            variables=["temperature"],
+            dry_run=True,
+        )
+
+        # Call without dry_run argument - should inherit from downloader
+        downloader.download_metadata(dry_run=None)
+
+        # Should not attempt actual downloads (only discovery call)
+        assert mock_get.call_count == 1
+
+
+def test_download_metadata_size_mismatch_redownload(tmp_path: Path) -> None:
+    """Test that metadata files are re-downloaded when size differs.
+
+    Check that download_metadata detects size mismatches and re-downloads files when needed.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    metadata_dir = Path(tmp_path, "metadata")
+    metadata_dir.mkdir()
+    existing_file = Path(metadata_dir, "icon_grid_0026_R03B07_G.nc")
+    existing_content = "small"
+    existing_file.write_text(existing_content)
+
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        with patch("rbc.weather.icon_dream.downloader.requests.head") as mock_head:
+            discovery_response = MagicMock()
+            discovery_response.text = '<a href="/hourly/T/">T</a>'
+
+            # HEAD response shows different size
+            head_response = MagicMock()
+            head_response.headers = {
+                "content-length": "999999"
+            }  # Different from actual file
+            mock_head.return_value = head_response
+
+            # Download response
+            download_response = MagicMock()
+            download_response.headers = {"content-length": "999999"}
+            download_response.iter_content = lambda chunk_size: iter([b"x" * 999999])
+            mock_get.side_effect = [
+                discovery_response,
+                download_response,
+                download_response,
+            ]
+
+            downloader = IconDreamDownloader(
+                region="global",
+                output_path=tmp_path,
+                years=[2020],
+                months=["01"],
+                variables=["temperature"],
+                dry_run=False,
+            )
+
+            downloader.download_metadata(dry_run=False)
+
+            # File should be re-downloaded (size changed)
+            assert existing_file.stat().st_size > len(existing_content)
+
+
+def test_download_metadata_download_exception(tmp_path: Path) -> None:
+    """Test that download_metadata handles exceptions during download.
+
+    Check that download_metadata gracefully handles exceptions without raising errors.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
+        discovery_response = MagicMock()
+        discovery_response.text = '<a href="/hourly/T/">T</a>'
+
+        # Raise exception on metadata download
+        mock_get.side_effect = [
+            discovery_response,
+            requests.exceptions.RequestException("Download failed"),
+        ]
+
+        downloader = IconDreamDownloader(
+            region="global",
+            output_path=tmp_path,
+            years=[2020],
+            months=["01"],
+            variables=["temperature"],
+            dry_run=False,
+        )
+
+        # Should not raise, just log error
+        downloader.download_metadata(dry_run=False)
+
+
+# ----------------------------------
+# Test - Utility & Display Functions
+# ----------------------------------
+def test_print_available_variables() -> None:
+    """Test print_available_variables static method.
+
+    Check that print_available_variables executes without errors.
+    """
+    with patch("builtins.print"):
+        IconDreamDownloader.print_available_variables()
+        # Should not raise any exception
+
+
+def test_print_available_variables_all_regions() -> None:
+    """Test print_available_variables with 'all' regions.
+
+    Check that print_available_variables prints variables for all regions.
+    """
+    with patch("builtins.print") as mock_print:
+        IconDreamDownloader.print_available_variables(region="all")
+        # Should print for both global and eu
+        assert mock_print.call_count > 10  # Multiple print calls for both regions
