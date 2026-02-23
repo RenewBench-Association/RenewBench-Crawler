@@ -14,11 +14,7 @@ import requests
 from loguru import logger
 from requests import HTTPError
 
-from rbc.energy.utils import write_df_to_csv
-
-WORKERS = 4
-MAX_RETRIES = 3
-RETRY_DELAY = 5
+from rbc.energy.utils import MAX_RETRIES, RETRY_DELAY, WORKERS, write_df_to_csv
 
 URL_ROOT = "https://api.eia.gov/v2/"
 URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
@@ -32,7 +28,8 @@ class EiaDownloader:
         years (list[str]): List of years to get data for.
         output_path (Path): Path to the output directory.
         checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (np.array): Array of 0 and 1 values for resuming.
+        checkpoint (dict): Dict of 0 and 1 values for resuming.
+        _lock (threading.Lock): Parallelisation lock for thread-safety.
     """
 
     def __init__(
@@ -49,7 +46,7 @@ class EiaDownloader:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+             or start from scratch (False). Defaults to True.
 
         Raises:
             ValueError: If token is invalid or basic API call fails.
@@ -141,9 +138,7 @@ class EiaDownloader:
             try:
                 df_gen = self._get_day_data(date=date)
                 write_df_to_csv(
-                    df=df_gen,
-                    file_path=Path(self.output_path, date + ".csv"),
-                    index=True,
+                    df=df_gen, file_path=Path(self.output_path, date + ".csv")
                 )
                 return 1
 

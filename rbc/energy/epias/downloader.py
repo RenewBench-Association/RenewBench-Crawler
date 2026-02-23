@@ -15,11 +15,7 @@ from eptr2 import EPTR2
 from loguru import logger
 from urllib3.exceptions import ReadTimeoutError
 
-from rbc.energy.utils import write_df_to_csv
-
-WORKERS = 4
-MAX_RETRIES = 3
-RETRY_DELAY = 5
+from rbc.energy.utils import MAX_RETRIES, RETRY_DELAY, WORKERS, write_df_to_csv
 
 
 class EpiasDownloader:
@@ -28,9 +24,9 @@ class EpiasDownloader:
     Attributes:
         years (list[str]): List of years to get data for.
         output_path (Path): Path to the output directory.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (np.array): Array of 0 and 1 values for resuming.
         eptr (EPTR2): EPTR2 object for EPIAS data access.
+        checkpoint_path (Path): Path to the checkpoint file for resuming.
+        checkpoint (dict): Dict of 0 and 1 values for resuming.
         _lock (threading.Lock): Parallelisation lock for thread-safety.
     """
 
@@ -50,7 +46,7 @@ class EpiasDownloader:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+             or start from scratch (False). Defaults to True.
 
         Raises:
             ValueError: If login credentials are incorrect.
@@ -136,9 +132,7 @@ class EpiasDownloader:
             try:
                 df_gen = self._get_day_data(date=date)
                 write_df_to_csv(
-                    df=df_gen,
-                    file_path=Path(self.output_path, date + ".csv"),
-                    index=True,
+                    df=df_gen, file_path=Path(self.output_path, date + ".csv")
                 )
                 return 1
 

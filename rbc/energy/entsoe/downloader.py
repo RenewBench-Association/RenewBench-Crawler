@@ -48,6 +48,7 @@ class EntsoeDownloader:
         output_path (Path): Path to the output directory.
         resume (bool, optional): Whether to resume from a previous
          download (True) or start from scratch (False). Defaults to True.
+        _lock (threading.Lock): Parallelisation lock for thread-safety.
     """
 
     def __init__(
