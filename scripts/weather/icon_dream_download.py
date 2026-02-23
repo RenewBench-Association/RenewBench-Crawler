@@ -26,19 +26,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--list-variables",
         action="store_true",
-        help="List all available ERA5 variables and exit.",
-    )
-
-    parser.add_argument(
-        "--list-variables",
-        action="store_true",
         help="List all available ICON-DREAM variables and exit.",
     )
 
     parser.add_argument(
         "--region",
         choices=["global", "eu", "europe", "all"],
-        default=all,
+        default="all",
         metavar="REGION",
         help="Region to download. 'global': 13 km resolution, global coverage. "
         "'eu'/'europe': 6.5 km resolution, Europe only. 'all': both regions. "
@@ -153,8 +147,6 @@ def main() -> None:
     """Coordinate ICON-DREAM data download."""
     args = parse_arguments()
     region = args.region
-    if region == "europe":
-        region = "eu"
 
     if args.list_variables:
         IconDreamDownloader.print_available_variables(region=region)
