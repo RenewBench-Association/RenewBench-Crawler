@@ -156,6 +156,30 @@ class Era5Config(PathValidation, AccessValidation, BaseModel):
     access: AccessAPI
 
 
+class IconDreamGlobalConfig(BaseModel):
+    """Configuration schema for the ICON-DREAM Global weather data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["icon_dream_global"] = "icon_dream_global"
+    paths: Paths
+
+
+class IconDreamEuConfig(BaseModel):
+    """Configuration schema for the ICON-DREAM EU weather data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["icon_dream_eu"] = "icon_dream_eu"
+    paths: Paths
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
@@ -163,4 +187,6 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
     "epias": EpiasConfig,
     "era5": Era5Config,
+    "icon_dream_global": IconDreamGlobalConfig,
+    "icon_dream_eu": IconDreamEuConfig,
 }

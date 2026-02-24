@@ -28,6 +28,12 @@ def source_configs(tmp_path: Path) -> dict:
             "paths": {"dst_dir_raw": str(Path(tmp_path, "era5"))},
             "access": {"api_key": "token"},
         },
+        "icon_dream_global": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
+        },
+        "icon_dream_eu": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_eu"))},
+        },
     }
 
 
