@@ -32,6 +32,13 @@ def parse_arguments() -> argparse.Namespace:
         f"Default: {list(range(2019, 2026))}",
     )
     parser.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Do not resume download from a previous checkpoint.",
+    )
+    parser.set_defaults(resume=True)
+    parser.add_argument(
         "-o",
         "--cfg_options",
         action="append",
@@ -54,7 +61,7 @@ def main() -> None:
         token=cfg.access.api_key,
         output_path=cfg.paths.dst_dir_raw,
         years=args.years,
-        resume=True,
+        resume=args.resume,
     )
     downloader.download_data()
 
