@@ -9,10 +9,11 @@ import requests
 from loguru import logger
 
 from rbc.energy.eia import EiaDownloader
+from rbc.energy.utils import DataStructureError
 
 
 # ----------------------------------
-# Specific fixtures
+# Fixtures
 # ----------------------------------
 @pytest.fixture
 def init_args(tmp_path: Path) -> dict:
@@ -89,7 +90,7 @@ def mock_eia_json(
 
 
 # ----------------------------------
-# Tests
+# Tests - Initialization
 # ----------------------------------
 def test_downloader_initialization(downloader: EiaDownloader, init_args: dict) -> None:
     """Happy path for class initialization.
@@ -133,7 +134,7 @@ def test_download_data_resume(init_args: dict) -> None:
         mock_get.return_value = MagicMock(status_code=200)
         downloader = EiaDownloader(**args)
 
-        with patch.object(downloader, "_download_day_data") as mock_dump:
+        with patch.object(downloader, "_download_task_data") as mock_dump:
             mock_dump.return_value = 1
             downloader.download_data()
 
@@ -141,6 +142,9 @@ def test_download_data_resume(init_args: dict) -> None:
             assert downloader.checkpoint == checkpoint
 
 
+# ----------------------------------
+# Tests - Parallelisation
+# ----------------------------------
 def test_threading_wrapper_missing_data(downloader: EiaDownloader, date: str) -> None:
     """Happy path for "_threading_wrapper" function when no data is available.
 
@@ -148,10 +152,16 @@ def test_threading_wrapper_missing_data(downloader: EiaDownloader, date: str) ->
         downloader (EiaDownloader): Instance of EiaDownloader class.
         date (str): Date to download.
     """
-    with patch.object(downloader, "_get_day_data", side_effect=ValueError):
-        downloader._threading_wrapper(date)
+    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
+        with patch.object(downloader, "_save_checkpoint") as mock_save:
+            downloader._threading_wrapper(
+                date, downloader.checkpoint, downloader.checkpoint_path
+            )
 
-        assert downloader.checkpoint[date] == 1
+            assert downloader.checkpoint[date] == 1
+            mock_save.assert_called_once_with(
+                downloader.checkpoint, downloader.checkpoint_path
+            )
 
 
 def test_threading_wrapper_service_unavailable(
@@ -163,15 +173,38 @@ def test_threading_wrapper_service_unavailable(
         downloader (EiaDownloader): Instance of EiaDownloader class.
         date (str): Date to download.
     """
-    with patch.object(downloader, "_get_day_data", side_effect=ConnectionError):
-        with patch("rbc.energy.eia.downloader.time.sleep"):
-            downloader._threading_wrapper(date)
+    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
+        with patch("rbc.energy.utils.time.sleep"):
+            with patch.object(downloader, "_save_checkpoint"):
+                downloader._threading_wrapper(
+                    date, downloader.checkpoint, downloader.checkpoint_path
+                )
 
-        assert downloader.checkpoint[date] == 0
+                assert downloader.checkpoint[date] == 0
 
 
-def test_download_day_data(downloader: EiaDownloader, date: str) -> None:
-    """Happy path for "_download_day_data" method when resuming from checkpoint.
+def test_threading_wrapper_structure_changed(
+    downloader: EiaDownloader, date: str
+) -> None:
+    """Failure path for "_threading_wrapper" function when the data structure has changed.
+
+    Args:
+        downloader (EiaDownloader): Instance of EiaDownloader class.
+        date (str): Date to download.
+    """
+    with patch("os._exit", side_effect=SystemExit("Process killed")) as mock_exit:
+        with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):
+            with pytest.raises(SystemExit, match="Process killed"):
+                downloader._threading_wrapper(
+                    date, downloader.checkpoint, downloader.checkpoint_path
+                )
+
+    # the assert needs to be outside the with-block to be sure it executes properly
+    mock_exit.assert_called_once_with(1)
+
+
+def test_download_task_data(downloader: EiaDownloader, date: str) -> None:
+    """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -179,8 +212,8 @@ def test_download_day_data(downloader: EiaDownloader, date: str) -> None:
     """
     mock_df = pd.DataFrame({"total": [16.2]})
 
-    with patch.object(downloader, "_get_day_data", return_value=mock_df):
-        status = downloader._download_day_data(date)
+    with patch.object(downloader, "_get_task_data", return_value=mock_df):
+        status = downloader._download_task_data(date)
 
         assert status == 1
         expected_file = Path(downloader.output_path, f"{date}.csv")
@@ -190,8 +223,11 @@ def test_download_day_data(downloader: EiaDownloader, date: str) -> None:
         assert saved_df.iloc[0]["total"] == 16.2
 
 
-def test_get_day_data(downloader: EiaDownloader, date: str) -> None:
-    """Happy path for "_get_day_data" method.
+# ----------------------------------
+# Tests - Data crawling logic
+# ----------------------------------
+def test_get_task_data(downloader: EiaDownloader, date: str) -> None:
+    """Happy path for "_get_task_data" method.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -202,7 +238,7 @@ def test_get_day_data(downloader: EiaDownloader, date: str) -> None:
 
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
-        df = downloader._get_day_data(date)
+        df = downloader._get_task_data(date)
 
     assert not df.empty
     assert len(df) == 1
@@ -211,8 +247,8 @@ def test_get_day_data(downloader: EiaDownloader, date: str) -> None:
     assert mock_get.call_count == 1
 
 
-def test_get_day_data_timed_out(downloader: EiaDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when the request timed out.
+def test_get_task_data_timed_out(downloader: EiaDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when the request timed out.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -222,11 +258,11 @@ def test_get_day_data_timed_out(downloader: EiaDownloader, date: str) -> None:
         mock_get.side_effect = requests.exceptions.ConnectionError
 
         with pytest.raises(ConnectionError, match="timed out"):
-            downloader._get_day_data(date)
+            downloader._get_task_data(date)
 
 
-def test_get_day_data_request_failed(downloader: EiaDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when the return code is unsuccessful.
+def test_get_task_data_request_failed(downloader: EiaDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when the return code is unsuccessful.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -236,11 +272,11 @@ def test_get_day_data_request_failed(downloader: EiaDownloader, date: str) -> No
         mock_get.return_value = MagicMock(status_code=500)
 
         with pytest.raises(requests.exceptions.HTTPError, match="request failed"):
-            downloader._get_day_data(date)
+            downloader._get_task_data(date)
 
 
-def test_get_day_data_rate_limit_retry(downloader: EiaDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when the rate limit is reached (code 429).
+def test_get_task_data_rate_limit_retry(downloader: EiaDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when the rate limit is reached (code 429).
 
     Checks that the warning message is logged when the return code is 429 on a first
     try. To prevent endless looping, the second run is changed to a valid return code.
@@ -263,7 +299,7 @@ def test_get_day_data_rate_limit_retry(downloader: EiaDownloader, date: str) -> 
             "rbc.energy.eia.downloader.time.sleep"
         ):
             mock_get.side_effect = [mock_429, mock_200]
-            downloader._get_day_data(date)
+            downloader._get_task_data(date)
 
         assert any("limit reached" in msg for msg in logs)
 
@@ -272,10 +308,10 @@ def test_get_day_data_rate_limit_retry(downloader: EiaDownloader, date: str) -> 
 
 
 @pytest.mark.parametrize("return_val", [{}, {"response": {}}])
-def test_get_day_data_failed_response_parsing(
+def test_get_task_data_failed_response_parsing(
     downloader: EiaDownloader, date: str, return_val: dict
 ) -> None:
-    """Failure path for "_get_day_data" method when the parsed response is incomplete.
+    """Failure path for "_get_task_data" method when the parsed response is incomplete.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -289,11 +325,13 @@ def test_get_day_data_failed_response_parsing(
         mock_get.return_value = mock_response
 
         with pytest.raises(ValueError, match="Failed parsing"):
-            downloader._get_day_data(date)
+            downloader._get_task_data(date)
 
 
-def test_get_day_data_incomplete_download(downloader: EiaDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when the download isn't complete.
+def test_get_task_data_incomplete_download(
+    downloader: EiaDownloader, date: str
+) -> None:
+    """Failure path for "_get_task_data" method when the download isn't complete.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -306,11 +344,11 @@ def test_get_day_data_incomplete_download(downloader: EiaDownloader, date: str) 
         mock_get.return_value = mock_response
 
         with pytest.raises(ValueError, match="Incomplete download"):
-            downloader._get_day_data(date)
+            downloader._get_task_data(date)
 
 
-def test_get_day_data_empty_response(downloader: EiaDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when the API returns no data.
+def test_get_task_data_empty_response(downloader: EiaDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when the API returns no data.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
@@ -323,4 +361,4 @@ def test_get_day_data_empty_response(downloader: EiaDownloader, date: str) -> No
         mock_get.return_value = mock_response
 
         with pytest.raises(ValueError, match="No generation data available"):
-            downloader._get_day_data(date)
+            downloader._get_task_data(date)

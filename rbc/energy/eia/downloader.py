@@ -3,8 +3,6 @@
 Remote API access of EIA website using the requests package.
 """
 
-import pickle
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,22 +12,19 @@ import requests
 from loguru import logger
 from requests import HTTPError
 
-from rbc.energy.utils import MAX_RETRIES, RETRY_DELAY, WORKERS, write_df_to_csv
+from rbc.energy.utils import WORKERS, DailyDownloader
 
 URL_ROOT = "https://api.eia.gov/v2/"
 URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
 
 
-class EiaDownloader:
+class EiaDownloader(DailyDownloader):
     """EIA data downloader.
 
     Attributes:
         token (str): The personal EIA API token.
-        years (list[str]): List of years to get data for.
-        output_path (Path): Path to the output directory.
         checkpoint_path (Path): Path to the checkpoint file for resuming.
         checkpoint (dict): Dict of 0 and 1 values for resuming.
-        _lock (threading.Lock): Parallelisation lock for thread-safety.
     """
 
     def __init__(
@@ -41,21 +36,20 @@ class EiaDownloader:
     ) -> None:
         """Initializes the instance.
 
-        Attributes:
+        Args:
             token (str): The personal EIA API token.
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-             or start from scratch (False). Defaults to True.
+            or start from scratch (False). Defaults to True.
 
         Raises:
             ValueError: If token is invalid or basic API call fails.
         """
+        super().__init__(output_path=output_path, years=years, resume=resume)
         self.token = token
-        self.years = years
-        self.output_path = output_path
         self.checkpoint_path = Path(self.output_path, "status.pickle")
-        self._lock = threading.Lock()
+        self.checkpoint = self._load_checkpoint(self.checkpoint_path)
 
         logger.info(f"EIA Downloader initialised for:\n- years:\t\t{years}")
 
@@ -69,92 +63,24 @@ class EiaDownloader:
             logger.info(f"Failed: {e}")
             raise ValueError(f"Provided API token {token} incorrect.")
 
-        if resume and self.checkpoint_path.is_file():
-            with open(self.checkpoint_path, "rb") as f:
-                self.checkpoint = pickle.load(f)
-        else:
-            self.checkpoint = {}
-
     def download_data(self):
         """Parse data for all given years from EIA site and save to CSV."""
-        yesterday = (pd.Timestamp.now() - pd.Timedelta(days=1)).normalize()
-
-        all_dates = []
-        for year in self.years:
-            year_start = pd.Timestamp(f"{year}-01-01")
-            year_end = pd.Timestamp(f"{year}-12-31")
-
-            if year_start > yesterday:  # don't evaluate future years
-                continue
-
-            actual_end = min(year_end, yesterday)  # don't evaluate beyond yesterday
-
-            all_dates.extend(
-                pd.date_range(start=year_start, end=actual_end)
-                .strftime("%Y-%m-%d")
-                .tolist()
-            )
+        all_dates = self._get_date_list()
 
         try:
             logger.info(f"Downloading data for: {all_dates[0]} to {all_dates[-1]}")
             with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-                executor.map(self._threading_wrapper, all_dates)
+                executor.map(
+                    lambda t: self._threading_wrapper(
+                        t, self.checkpoint, self.checkpoint_path
+                    ),
+                    all_dates,
+                )
 
         except IndexError:
             logger.info(f"Provided years '{self.years}' lie in the future!")
 
-    def _threading_wrapper(self, date: str) -> None:
-        """Threading wrapper for data download and checkpoint reading/saving.
-
-        Args:
-            date (str): Date to download data for.
-        """
-        with self._lock:
-            if self.checkpoint.get(date) == 1:
-                logger.info(f"{date}: Data already downloaded. Skipping.")
-                return
-
-        try:
-            status = self._download_day_data(date=date)
-        except Exception as e:
-            logger.error(f"Unexpected error in thread for {date}: {e}")
-            status = 0
-
-        with self._lock:
-            self.checkpoint[date] = status
-            with open(self.checkpoint_path, "wb") as f:
-                pickle.dump(self.checkpoint, f)
-
-    def _download_day_data(self, date: str) -> int:
-        """Parse data for specific date from EIA Platform and dump to CSV.
-
-        Args:
-            date (str): Date to download data for.
-
-        Returns:
-            int: Status of the download (1 if successful, 0 if unsuccessful).
-        """
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                df_gen = self._get_day_data(date=date)
-                write_df_to_csv(
-                    df=df_gen, file_path=Path(self.output_path, date + ".csv")
-                )
-                return 1
-
-            except ValueError as e:
-                logger.error(f"Missing data for {date}: {e}")
-                return 1  # Skip day
-
-            except (ConnectionError, HTTPError) as e:
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY)
-                else:
-                    logger.critical(f"Failed {date} after {MAX_RETRIES} attempts: {e}")
-                    return 0
-        return 1
-
-    def _get_day_data(self, date: str) -> pd.DataFrame:
+    def _get_task_data(self, task: str) -> pd.DataFrame:  # type: ignore[override]
         """Get EIA generation data per plant for one specific date.
 
         The parsing cap lies at 5000 rows per API call. The amount of hourly data
@@ -164,7 +90,7 @@ class EiaDownloader:
         instead of per month/year.
 
         Args:
-            date (str): Date to get data for.
+            task (str): Date to get data for.
 
         Returns:
             pd.DataFrame: Dataframe for specific date with the columns
@@ -177,7 +103,7 @@ class EiaDownloader:
             ValueError: If response parsing failed, if not all available data was
             downloaded, or if the dataframe is empty.
         """
-        dt = pd.Period(date, freq="D")
+        dt = pd.Period(task, freq="D")
         start = dt.strftime("%Y-%m-%dT00")
         end = pd.Period((dt + pd.Timedelta(days=1)), freq="D").strftime("%Y-%m-%dT00")
 
@@ -247,7 +173,7 @@ class EiaDownloader:
 
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
-            raise ValueError(f"No generation data available for {date}!")
+            raise ValueError(f"No generation data available for {task}!")
 
         df_gen = df_gen[df_gen["period"] != end]  # remove included hour from next day
         df_gen = df_gen.sort_values(["period", "respondent"], ignore_index=True)

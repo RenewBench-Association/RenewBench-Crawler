@@ -3,10 +3,6 @@
 Remote API access of ENTSO-E Platform using the entsoe-apy package.
 """
 
-import os
-import pickle
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -16,14 +12,11 @@ from entsoe.Generation import ActualGenerationPerGenerationUnit
 from entsoe.query.decorators import ServiceUnavailableError
 from entsoe.utils import add_timestamps, extract_records, mappings
 from loguru import logger
-from requests.exceptions import ReadTimeout
 
 from rbc.energy.utils import (
-    MAX_RETRIES,
-    RETRY_DELAY,
     WORKERS,
+    DailyDownloader,
     DataStructureError,
-    write_df_to_csv,
 )
 
 RELEVANT_RECORD_KEYS = {
@@ -39,16 +32,11 @@ RELEVANT_RECORD_KEYS = {
 }
 
 
-class EntsoeDownloader:
+class EntsoeDownloader(DailyDownloader):
     """Entsoe-E data downloader.
 
     Attributes:
-        years (list[str]): List of years to get data for.
         bidding_zones (list[str]): List of bidding zones to get data for.
-        output_path (Path): Path to the output directory.
-        resume (bool, optional): Whether to resume from a previous
-         download (True) or start from scratch (False). Defaults to True.
-        _lock (threading.Lock): Parallelisation lock for thread-safety.
     """
 
     def __init__(
@@ -61,22 +49,19 @@ class EntsoeDownloader:
     ) -> None:
         """Initializes the instance.
 
-        Attributes:
+        Args:
             token (str): The personal ENTSO-E RESTful API token.
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             bidding_zones (list[str]): List of bidding zones to get data for.
-            resume (bool, optional): Whether to resume from a previous
-             download (True) or start from scratch (False). Defaults to True.
+            resume (bool, optional): Whether to resume from a previous download (True)
+            or start from scratch (False). Defaults to True.
 
         Raises:
             ValueError: If bidding zone is unsupported or token is invalid.
         """
-        self.years = years
+        super().__init__(output_path=output_path, years=years, resume=resume)
         self.bidding_zones = list(bidding_zones)
-        self.output_path = output_path
-        self.resume = resume
-        self._lock = threading.Lock()
 
         for bz in self.bidding_zones:
             if bz not in list(mappings.keys()):
@@ -120,68 +105,7 @@ class EntsoeDownloader:
         except IndexError:
             logger.info(f"Provided years '{self.years}' lie in the future!")
 
-    def _threading_wrapper(
-        self, task: tuple[str, str], checkpoint: dict, checkpoint_path: Path
-    ) -> None:
-        """Threading wrapper for data download and checkpoint reading/saving.
-
-        Args:
-            task (tuple): Tuple of date and bidding zone to download data for.
-            checkpoint (dict): Dict of 0 and 1 values for resuming.
-            checkpoint_path (Path): Path to the checkpoint file for resuming.
-        """
-        with self._lock:
-            if checkpoint.get(task) == 1:
-                logger.info(f"{task}: Data already downloaded. Skipping.")
-                return
-
-        try:
-            status = self._download_day_data(task=task)
-        except Exception as e:
-            logger.error(f"Unexpected error in thread for {task}: {e}")
-            status = 0
-
-        with self._lock:
-            checkpoint[task] = status
-            self._save_checkpoint(checkpoint, checkpoint_path)
-
-    def _download_day_data(self, task: tuple[str, str]) -> int:
-        """Parse data for specific date from Entso-E Platform and dump to CSV.
-
-        Args:
-            task (tuple): Tuple of (zone, date) to download data for.
-
-        Returns:
-            int: Status of the download (1 if successful, 0 if unsuccessful).
-        """
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                df_gen = self._get_day_data(task=task)
-                write_df_to_csv(
-                    df=df_gen,
-                    file_path=Path(self.output_path, task[0], task[1] + ".csv"),
-                )
-                return 1
-
-            except DataStructureError as e:
-                logger.critical(f"FATAL! Data structure has changed: {e}")
-                os._exit(1)  # data structure change that warrants entire process kill
-
-            except ValueError as e:
-                logger.error(f"Missing data for {task}: {e}")
-                return 1  # skip day
-
-            except (ReadTimeout, ConnectionError):
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY)
-                else:
-                    logger.critical(f"Failed {task} after {MAX_RETRIES} attempts.")
-                    return 0
-
-        return 1
-
-    @staticmethod
-    def _get_day_data(task: tuple[str, str]) -> pd.DataFrame:
+    def _get_task_data(self, task: tuple[str, str]) -> pd.DataFrame:  # type: ignore[override]
         """Get Entso-e generation data per plant for one specific date and bidding zone.
 
         Args:
@@ -246,74 +170,3 @@ class EntsoeDownloader:
 
         df = df.sort_values(by=["timestamp", "Unit_Name"], ascending=[True, True])
         return df
-
-    def _load_checkpoint(self, checkpoint_path: Path) -> dict:
-        """Load checkpoint from checkpoint path depending on resume logic.
-
-        Args:
-            checkpoint_path (Path): Path to checkpoint file.
-
-        Returns:
-            dict: Loaded checkpoint.
-        """
-        if self.resume and checkpoint_path.is_file():
-            logger.info(f"Loading checkpoint from '{checkpoint_path}'")
-
-            try:
-                with open(checkpoint_path, "rb") as f:
-                    return pickle.load(f)
-            except (EOFError, pickle.UnpicklingError):
-                logger.warning(
-                    f"Checkpoint '{checkpoint_path}' is corrupted. Starting fresh."
-                )
-                return {}
-        else:
-            logger.info(
-                "No checkpoint loading (first run or resume=False). Starting fresh."
-            )
-            return {}
-
-    @staticmethod
-    def _save_checkpoint(checkpoint: dict, checkpoint_path: Path) -> None:
-        """Save checkpoint safely (ensure abrupt terminations don't corrupt the file).
-
-        Args:
-            checkpoint (dict): Checkpoint to be saved.
-            checkpoint_path (Path): Path to checkpoint file.
-        """
-        temp_path = checkpoint_path.with_suffix(".tmp")
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(temp_path, "wb") as f:
-            pickle.dump(checkpoint, f)
-
-        os.replace(temp_path, checkpoint_path)
-
-    def _get_date_list(self) -> list[str]:
-        """Get a list of all dates in the provided year(s).
-
-        Includes checks to ensure future years are not evaluated and that if the
-        current year is provided, nothing beyond the previous day is taken into account.
-
-        Returns:
-            list[str]: List of all dates in the provided years.
-        """
-        yesterday = (pd.Timestamp.now() - pd.Timedelta(days=1)).normalize()
-
-        all_dates = []
-        for year in self.years:
-            year_start = pd.Timestamp(f"{year}-01-01")
-            year_end = pd.Timestamp(f"{year}-12-31")
-
-            if year_start > yesterday:  # don't evaluate future years
-                continue
-
-            actual_end = min(year_end, yesterday)  # don't evaluate beyond yesterday
-
-            all_dates.extend(
-                pd.date_range(start=year_start, end=actual_end)
-                .strftime("%Y-%m-%d")
-                .tolist()
-            )
-
-        return all_dates

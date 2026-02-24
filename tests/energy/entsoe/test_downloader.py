@@ -13,7 +13,7 @@ from rbc.energy.utils import DataStructureError
 
 
 # ----------------------------------
-# Specific fixtures
+# Fixtures
 # ----------------------------------
 @pytest.fixture
 def api_config() -> Generator:
@@ -82,7 +82,7 @@ def download_args(init_args: dict) -> tuple[tuple, dict, Path]:
 
 
 # ----------------------------------
-# Tests
+# Tests - Initialization
 # ----------------------------------
 @pytest.mark.parametrize("bz, valid", [("10YES-REE------0", True), (" ", False)])
 def test_downloader_initialization(
@@ -140,12 +140,15 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
     args["resume"] = True
     downloader = EntsoeDownloader(**args)
 
-    with patch.object(downloader, "_download_day_data") as mock_dump:
+    with patch.object(downloader, "_download_task_data") as mock_dump:
         downloader.download_data()
 
         assert mock_dump.call_count == 0
 
 
+# ----------------------------------
+# Tests - Parallelisation
+# ----------------------------------
 def test_threading_wrapper_missing_data(
     downloader: EntsoeDownloader, download_args: tuple
 ) -> None:
@@ -153,11 +156,11 @@ def test_threading_wrapper_missing_data(
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
 
-    with patch.object(downloader, "_get_day_data", side_effect=ValueError):
+    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
         with patch.object(downloader, "_save_checkpoint") as mock_save:
             downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
@@ -172,12 +175,12 @@ def test_threading_wrapper_service_unavailable(
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
 
-    with patch.object(downloader, "_get_day_data", side_effect=ConnectionError):
-        with patch("rbc.energy.eia.downloader.time.sleep"):
+    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
+        with patch("rbc.energy.utils.time.sleep"):
             with patch.object(downloader, "_save_checkpoint"):
                 downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
@@ -191,12 +194,12 @@ def test_threading_wrapper_structure_changed(
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
 
     with patch("os._exit", side_effect=SystemExit("Process killed")) as mock_exit:
-        with patch.object(downloader, "_get_day_data", side_effect=DataStructureError):
+        with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):
             with pytest.raises(SystemExit, match="Process killed"):
                 downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
@@ -205,17 +208,17 @@ def test_threading_wrapper_structure_changed(
 
 
 def test_download_day_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
-    """Happy path for "_download_day_data" method when resuming from checkpoint.
+    """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
     mock_df = pd.DataFrame({"Generation_MW": [16.2]})
 
-    with patch.object(downloader, "_get_day_data", return_value=mock_df):
-        status = downloader._download_day_data(task)
+    with patch.object(downloader, "_get_task_data", return_value=mock_df):
+        status = downloader._download_task_data(task)
 
         assert status == 1
         expected_file = Path(downloader.output_path, task[0], task[1] + ".csv")
@@ -225,12 +228,15 @@ def test_download_day_data(downloader: EntsoeDownloader, download_args: tuple) -
         assert saved_df.iloc[0]["Generation_MW"] == 16.2
 
 
-def test_get_day_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
-    """Happy path for "_get_day_data" method.
+# ----------------------------------
+# Tests - Data crawling logic
+# ----------------------------------
+def test_get_task_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
+    """Happy path for "_get_task_data" method.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
     timestamp = f"{task[1]}T00:00:00+00:00"
@@ -255,7 +261,7 @@ def test_get_day_data(downloader: EntsoeDownloader, download_args: tuple) -> Non
             mock_api.return_value.query_api.return_value = return_value
             mock_extract.return_value = return_value
 
-            df = downloader._get_day_data(task)
+            df = downloader._get_task_data(task)
 
     assert not df.empty
     assert len(df) == 1
@@ -266,14 +272,14 @@ def test_get_day_data(downloader: EntsoeDownloader, download_args: tuple) -> Non
     assert mock_extract.call_count == 1
 
 
-def test_get_day_data_timed_service_unavailable(
+def test_get_task_data_timed_service_unavailable(
     downloader: EntsoeDownloader, download_args: tuple
 ) -> None:
-    """Failure path for "_get_day_data" method when the service is unavailable.
+    """Failure path for "_get_task_data" method when the service is unavailable.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, _, _ = download_args
 
@@ -283,17 +289,17 @@ def test_get_day_data_timed_service_unavailable(
         mock_api.return_value.query_api.side_effect = ServiceUnavailableError
 
         with pytest.raises(ConnectionError, match="unavailable"):
-            downloader._get_day_data(task)
+            downloader._get_task_data(task)
 
 
-def test_get_day_data_requested_data_not_returned(
+def test_get_task_data_requested_data_not_returned(
     downloader: EntsoeDownloader, download_args: tuple
 ) -> None:
-    """Failure path for "_get_day_data" method when the requested data is not returned.
+    """Failure path for "_get_task_data" method when the requested data is not returned.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, _, _ = download_args
 
@@ -303,17 +309,17 @@ def test_get_day_data_requested_data_not_returned(
         mock_api.query_api.return_value = "not a list"
 
         with pytest.raises(ConnectionError, match="did not return requested"):
-            downloader._get_day_data(task)
+            downloader._get_task_data(task)
 
 
-def test_get_day_data_no_data_available(
+def test_get_task_data_no_data_available(
     downloader: EntsoeDownloader, download_args: tuple
 ) -> None:
-    """Failure path for "_get_day_data" method when the requested data is empty.
+    """Failure path for "_get_task_data" method when the requested data is empty.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, _, _ = download_args
 
@@ -323,17 +329,17 @@ def test_get_day_data_no_data_available(
         mock_api.return_value.query_api.return_value = []
 
         with pytest.raises(ValueError, match="No data available"):
-            downloader._get_day_data(task)
+            downloader._get_task_data(task)
 
 
-def test_get_day_data_structure_change(
+def test_get_task_data_structure_change(
     downloader: EntsoeDownloader, download_args: tuple
 ) -> None:
-    """Failure path for "_get_day_data" method when the expected columns are missing.
+    """Failure path for "_get_task_data" method when the expected columns are missing.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_day_data.
+        download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, _, _ = download_args
 
@@ -347,4 +353,4 @@ def test_get_day_data_structure_change(
         mock_ts.return_value = [{"some_col": 1, "timestamp": "2020-01-01"}]
 
         with pytest.raises(DataStructureError, match="structure change detected"):
-            downloader._get_day_data(task)
+            downloader._get_task_data(task)
