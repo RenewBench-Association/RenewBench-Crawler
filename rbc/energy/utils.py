@@ -221,6 +221,9 @@ class DailyDownloader(ABC):
                 .tolist()
             )
 
+        if not all_dates:
+            raise ValueError(f"Provided years '{self.years}' lie in the future!")
+
         return all_dates
 
 

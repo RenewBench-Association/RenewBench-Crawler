@@ -83,27 +83,21 @@ class EntsoeDownloader(DailyDownloader):
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""
         all_dates = self._get_date_list()
 
-        try:
-            for bz in self.bidding_zones:
-                bz_path = Path(self.output_path, bz)
-                bz_path.mkdir(parents=True, exist_ok=True)
+        for bz in self.bidding_zones:
+            bz_path = Path(self.output_path, bz)
+            bz_path.mkdir(parents=True, exist_ok=True)
 
-                checkpoint_path = Path(bz_path, "status.pickle")
-                checkpoint = self._load_checkpoint(checkpoint_path)
+            checkpoint_path = Path(bz_path, "status.pickle")
+            checkpoint = self._load_checkpoint(checkpoint_path)
 
-                logger.info(
-                    f"Downloading data in '{bz}' for: {all_dates[0]} to {all_dates[-1]}"
+            logger.info(
+                f"Downloading data in '{bz}' for: {all_dates[0]} to {all_dates[-1]}"
+            )
+            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+                executor.map(
+                    lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
+                    [(bz, d) for d in all_dates],
                 )
-                with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-                    executor.map(
-                        lambda t: self._threading_wrapper(
-                            t, checkpoint, checkpoint_path
-                        ),
-                        [(bz, d) for d in all_dates],
-                    )
-
-        except IndexError:
-            logger.info(f"Provided years '{self.years}' lie in the future!")
 
     def _get_task_data(self, task: tuple[str, str]) -> pd.DataFrame:  # type: ignore[override]
         """Get Entso-e generation data per plant for one specific date and bidding zone.

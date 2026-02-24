@@ -173,7 +173,9 @@ def test_get_date_list_future_years(downloader: MockDownloader) -> None:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
     downloader.years = [datetime.now().year + 1]
-    assert downloader._get_date_list() == []
+
+    with pytest.raises(ValueError, match="lie in the future"):
+        downloader._get_date_list()
 
 
 # ----------------------------------

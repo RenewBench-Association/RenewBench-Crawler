@@ -59,18 +59,14 @@ class EpiasDownloader(DailyDownloader):
         """Parse data for all given years from EPIAS Platform and save to CSV."""
         all_dates = self._get_date_list()
 
-        try:
-            logger.info(f"Downloading data for: {all_dates[0]} to {all_dates[-1]}")
-            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-                executor.map(
-                    lambda t: self._threading_wrapper(
-                        t, self.checkpoint, self.checkpoint_path
-                    ),
-                    all_dates,
-                )
-
-        except IndexError:
-            logger.info(f"Provided years '{self.years}' lie in the future!")
+        logger.info(f"Downloading data for: {all_dates[0]} to {all_dates[-1]}")
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+            executor.map(
+                lambda t: self._threading_wrapper(
+                    t, self.checkpoint, self.checkpoint_path
+                ),
+                all_dates,
+            )
 
     def _get_task_data(self, task: str) -> pd.DataFrame:  # type: ignore[override]
         """Get EPIAS generation data per plant for one specific date.
