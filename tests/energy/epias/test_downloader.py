@@ -87,6 +87,19 @@ def test_downloader_initialization(init_args: dict) -> None:
         assert downloader.checkpoint == {}
 
 
+def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
+    """Failure path for class initialization with invalid credentials.
+
+    Args:
+        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+    """
+    with patch("rbc.energy.epias.downloader.EPTR2") as mock_eptr2:
+        mock_eptr2.side_effect = Exception("Login Failed")
+
+        with pytest.raises(ValueError, match="incorrect"):
+            EpiasDownloader(**init_args)
+
+
 def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
