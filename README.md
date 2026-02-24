@@ -60,9 +60,11 @@ Coming soon :fire:
 
 #### Weather
 
-| Region | Source | Platform                                                                                        | Docs                                                                                 | Access    | How-to                                                             |
-| ------ | ------ |-------------------------------------------------------------------------------------------------| ------------------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------ |
-| World  | ERA5   | [Catalogue](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1) | [Data download guide](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5) | API token | [Installation guide](https://cds.climate.copernicus.eu/how-to-api) |
+| Region | Resolution | Source | Platform                                                                                        | Docs                                                                                 | Access    | How-to                                                             |
+| ------ | ------ | ------ |-------------------------------------------------------------------------------------------------| ------------------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------ |
+| World  | 0.25° / ~31km | ERA5   | [Copernicus / ECMWF](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1) | [Data download guide](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5) | API token | [Installation guide](https://cds.climate.copernicus.eu/how-to-api) |
+| World  | ~13km | ICON DREAM Global   | [DWD](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly/) | [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) | open | - |
+| Europe  | ~6.5km |ICON DREAM Europe  | [DWD](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-EU/hourly/) | [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) | open | - |
 
 ## Guides
 
