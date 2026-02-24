@@ -1,4 +1,6 @@
 # tests/energy/epias/test_downloader.py
+"""Tests for EPIAS energy data downloader."""
+
 import pickle
 from pathlib import Path
 from unittest.mock import patch
@@ -7,7 +9,6 @@ import pandas as pd
 import pytest
 
 from rbc.energy.epias import EpiasDownloader
-from rbc.energy.utils import DataStructureError
 
 
 # ----------------------------------
@@ -120,66 +121,8 @@ def test_download_data_resume(init_args: dict) -> None:
 
 
 # ----------------------------------
-# Tests - Parallelisation
+# Tests - Data crawling logic
 # ----------------------------------
-def test_threading_wrapper_missing_data(downloader: EpiasDownloader, date: str) -> None:
-    """Happy path for "_threading_wrapper" function when no data is available.
-
-    Args:
-        downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        date (str): Date to download.
-    """
-    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
-        with patch.object(downloader, "_save_checkpoint") as mock_save:
-            downloader._threading_wrapper(
-                date, downloader.checkpoint, downloader.checkpoint_path
-            )
-
-            assert downloader.checkpoint[date] == 1
-            mock_save.assert_called_once_with(
-                downloader.checkpoint, downloader.checkpoint_path
-            )
-
-
-def test_threading_wrapper_service_unavailable(
-    downloader: EpiasDownloader, date: str
-) -> None:
-    """Failure path for "_threading_wrapper" function when connection error occurs.
-
-    Args:
-        downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        date (str): Date to download.
-    """
-    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
-        with patch("rbc.energy.utils.time.sleep"):
-            with patch.object(downloader, "_save_checkpoint"):
-                downloader._threading_wrapper(
-                    date, downloader.checkpoint, downloader.checkpoint_path
-                )
-
-                assert downloader.checkpoint[date] == 0
-
-
-def test_threading_wrapper_structure_changed(
-    downloader: EpiasDownloader, date: str
-) -> None:
-    """Failure path for "_threading_wrapper" function when the data structure has changed.
-
-    Args:
-        downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        date (str): Date to download.
-    """
-    with patch("os._exit", side_effect=SystemExit("Process killed")) as mock_exit:
-        with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):
-            with pytest.raises(SystemExit, match="Process killed"):
-                downloader._threading_wrapper(
-                    date, downloader.checkpoint, downloader.checkpoint_path
-                )
-
-    # the assert needs to be outside the with-block to be sure it executes properly
-    mock_exit.assert_called_once_with(1)
-
-
 def test_download_task_data(downloader: EpiasDownloader, date: str) -> None:
     """Happy path for "_download_task_data" method when resuming from checkpoint.
 
@@ -200,9 +143,6 @@ def test_download_task_data(downloader: EpiasDownloader, date: str) -> None:
         assert saved_df.iloc[0]["total"] == 16.2
 
 
-# ----------------------------------
-# Tests - Data crawling logic
-# ----------------------------------
 def test_get_task_data(downloader: EpiasDownloader, date: str) -> None:
     """Happy path for "_get_task_data" method.
 

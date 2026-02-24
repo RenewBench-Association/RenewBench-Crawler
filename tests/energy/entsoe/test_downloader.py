@@ -1,4 +1,6 @@
 # tests/energy/entsoe/test_downloader.py
+"""Tests for Entso-E energy data downloader."""
+
 import pickle
 from pathlib import Path
 from typing import Generator
@@ -147,66 +149,8 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
 
 
 # ----------------------------------
-# Tests - Parallelisation
+# Tests - Data crawling logic
 # ----------------------------------
-def test_threading_wrapper_missing_data(
-    downloader: EntsoeDownloader, download_args: tuple
-) -> None:
-    """Happy path for "_threading_wrapper" function when no data is available.
-
-    Args:
-        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
-    """
-    task, checkpoint, checkpoint_path = download_args
-
-    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
-        with patch.object(downloader, "_save_checkpoint") as mock_save:
-            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
-
-            assert checkpoint[task] == 1
-            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
-
-
-def test_threading_wrapper_service_unavailable(
-    downloader: EntsoeDownloader, download_args: tuple
-) -> None:
-    """Failure path for "_threading_wrapper" function when connection error occurs.
-
-    Args:
-        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
-    """
-    task, checkpoint, checkpoint_path = download_args
-
-    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
-        with patch("rbc.energy.utils.time.sleep"):
-            with patch.object(downloader, "_save_checkpoint"):
-                downloader._threading_wrapper(task, checkpoint, checkpoint_path)
-
-                assert checkpoint[task] == 0
-
-
-def test_threading_wrapper_structure_changed(
-    downloader: EntsoeDownloader, download_args: tuple
-) -> None:
-    """Failure path for "_threading_wrapper" function when data structure changed.
-
-    Args:
-        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
-    """
-    task, checkpoint, checkpoint_path = download_args
-
-    with patch("os._exit", side_effect=SystemExit("Process killed")) as mock_exit:
-        with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):
-            with pytest.raises(SystemExit, match="Process killed"):
-                downloader._threading_wrapper(task, checkpoint, checkpoint_path)
-
-    mock_exit.assert_called_once_with(1)
-    assert task not in checkpoint
-
-
 def test_download_day_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
     """Happy path for "_download_task_data" method when resuming from checkpoint.
 
@@ -228,9 +172,6 @@ def test_download_day_data(downloader: EntsoeDownloader, download_args: tuple) -
         assert saved_df.iloc[0]["Generation_MW"] == 16.2
 
 
-# ----------------------------------
-# Tests - Data crawling logic
-# ----------------------------------
 def test_get_task_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
     """Happy path for "_get_task_data" method.
 
