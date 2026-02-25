@@ -3,13 +3,17 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
-from rbc.energy.utils import DailyDownloader, DataStructureError, write_df_to_csv
+from rbc.energy.utils import (
+    DailyDownloader,
+    DataStructureError,
+    write_df_to_csv,
+)
 
 
 # ----------------------------------
@@ -28,7 +32,7 @@ class MockDownloader(DailyDownloader):
 
 
 @pytest.fixture
-def downloader(tmp_path) -> MockDownloader:
+def downloader(tmp_path: Path) -> MockDownloader:
     """Fixture to create an instance of DailyDownloader.
 
     Args:
@@ -40,66 +44,131 @@ def downloader(tmp_path) -> MockDownloader:
     return MockDownloader(output_path=tmp_path, years=[2020])
 
 
+@pytest.fixture
+def ckpt_setup(downloader: MockDownloader, tmp_path: Path) -> Callable:
+    """Fixture to define a setup function for setting up the checkpoint file and path.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+        tmp_path (Path): Path to temporary directory.
+
+    Returns:
+        Callable: Function that defines checkpoint setup for specific task.
+    """
+
+    def _setup(task: str | tuple[str, str], use_self_ckpt: bool) -> tuple[dict, Path]:
+        """Function that defines checkpoint setup for specific task.
+
+        Args:
+            task (str | tuple[str, str]): Task for downloading.
+            use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+
+        Returns:
+            tuple[dict, Path]: Checkpoint dictionary and checkpoint path.
+        """
+        if use_self_ckpt:
+            d = cast(Any, downloader)  # prevents mypy complaining about missing attribs
+            d.checkpoint_path = Path(tmp_path, "status.pickle")
+            d.checkpoint = {}
+            return d.checkpoint, d.checkpoint_path
+        else:
+            nested_path = Path(tmp_path, task[0], "status.pickle")
+            nested_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure dir exists
+            return {}, nested_path
+
+    return _setup
+
+
 # ----------------------------------
 # Tests - DailyDownloader
 # ----------------------------------
 @pytest.mark.parametrize(
     "task, use_self_ckpt",
-    [
-        ("2020-01-01", True),  # Example for EIA/EPIAS
-        (("ZONE_A", "2020-01-01"), False),  # Example for Entso-E
-    ],
+    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
 )
-def test_threading_wrapper_error_catching(
+def test_threading_wrapper(
     downloader: MockDownloader,
-    tmp_path: Path,
+    ckpt_setup: Callable,
     task: str | tuple[str, str],
     use_self_ckpt: bool,
 ) -> None:
-    """Failure path suite for _threading_wrapper to check that different errors are caught.
+    """Happy path for _threading_wrapper (and, inherently, _download_task_data).
 
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
-        tmp_path (Path): Path to temporary directory.
+        ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
         task (str | tuple[str, str]): Task for downloading.
         use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
     """
+    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
 
-    def get_state():
-        # Define which state to use
-        if use_self_ckpt:
-            downloader.checkpoint_path = Path(tmp_path, "status.pickle")
-            downloader.checkpoint = {}
-            return downloader.checkpoint, downloader.checkpoint_path
-        else:
-            nested_path = Path(tmp_path, task[0], "status.pickle")
-            nested_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure dir exists
-            local_checkpoint = {}
-            return local_checkpoint, nested_path
+    with patch.object(downloader, "_get_task_data"):
+        with patch.object(downloader, "_save_checkpoint") as mock_save:
+            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
-    # 1. Test missing data (ValueError -> status 1)
-    checkpoint, checkpoint_path = get_state()
-    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
-        downloader._threading_wrapper(task, checkpoint, checkpoint_path)
-        assert checkpoint[task] == 1
+            assert checkpoint[task] == 1
+            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
-    # 2. Test connection issues (ConnectionError -> status 0)
-    checkpoint, checkpoint_path = get_state()
-    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
-        with patch("rbc.energy.utils.time.sleep"):
-            with patch.object(downloader, "_save_checkpoint") as mock_save:
-                downloader._threading_wrapper(task, checkpoint, checkpoint_path)
-                assert checkpoint[task] == 0
-                mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
-    # 3. Test data structure changes (DataStructureError -> exit)
-    checkpoint, checkpoint_path = get_state()
+@pytest.mark.parametrize(
+    "task, use_self_ckpt",
+    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
+)
+def test_threading_error_catching(
+    downloader: MockDownloader,
+    ckpt_setup: Callable,
+    task: str | tuple[str, str],
+    use_self_ckpt: bool,
+) -> None:
+    """Failure path suite for _threading_wrapper (and, inherently, _download_task_data).
+
+    This test suite ensures that the various different errors that can be raised by
+    _get_task_data and caught in _download_task_data are propagated correctly to
+    _threading_wrapper and result in the correct resume logic.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+        ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
+        task (str | tuple[str, str]): Task for downloading.
+        use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+    """
+    # 1. Test data structure changes (DataStructureError -> exit)
+    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
     with patch("os._exit", side_effect=SystemExit) as mock_exit:
         with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):
             with pytest.raises(SystemExit):
                 downloader._threading_wrapper(task, checkpoint, checkpoint_path)
-    # the assert needs to be outside the with-block to be sure it executes properly
-    mock_exit.assert_called_once_with(1)
+
+    mock_exit.assert_called_once_with(1)  # assert outside "with"-block for correct exec
+
+    # 2. Test missing data (ValueError -> status 1)
+    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
+    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
+        with patch.object(downloader, "_save_checkpoint") as mock_save:
+            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+
+            assert checkpoint[task] == 1
+            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+
+    # 3. Test connection issues (ConnectionError -> status 0)
+    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
+    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
+        with patch("rbc.energy.utils.time.sleep") as mock_sleep:
+            with patch.object(downloader, "_save_checkpoint") as mock_save:
+                downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+
+                mock_sleep.assert_called()
+                assert checkpoint[task] == 0
+                mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+
+    # 4. Test other errors (that are not specifically handled in _download_task_data)
+    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
+    with patch.object(downloader, "_get_task_data", side_effect=Exception):
+        with patch.object(downloader, "_save_checkpoint") as mock_save:
+            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+
+            assert checkpoint[task] == 0
+            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
 
 # ----------------------------------
