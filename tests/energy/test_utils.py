@@ -1,6 +1,7 @@
 # tests/energy/test_utils.py
 """Tests for energy utility functions and classes."""
 
+import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -217,6 +218,33 @@ def test_load_checkpoint_corrupted(downloader: MockDownloader) -> None:
 
     result = downloader._load_checkpoint(path)
     assert result == {}
+
+
+@pytest.mark.parametrize(
+    "task, use_self_ckpt",
+    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
+)
+def test_save_checkpoint(
+    downloader: MockDownloader,
+    ckpt_setup: Callable,
+    task: str | tuple[str, str],
+    use_self_ckpt: bool,
+) -> None:
+    """Happy path for _save_checkpoint with valid checkpoint setups.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+        ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
+        task (str | tuple[str, str]): Task for downloading.
+        use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+    """
+    _, checkpoint_path = ckpt_setup(task, use_self_ckpt)
+    checkpoint = {task: 1}
+    downloader._save_checkpoint(checkpoint, checkpoint_path)
+
+    assert checkpoint_path.is_file()
+    with open(checkpoint_path, "rb") as f:
+        assert pickle.load(f) == checkpoint
 
 
 def test_get_date_list_current_year(downloader: MockDownloader) -> None:

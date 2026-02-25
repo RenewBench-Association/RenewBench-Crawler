@@ -121,16 +121,15 @@ class DailyDownloader(ABC):
                     logger.critical(f"Failed {task} after {MAX_RETRIES} attempts: {e}")
                     return 0
 
-        return 1
+        return 1  # pragma: no cover
 
     @abstractmethod
     def _get_task_data(self, task: str | tuple[str, str]) -> pd.DataFrame:
-        """Method to get the task's data that child classes MUST implement.
+        """Method to get the task's data (child classes MUST implement/overwrite this!).
 
         Args:
             task (str | tuple): Date or (zone, date) to download data for.
         """
-        pass
 
     # --------------------------------------------
     # Helper methods
