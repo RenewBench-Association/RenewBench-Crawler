@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-import requests
-from loguru import logger
+from requests import exceptions
 
 from rbc.energy.eia import EiaDownloader
+from rbc.energy.utils import MAX_RATE_LIMIT_RETRIES, RateLimitError
 
 
 # ----------------------------------
@@ -200,21 +200,26 @@ def test_get_task_data(downloader: EiaDownloader, date: str) -> None:
     assert mock_get.call_count == 1
 
 
-def test_get_task_data_timed_out(downloader: EiaDownloader, date: str) -> None:
-    """Failure path for "_get_task_data" method when the request timed out.
+def test_get_task_data_request_failed(downloader: EiaDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when the request fails directly.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
         date (str): Date to download.
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
-        mock_get.side_effect = requests.exceptions.ConnectionError
+        mock_get.side_effect = exceptions.ConnectionError
 
-        with pytest.raises(ConnectionError, match="timed out"):
+        with pytest.raises(exceptions.ConnectionError, match="request failed"):
+            downloader._get_task_data(date)
+
+        mock_get.side_effect = exceptions.Timeout
+
+        with pytest.raises(exceptions.Timeout, match="request failed"):
             downloader._get_task_data(date)
 
 
-def test_get_task_data_request_failed(downloader: EiaDownloader, date: str) -> None:
+def test_get_task_data_fail_return_code(downloader: EiaDownloader, date: str) -> None:
     """Failure path for "_get_task_data" method when the return code is unsuccessful.
 
     Args:
@@ -224,11 +229,11 @@ def test_get_task_data_request_failed(downloader: EiaDownloader, date: str) -> N
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = MagicMock(status_code=500)
 
-        with pytest.raises(requests.exceptions.HTTPError, match="request failed"):
+        with pytest.raises(exceptions.HTTPError, match="request failed"):
             downloader._get_task_data(date)
 
 
-def test_get_task_data_rate_limit_retry(downloader: EiaDownloader, date: str) -> None:
+def test_get_task_data_rate_limit_fail(downloader: EiaDownloader, date: str) -> None:
     """Failure path for "_get_task_data" method when the rate limit is reached (code 429).
 
     Checks that the warning message is logged when the return code is 429 on a first
@@ -238,26 +243,18 @@ def test_get_task_data_rate_limit_retry(downloader: EiaDownloader, date: str) ->
         downloader (EiaDownloader): Instance of EiaDownloader class.
         date (str): Date to download.
     """
-    mock_429 = MagicMock(status_code=429)
+    with patch("rbc.energy.eia.downloader.requests.get") as mock_get, patch(
+        "rbc.energy.eia.downloader.time.sleep"
+    ) as mock_sleep:
+        mock_get.side_effect = [MagicMock(status_code=429)] * (
+            MAX_RATE_LIMIT_RETRIES + 1
+        )
 
-    mock_200 = MagicMock(status_code=200)
-    mock_200.json.return_value = mock_eia_json(date)
-
-    # Create temporary sink to store logged messages to a list, thus capturing them
-    logs = []
-    sink = logger.add(lambda msg: logs.append(msg.record["message"]), level="WARNING")
-
-    try:
-        with patch("rbc.energy.eia.downloader.requests.get") as mock_get, patch(
-            "rbc.energy.eia.downloader.time.sleep"
-        ):
-            mock_get.side_effect = [mock_429, mock_200]
+        with pytest.raises(RateLimitError, match="limit has been exceeded"):
             downloader._get_task_data(date)
 
-        assert any("limit reached" in msg for msg in logs)
-
-    finally:
-        logger.remove(sink)
+        assert mock_get.call_count == MAX_RATE_LIMIT_RETRIES + 1
+        assert mock_sleep.call_count == MAX_RATE_LIMIT_RETRIES
 
 
 @pytest.mark.parametrize("return_val", [{}, {"response": {}}])

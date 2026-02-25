@@ -133,7 +133,7 @@ def test_threading_error_catching(
         task (str | tuple[str, str]): Task for downloading.
         use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
     """
-    # 1. Test data structure changes (DataStructureError -> exit)
+    # 1. Test error requiring immediate exit (DataStructureError / RateLimitError -> exit)
     checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
     with patch("os._exit", side_effect=SystemExit) as mock_exit:
         with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):

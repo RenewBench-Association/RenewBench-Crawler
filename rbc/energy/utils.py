@@ -18,10 +18,17 @@ from loguru import logger
 WORKERS = 4
 MAX_RETRIES = 3
 RETRY_DELAY = 5
+MAX_RATE_LIMIT_RETRIES = 6
 
 
 class DataStructureError(Exception):
     """Raised when a data source changes its structure significantly."""
+
+    pass
+
+
+class RateLimitError(Exception):
+    """Raised when the API rate limit has been reached and downloading must be stopped."""
 
     pass
 
@@ -106,9 +113,9 @@ class DailyDownloader(ABC):
                 write_df_to_csv(df=df_gen, file_path=file_path)
                 return 1
 
-            except DataStructureError as e:
-                logger.critical(f"FATAL! Data structure has changed: {e}")
-                os._exit(1)  # data structure change that warrants entire process kill
+            except (DataStructureError, RateLimitError) as e:  # error that warrant exit
+                logger.critical(f"FATAL! Stopping run due to error: {e}")
+                os._exit(1)
 
             except ValueError as e:
                 logger.error(f"Missing data for {task}: {e}")

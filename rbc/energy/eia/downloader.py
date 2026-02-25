@@ -10,9 +10,14 @@ from pathlib import Path
 import pandas as pd
 import requests
 from loguru import logger
-from requests import HTTPError
+from requests import exceptions
 
-from rbc.energy.utils import WORKERS, DailyDownloader
+from rbc.energy.utils import (
+    MAX_RATE_LIMIT_RETRIES,
+    WORKERS,
+    DailyDownloader,
+    RateLimitError,
+)
 
 URL_ROOT = "https://api.eia.gov/v2/"
 URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
@@ -94,8 +99,9 @@ class EiaDownloader(DailyDownloader):
             'value', 'value-units']
 
         Raises:
-            ConnectionError: If request timed out.
+            ConnectionError/Timeout: If API issue occurred with connection or timeout.
             HTTPError: If request response is not 200.
+            RateLimitError: If API rate limit has been exceeded.
             ValueError: If response parsing failed, if not all available data was
             downloaded, or if the dataframe is empty.
         """
@@ -116,23 +122,29 @@ class EiaDownloader(DailyDownloader):
         all_data = []
         total_available = None
         limit = 5000
+        attempt = 0
 
         while True:
             try:
                 response = requests.get(URL, params=params, timeout=30)
-            except (
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-            ) as e:
-                raise ConnectionError(f"API request timed out: {e}")
+            except (exceptions.ConnectionError, exceptions.Timeout) as e:
+                raise type(e)(f"API request failed: {e}") from e  # dynamically reraise
 
             if response.status_code != 200:
                 if response.status_code == 429:
-                    logger.warning("Rate limit reached. Sleeping...")
-                    time.sleep(10)
-                    continue
+                    if attempt < MAX_RATE_LIMIT_RETRIES:  # retry 6 times (= 1 min)
+                        logger.warning("Rate limit reached. Sleeping 10 seconds...")
+                        time.sleep(10)
+                        attempt += 1
+                        continue
+                    else:
+                        raise RateLimitError(
+                            "API rate limit has been exceeded and waiting 1 min "
+                            "doesn't help. You should wait for a brief cool-down "
+                            "period (EIA doesn't specify a duration), then retry!"
+                        )
 
-                raise HTTPError(
+                raise exceptions.HTTPError(
                     f"API request failed: {response.status_code} - {response.text}"
                 )
 
