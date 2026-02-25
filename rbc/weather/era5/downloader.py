@@ -135,7 +135,7 @@ class Era5Downloader:
 
         dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
         logger.info(
-            f"ERA5 Downloader initialised for:{dry_run_str}"
+            f"ERA5 Downloader initialized for:{dry_run_str}"
             f"\n- years:\t\t{years}"
             f"\n- months:\t\t{self.months}"
             f"\n- variables:\t\t{self.variables}"

@@ -38,7 +38,7 @@ def downloader(init_args: dict) -> EpiasDownloader:
     """Provides an EpiasDownloader instance with a mocked API.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
 
     Returns:
         EpiasDownloader: EpiasDownloader instance.
@@ -52,7 +52,7 @@ def date(init_args: dict) -> str:
     """Gets a date from the given year.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
 
     Returns:
         str: Single date to download.
@@ -70,7 +70,7 @@ def test_downloader_initialization(init_args: dict) -> None:
     Check that the EpiasDownloader sets up paths and checkpoint correctly.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
     """
     args = init_args.copy()
 
@@ -91,7 +91,7 @@ def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
     """Failure path for class initialization with invalid credentials.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
     """
     with patch("rbc.energy.epias.downloader.EPTR2") as mock_eptr2:
         mock_eptr2.side_effect = Exception("Login Failed")
@@ -104,7 +104,7 @@ def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
     """
     args = init_args.copy()
 

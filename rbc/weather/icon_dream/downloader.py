@@ -131,7 +131,7 @@ class IconDreamDownloader:
 
         dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
         logger.info(
-            f"ICON-DREAM Downloader initialised for:{dry_run_str}"
+            f"ICON-DREAM Downloader initialized for:{dry_run_str}"
             f"\n- region:\t\t{self.region}"
             f"\n- years:\t\t{years}"
             f"\n- months:\t\t{self.months}"

@@ -55,7 +55,7 @@ def downloader(api_config: Generator, init_args: dict) -> EntsoeDownloader:
 
     Args:
         api_config (Generator): Fixture that patches the ENTSO-E global configuration.
-        init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
+        init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
 
     Returns:
         dl (EntsoeDownloader): Instance of EntsoeDownloader class.
@@ -69,7 +69,7 @@ def download_args(init_args: dict) -> tuple[tuple, dict, Path]:
     """Gets a set of download arguments from the initialisation arguments.
 
     Args:
-        init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
+        init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
 
     Returns:
         tuple[tuple, dict, Path]: Tuple of ((bidding zone, date), checkpoint,
@@ -96,7 +96,7 @@ def test_downloader_initialization(
 
     Args:
         api_config (Generator): Fixture that patches the ENTSO-E global configuration.
-        init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
+        init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
         bz (str): The bidding zone to use.
         valid (bool): Whether the bidding zone is valid (True) or not (False).
     """
@@ -119,7 +119,7 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
 
     Args:
         api_config (Generator): Fixture that patches the ENTSO-E global configuration.
-        init_args (dict): Arguments used to initialise an EntsoeDownloader instance.
+        init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
     """
     args = init_args.copy()
 

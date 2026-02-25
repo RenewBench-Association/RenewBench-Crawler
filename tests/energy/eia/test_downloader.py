@@ -39,7 +39,7 @@ def downloader(init_args: dict) -> EiaDownloader:
     """Provides an EiaDownloader instance with a mocked, positive return code response.
 
     Args:
-        init_args (dict): Arguments used to initialise an EiaDownloader instance.
+        init_args (dict): Arguments used to initialize an EiaDownloader instance.
 
     Returns:
         EiaDownloader: EiaDownloader instance.
@@ -54,7 +54,7 @@ def date(init_args: dict) -> str:
     """Gets a date from the given year.
 
     Args:
-        init_args (dict): Arguments used to initialise an EiaDownloader instance.
+        init_args (dict): Arguments used to initialize an EiaDownloader instance.
 
     Returns:
         str: Single date to download.
@@ -100,7 +100,7 @@ def test_downloader_initialization(downloader: EiaDownloader, init_args: dict) -
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        init_args (dict): Arguments used to initialise an EiaDownloader instance.
+        init_args (dict): Arguments used to initialize an EiaDownloader instance.
     """
     assert downloader.token == init_args["token"]
     assert downloader.years == init_args["years"]
@@ -113,7 +113,7 @@ def test_downloader_initialization_invalid_token(init_args: dict) -> None:
     """Failure path for class initialization with invalid token.
 
     Args:
-        init_args (dict): Arguments used to initialise an EiaDownloader instance.
+        init_args (dict): Arguments used to initialize an EiaDownloader instance.
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = MagicMock(status_code=400)
@@ -126,7 +126,7 @@ def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
     Args:
-        init_args (dict): Arguments used to initialise an EiaDownloader instance.
+        init_args (dict): Arguments used to initialize an EiaDownloader instance.
     """
     args = init_args.copy()
 

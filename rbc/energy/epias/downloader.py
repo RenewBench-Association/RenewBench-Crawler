@@ -48,7 +48,7 @@ class EpiasDownloader(DailyDownloader):
         self.checkpoint_path = Path(self.output_path, "status.pickle")
         self.checkpoint = self._load_checkpoint(self.checkpoint_path)
 
-        logger.info(f"EPIAS Downloader initialised for:\n- years:\t\t{years}")
+        logger.info(f"EPIAS Downloader initialized for:\n- years:\t\t{years}")
 
         try:
             self.eptr = EPTR2(username=username, password=password)

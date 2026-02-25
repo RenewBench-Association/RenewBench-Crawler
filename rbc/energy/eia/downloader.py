@@ -51,7 +51,7 @@ class EiaDownloader(DailyDownloader):
         self.checkpoint_path = Path(self.output_path, "status.pickle")
         self.checkpoint = self._load_checkpoint(self.checkpoint_path)
 
-        logger.info(f"EIA Downloader initialised for:\n- years:\t\t{years}")
+        logger.info(f"EIA Downloader initialized for:\n- years:\t\t{years}")
 
         try:
             response = requests.get(URL_ROOT, params={"api_key": self.token})

@@ -68,7 +68,7 @@ class EntsoeDownloader(DailyDownloader):
                 raise ValueError(f"Bidding zone '{bz}' is not supported.")
 
         logger.info(
-            f"Entsoe-E Downloader initialised for:"
+            f"Entsoe-E Downloader initialized for:"
             f"\n- bidding zones:\t{bidding_zones}"
             f"\n- years:\t\t{years}"
         )
