@@ -62,8 +62,8 @@ class DailyDownloader(ABC):
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
-            resume (bool, optional): Whether to resume from a previous
-             download (True) or start from scratch (False). Defaults to True.
+            resume (bool, optional): Whether to resume from a previous download (True)
+            or start from scratch (False). Defaults to True.
         """
         self.output_path = output_path
         self.years = years

@@ -3,6 +3,7 @@
 Remote API access of EPIAS Platform using the eptr2 package.
 """
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -88,7 +89,7 @@ class EpiasDownloader(DailyDownloader):
             raise ValueError(f"No power plant data available for {task}!")
 
         # get generation data in batches
-        num_batches = len(df_pp) // 1000 + 1  # max allowed batch size = 1000
+        num_batches = math.ceil(len(df_pp) / 1000)  # max allowed batch size = 1000
         batches = np.array_split(df_pp["id"].values, num_batches)
 
         gen_data = [
