@@ -45,6 +45,7 @@ class DailyDownloader(ABC):
         urllib3.exceptions.TimeoutError,
         urllib3.exceptions.ReadTimeoutError,
         urllib3.exceptions.ConnectTimeoutError,
+        ConnectionError,
         TimeoutError,
     )
 
