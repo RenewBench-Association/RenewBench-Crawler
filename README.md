@@ -88,7 +88,7 @@ Check out our [contribution guidelines](CONTRIBUTING.md) if you are interested i
 Please also carefully check our [code of conduct](CODE_OF_CONDUCT.md) :blue_heart:
 
 For details on how to include a new energy or weather data source, see the
-[step-by-step guide](docs/guide_adding_new_source.md)).
+[**step-by-step guide**](docs/guide_adding_new_source.md).
 
 ## Acknowledgments
 This work is funded under the Helmholtz UNLOCK Benchmarking call and supported by the
