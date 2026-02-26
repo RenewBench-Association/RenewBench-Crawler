@@ -169,7 +169,10 @@ Please also carefully check our [code of conduct](CODE_OF_CONDUCT.md) :blue_hear
 
 ## Acknowledgments
 This work is funded under the Helmholtz UNLOCK Benchmarking call and supported by the
-[Helmholtz AI](https://www.helmholtz.ai/) platform grant.
+[Helmholtz AI](https://www.helmholtz.ai/) platform grant. It was performed with the
+help of the Large Scale Data Facility at the Karlsruhe Institute of
+Technology funded by the Ministry of Science, Research and the Arts
+Baden-Württemberg and by the Federal Ministry of Education and Research.
 
 
 -----------
