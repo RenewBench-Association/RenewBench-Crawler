@@ -89,7 +89,8 @@ def parse_key_value_pairs(pairs: list[str]) -> dict[str, Any]:
         dict[str, Any]: Nested dictionary of key-value pairs.
 
     Raises:
-        ArgumentTypeError: If pairs are not provided in the correct format.
+        ArgumentTypeError: If pairs are not provided in the correct format or if
+        pairs were provided with keys that collide.
     """
     result: dict[str, Any] = {}
     if not pairs:
@@ -101,11 +102,27 @@ def parse_key_value_pairs(pairs: list[str]) -> dict[str, Any]:
                 f"Invalid format '{pair}', expected key=value"
             )
 
-        key, value = pair.split("=", 1)
-        keys = key.split(".")
+        key_path, value = pair.split("=", 1)
+        keys = key_path.split(".")
         current = result
-        for k in keys[:-1]:
+
+        for i, k in enumerate(keys[:-1]):
+            # Check for collisions: is the key already a non-dict value?
+            if k in current and not isinstance(current[k], dict):
+                raise argparse.ArgumentTypeError(
+                    f"Conflict at '{'.'.join(keys[: i + 1])}': cannot overwrite key "
+                    f"that is already a scalar with a dict."
+                )
+
             current = current.setdefault(k, {})
-        current[keys[-1]] = value
+
+        last_key = keys[-1]
+        # Check for collisions: is the final key already a dictionary?
+        if last_key in current and isinstance(current[last_key], dict):
+            raise argparse.ArgumentTypeError(
+                f"Conflict at '{key_path}': cannot overwrite a sub-dict with a scalar."
+            )
+
+        current[last_key] = value
 
     return result

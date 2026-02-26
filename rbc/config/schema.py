@@ -114,8 +114,22 @@ class AccessValidation:
 # ----------------------------------
 # Per-source schemas
 # ----------------------------------
+class EiaConfig(PathValidation, AccessValidation, BaseModel):
+    """Configuration schema for the EIA energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAPI): Access pydantic model for access settings.
+    """
+
+    source: Literal["eia"] = "eia"
+    paths: Paths
+    access: AccessAPI
+
+
 class EntsoeConfig(PathValidation, AccessValidation, BaseModel):
-    """Configuration schema for the ENTSO-E data source.
+    """Configuration schema for the ENTSO-E energy data source.
 
     Attributes:
         source (Literal): Name of the data source.
@@ -129,7 +143,7 @@ class EntsoeConfig(PathValidation, AccessValidation, BaseModel):
 
 
 class EpiasConfig(PathValidation, AccessValidation, BaseModel):
-    """Configuration schema for the EPIAS data source.
+    """Configuration schema for the EPIAS energy data source.
 
     Attributes:
         source (Literal): Name of the data source.
@@ -184,6 +198,7 @@ class IconDreamEuConfig(BaseModel):
 # Schema registry
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
+    "eia": EiaConfig,
     "entsoe": EntsoeConfig,
     "epias": EpiasConfig,
     "era5": Era5Config,
