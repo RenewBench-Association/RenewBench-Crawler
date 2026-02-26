@@ -33,10 +33,40 @@ Alternatively, you can install ``rcb`` locally. To achieve this, there are two s
    - Install an editable version with developer dependencies: ``pip install -e ."[dev]"``
 
 ## Structure
-The RenewBench-Crawlers repository is structured as shown below:
-```
+The RenewBench-Crawler repository is structured as follows:
+
+```text
 .
-├── he he he - todo: https://tree.nathanfriend.com
+├── rbc/                     # Main package
+│   ├── config/                 # Processing of YAML configs
+│   │   ├── loader.py             # Load and validate configs
+│   │   └── schema.py             # Pydantic config models and registry
+│   ├── energy/                 # Energy data crawlers
+│   │   ├── eia/                  # EIA (US)
+│   │   ├── entsoe/               # ENTSO-e (EU)
+│   │   ├── epias/                # EPIAS (Turkey)
+│   │   └── taipower/             # Taipower (Taiwan)
+│   └── weather/                # Weather data crawlers
+│       ├── era5/                 # ERA5 (Global)
+│       └── icon_dream/           # ICON-DREAM (Global/Europe)
+│
+├── configs/                 # YAML config files
+│   ├── energy/                 # Energy source configs (EIA, ENTSO-E, EPIAS, ...)
+│   └── weather/                # Weather source configs (ERA5, ICON-DREAM, ...)
+│
+├── scripts/                 # CLI entry points
+│   ├── energy/                 # Scripts for energy sources
+│   └── weather/                # Scripts for weather sources
+│
+├── tests/                   # Test suite
+│   ├── config/                 # Tests for configuration schemas & loader
+│   ├── energy/                 # Tests for energy sources
+│   └── weather/                # Tests for weather sources
+│
+├── logos/                   # Project logos
+├── pyproject.toml           # Project configuration
+├── .pre-commit-config.yaml  # Pre-commit hooks configuration
+└── README.md                # This file
 ```
 
 ## Documentation
