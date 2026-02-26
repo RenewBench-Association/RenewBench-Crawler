@@ -174,22 +174,17 @@ This work is funded under the Helmholtz UNLOCK Benchmarking call and supported b
 
 -----------
 
-<table style="border: none; border-collapse: collapse; border-spacing: 0;">
-  <tr style="border: none;">
-    <td align="center" style="border: none; padding: 20px;">
-      <a href="http://www.kit.edu/english/index.php">
-        <img src="docs/logos/logo_kit.svg" height="50px">
-      </a>
-    </td>
-    <td align="center" style="border: none; padding: 20px;">
-      <a href="https://www.helmholtz.ai/">
-        <img src="docs/logos/logo_hai.svg" height="25px">
-      </a>
-    </td>
-    <td align="center" style="border: none; padding: 20px;">
-      <a href="https://www.hereon.de/index.php.en">
-        <img src="docs/logos/logo_hereon.svg" height="50px">
-      </a>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <a href="http://www.kit.edu/english/index.php">
+    <img src="docs/logos/logo_kit.svg" height="50px" style="vertical-align: middle;
+margin: 0 20px;">
+  </a>
+  <a href="https://www.helmholtz.ai/">
+    <img src="docs/logos/logo_hai.svg" height="25px" style="vertical-align: middle;
+margin: 0 20px;">
+  </a>
+  <a href="https://www.helmholtz.ai/">
+    <img src="docs/logos/logo_hereon.svg" height="45px" style="vertical-align: middle;
+margin: 0 20px;">
+  </a>
+</p>
