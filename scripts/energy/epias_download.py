@@ -11,6 +11,7 @@ from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
 from rbc.energy.epias import EpiasDownloader
+from rbc.utils import setup_logging
 
 SOURCE = "epias"
 
@@ -55,7 +56,9 @@ def main() -> None:
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
     cfg = load_config(source=SOURCE, overrides=overrides)
-    logger.info(f"Config loaded for {SOURCE}:\n{cfg}")
+    setup_logging(output_dir=cfg.paths.dst_dir_raw)
+    logger.info(f"Flags for the '{SOURCE}_download' run:\n{args}")
+    logger.info(f"Config for the '{SOURCE}_download' run:\n{cfg}")
 
     downloader = EpiasDownloader(
         username=cfg.access.username,
