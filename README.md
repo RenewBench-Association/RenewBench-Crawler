@@ -175,16 +175,5 @@ This work is funded under the Helmholtz UNLOCK Benchmarking call and supported b
 -----------
 
 <p align="center">
-  <a href="http://www.kit.edu/english/index.php">
-    <img src="docs/logos/logo_kit.svg" height="50px" style="vertical-align: middle;
-margin: 0 20px;">
-  </a>
-  <a href="https://www.helmholtz.ai/">
-    <img src="docs/logos/logo_hai.svg" height="25px" style="vertical-align: middle;
-margin: 0 20px;">
-  </a>
-  <a href="https://www.helmholtz.ai/">
-    <img src="docs/logos/logo_hereon.svg" height="45px" style="vertical-align: middle;
-margin: 0 20px;">
-  </a>
+  <a href="http://www.kit.edu/english/index.php"><img src="docs/logos/logo_kit.svg" height="50px" style="vertical-align: middle; margin: 0 20px;"></a><a href="https://www.helmholtz.ai/"><img src="docs/logos/logo_hai.svg" height="25px" style="vertical-align: middle; margin: 0 20px;"></a><a href="https://www.helmholtz.ai/"><img src="docs/logos/logo_hereon.svg" height="45px" style="vertical-align: middle; margin: 0 20px;"></a>
 </p>
