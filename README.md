@@ -1,5 +1,5 @@
 <p align="center">
-<img src="logos/RenewBench-Logo.png" alt="logo" width="400"/>
+<img src="docs/logos/RenewBench-Logo.png" alt="logo" width="400"/>
 </p>
 
 # RenewBench Crawlers and Data Processing
@@ -63,7 +63,8 @@ The RenewBench-Crawler repository is structured as follows:
 │   ├── energy/                 # Tests for energy sources
 │   └── weather/                # Tests for weather sources
 │
-├── logos/                   # Project logos
+├── docs/                    # Project docs
+│   └── logos/
 ├── pyproject.toml           # Project configuration
 ├── .pre-commit-config.yaml  # Pre-commit hooks configuration
 └── README.md                # This file
@@ -172,10 +173,23 @@ This work is funded under the Helmholtz UNLOCK Benchmarking call and supported b
 
 
 -----------
-<div align="center">
-  <a href="http://www.kit.edu/english/index.php"><img src="./logos/logo_kit.svg" height="50px" hspace="3%" vspace="25px"></a>
-</div>
 
-<div align="center">
-<a href="https://www.helmholtz.ai/"><img src="./logos/logo_hai.svg" height="25px" hspace="3%" vspace="25px"></a>
-</div>
+<table style="border: none; border-collapse: collapse; border-spacing: 0;">
+  <tr style="border: none;">
+    <td align="center" style="border: none; padding: 20px;">
+      <a href="http://www.kit.edu/english/index.php">
+        <img src="docs/logos/logo_kit.svg" height="50px">
+      </a>
+    </td>
+    <td align="center" style="border: none; padding: 20px;">
+      <a href="https://www.helmholtz.ai/">
+        <img src="docs/logos/logo_hai.svg" height="25px">
+      </a>
+    </td>
+    <td align="center" style="border: none; padding: 20px;">
+      <a href="https://www.hereon.de/index.php.en">
+        <img src="docs/logos/logo_hereon.svg" height="50px">
+      </a>
+    </td>
+  </tr>
+</table>
