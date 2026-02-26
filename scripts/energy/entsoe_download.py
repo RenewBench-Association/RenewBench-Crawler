@@ -70,8 +70,8 @@ def main() -> None:
 
     cfg = load_config(source=SOURCE, overrides=overrides)
     setup_logging(output_dir=cfg.paths.dst_dir_raw)
-    logger.info(f"Flags for the '{SOURCE}_download' run:\n{args}")
-    logger.info(f"Config for the '{SOURCE}_download' run:\n{cfg}")
+    logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
+    logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
     downloader = EntsoeDownloader(
         token=cfg.access.api_key,
