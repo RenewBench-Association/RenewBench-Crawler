@@ -1,4 +1,4 @@
-# tests/conftest.py
+# tests/config/conftest.py
 from pathlib import Path
 
 import pytest
