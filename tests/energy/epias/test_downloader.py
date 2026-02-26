@@ -1,4 +1,6 @@
 # tests/energy/epias/test_downloader.py
+"""Tests for EPIAS energy data downloader."""
+
 import pickle
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +12,7 @@ from rbc.energy.epias import EpiasDownloader
 
 
 # ----------------------------------
-# Specific fixtures
+# Fixtures
 # ----------------------------------
 @pytest.fixture
 def init_args(tmp_path: Path) -> dict:
@@ -36,7 +38,7 @@ def downloader(init_args: dict) -> EpiasDownloader:
     """Provides an EpiasDownloader instance with a mocked API.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
 
     Returns:
         EpiasDownloader: EpiasDownloader instance.
@@ -50,7 +52,7 @@ def date(init_args: dict) -> str:
     """Gets a date from the given year.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
 
     Returns:
         str: Single date to download.
@@ -60,7 +62,7 @@ def date(init_args: dict) -> str:
 
 
 # ----------------------------------
-# Tests
+# Tests - Initialization
 # ----------------------------------
 def test_downloader_initialization(init_args: dict) -> None:
     """Happy path for class initialization.
@@ -68,7 +70,7 @@ def test_downloader_initialization(init_args: dict) -> None:
     Check that the EpiasDownloader sets up paths and checkpoint correctly.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
     """
     args = init_args.copy()
 
@@ -85,29 +87,45 @@ def test_downloader_initialization(init_args: dict) -> None:
         assert downloader.checkpoint == {}
 
 
+def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
+    """Failure path for class initialization with invalid credentials.
+
+    Args:
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
+    """
+    with patch("rbc.energy.epias.downloader.EPTR2") as mock_eptr2:
+        mock_eptr2.side_effect = Exception("Login Failed")
+
+        with pytest.raises(ValueError, match="incorrect"):
+            EpiasDownloader(**init_args)
+
+
 def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
     Args:
-        init_args (dict): Arguments used to initialise an EpiasDownloader instance.
+        init_args (dict): Arguments used to initialize an EpiasDownloader instance.
     """
+    args = init_args.copy()
+
     # save a fake checkpoint file
-    y = init_args["years"][0]
+    y = args["years"][0]
     checkpoint = {
         d: 1
         for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31")
         .strftime("%Y-%m-%d")
         .tolist()
     }
-    checkpoint_path = Path(init_args["output_path"], "status.pickle")
+    checkpoint_path = Path(args["output_path"], "status.pickle")
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
-    init_args["resume"] = True
-    with patch("rbc.energy.epias.downloader.EPTR2"):
-        downloader = EpiasDownloader(**init_args)
+    args["resume"] = True
 
-        with patch.object(downloader, "_download_day_data") as mock_dump:
+    with patch("rbc.energy.epias.downloader.EPTR2"):
+        downloader = EpiasDownloader(**args)
+
+        with patch.object(downloader, "_download_task_data") as mock_dump:
             mock_dump.return_value = 1
             downloader.download_data()
 
@@ -115,37 +133,11 @@ def test_download_data_resume(init_args: dict) -> None:
             assert downloader.checkpoint == checkpoint
 
 
-def test_threading_wrapper_missing_data(downloader: EpiasDownloader, date: str) -> None:
-    """Happy path for "_threading_wrapper" function when no data is available.
-
-    Args:
-        downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        date (str): Date to download.
-    """
-    with patch.object(downloader, "_get_day_data", side_effect=ValueError):
-        downloader._threading_wrapper(date)
-
-        assert downloader.checkpoint[date] == 1
-
-
-def test_threading_wrapper_service_unavailable(
-    downloader: EpiasDownloader, date: str
-) -> None:
-    """Failure path for "_threading_wrapper" function when connection error occurs.
-
-    Args:
-        downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        date (str): Date to download.
-    """
-    with patch.object(downloader, "_get_day_data", side_effect=ConnectionError):
-        with patch("rbc.energy.epias.downloader.time.sleep"):
-            downloader._threading_wrapper(date)
-
-        assert downloader.checkpoint[date] == 0
-
-
-def test_download_day_data(downloader: EpiasDownloader, date: str) -> None:
-    """Happy path for "_download_day_data" method when resuming from checkpoint.
+# ----------------------------------
+# Tests - Data crawling logic
+# ----------------------------------
+def test_download_task_data(downloader: EpiasDownloader, date: str) -> None:
+    """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
@@ -153,8 +145,8 @@ def test_download_day_data(downloader: EpiasDownloader, date: str) -> None:
     """
     mock_df = pd.DataFrame({"total": [16.2]})
 
-    with patch.object(downloader, "_get_day_data", return_value=mock_df):
-        status = downloader._download_day_data(date)
+    with patch.object(downloader, "_get_task_data", return_value=mock_df):
+        status = downloader._download_task_data(date)
 
         assert status == 1
         expected_file = Path(downloader.output_path, f"{date}.csv")
@@ -164,8 +156,8 @@ def test_download_day_data(downloader: EpiasDownloader, date: str) -> None:
         assert saved_df.iloc[0]["total"] == 16.2
 
 
-def test_get_day_data(downloader: EpiasDownloader, date: str) -> None:
-    """Happy path for "_get_day_data" method.
+def test_get_task_data(downloader: EpiasDownloader, date: str) -> None:
+    """Happy path for "_get_task_data" method.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
@@ -193,15 +185,15 @@ def test_get_day_data(downloader: EpiasDownloader, date: str) -> None:
         return pd.DataFrame()
 
     downloader.eptr.call.side_effect = call_side_effect
-    df = downloader._get_day_data(date)
+    df = downloader._get_task_data(date)
 
     assert not df.empty
     assert df.iloc[0]["date"] == date
     assert df.iloc[0]["total"] == 16.2
 
 
-def test_get_day_data_no_pp_data(downloader: EpiasDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when no power plant data is available.
+def test_get_task_data_no_pp_data(downloader: EpiasDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when no power plant data is available.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
@@ -220,11 +212,11 @@ def test_get_day_data_no_pp_data(downloader: EpiasDownloader, date: str) -> None
     downloader.eptr.call.side_effect = call_side_effect
 
     with pytest.raises(ValueError, match="No power plant data"):
-        downloader._get_day_data(date)
+        downloader._get_task_data(date)
 
 
-def test_get_day_data_no_gen_data(downloader: EpiasDownloader, date: str) -> None:
-    """Failure path for "_get_day_data" method when no generation data is available.
+def test_get_task_data_no_gen_data(downloader: EpiasDownloader, date: str) -> None:
+    """Failure path for "_get_task_data" method when no generation data is available.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
@@ -243,4 +235,4 @@ def test_get_day_data_no_gen_data(downloader: EpiasDownloader, date: str) -> Non
     downloader.eptr.call.side_effect = call_side_effect
 
     with pytest.raises(ValueError, match="No generation data"):
-        downloader._get_day_data(date)
+        downloader._get_task_data(date)

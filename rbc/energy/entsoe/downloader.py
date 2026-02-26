@@ -3,7 +3,7 @@
 Remote API access of ENTSO-E Platform using the entsoe-apy package.
 """
 
-import pickle
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -13,57 +13,30 @@ from entsoe.query.decorators import ServiceUnavailableError
 from entsoe.utils import add_timestamps, extract_records, mappings
 from loguru import logger
 
-from rbc.energy.utils import write_df_to_csv
-
-PSRTYPE_MAPPINGS = {
-    # 'A03': 'Mixed',
-    # 'A04': 'Generation',
-    # 'A05': 'Load',
-    "B01": "Biomass",
-    "B02": "Fossil Brown coal/Lignite",
-    "B03": "Fossil Coal-derived gas",
-    "B04": "Fossil Gas",
-    "B05": "Fossil Hard coal",
-    "B06": "Fossil Oil",
-    "B07": "Fossil Oil shale",
-    "B08": "Fossil Peat",
-    "B09": "Geothermal",
-    "B10": "Hydro Pumped Storage",
-    "B11": "Hydro Run-of-river and poundage",
-    "B12": "Hydro Water Reservoir",
-    "B13": "Marine",
-    "B14": "Nuclear",
-    "B15": "Other renewable",
-    "B16": "Solar",
-    "B17": "Waste",
-    "B18": "Wind Offshore",
-    "B19": "Wind Onshore",
-    "B20": "Other",
-    "B21": "AC Link",
-    "B22": "DC Link",
-    "B23": "Substation",
-    "B24": "Transformer",
-    "B25": "Energy storage",
-}
+from rbc.energy.utils import (
+    WORKERS,
+    DailyDownloader,
+    DataStructureError,
+)
 
 RELEVANT_RECORD_KEYS = {
-    "time_series.mkt_psrtype.psr_type": "production_type",
-    "time_series.mkt_psrtype.power_system_resources.name": "plant_name",
-    "time_series.period.point.quantity": "quantity",
-    "time_series.quantity_measure_unit_name": "unit",
     "timestamp": "timestamp",
+    "time_series.mkt_psrtype.power_system_resources.name": "Unit_Name",
+    "time_series.mkt_psrtype.power_system_resources.m_rid.value": "Unit_Code",
+    "time_series.mkt_psrtype.psr_type": "PSR_Type",
+    "time_series.mkt_psrtype.power_system_resources.nominal_p": "Capacity",
+    "time_series.period.point.quantity": "Generation_MW",
+    "time_series.period.point.secondary_quantity": "Consumption_MW",
+    "time_series.quantity_measure_unit_name": "Measurement_Unit",
+    "time_series.period.resolution": "Temporal_Resolution",
 }
 
 
-class EntsoeDownloader:
+class EntsoeDownloader(DailyDownloader):
     """Entsoe-E data downloader.
 
     Attributes:
-        years (list[str]): List of years to get data for.
         bidding_zones (list[str]): List of bidding zones to get data for.
-        output_path (Path): Path to the output directory.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (np.array): Array of 0 and 1 values for resuming.
     """
 
     def __init__(
@@ -76,30 +49,28 @@ class EntsoeDownloader:
     ) -> None:
         """Initializes the instance.
 
-        Attributes:
+        Args:
             token (str): The personal ENTSO-E RESTful API token.
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             bidding_zones (list[str]): List of bidding zones to get data for.
-            resume (bool, optional): Whether to resume from a previous
-             download (True) or start from scratch (False). Defaults to True.
+            resume (bool, optional): Whether to resume from a previous download (True)
+            or start from scratch (False). Defaults to True.
 
         Raises:
             ValueError: If bidding zone is unsupported or token is invalid.
         """
-        self.years = years
+        super().__init__(output_path=output_path, years=years, resume=resume)
         self.bidding_zones = list(bidding_zones)
-        self.output_path = output_path
-        self.checkpoint_path = Path(self.output_path, "status.pickle")
 
         for bz in self.bidding_zones:
             if bz not in list(mappings.keys()):
                 raise ValueError(f"Bidding zone '{bz}' is not supported.")
 
         logger.info(
-            f"Entsoe-E Downloader initialised for:"
-            f"\n- years:\t\t{years}"
+            f"Entsoe-E Downloader initialized for:"
             f"\n- bidding zones:\t{bidding_zones}"
+            f"\n- years:\t\t{years}"
         )
 
         set_config(security_token=token)
@@ -108,81 +79,88 @@ class EntsoeDownloader:
                 f"Entsoe-apy failed to successfully configure token '{token}'!"
             )
 
-        if resume and self.checkpoint_path.is_file():
-            with open(self.checkpoint_path, "rb") as f:
-                self.checkpoint = pickle.load(f)
-        else:
-            self.checkpoint = {}
-
     def download_data(self) -> None:
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""
-        for year in self.years:
-            for zone in self.bidding_zones:
-                task = (year, zone)
+        all_dates = self._get_date_list()
 
-                # check if task was previously run and was unsuccessful before (= 0)
-                if self.checkpoint.get(task) == 0:
-                    success_code = self._download_year_zone_data(zone=zone, year=year)
+        for bz in self.bidding_zones:
+            bz_path = Path(self.output_path, bz)
+            bz_path.mkdir(parents=True, exist_ok=True)
 
-                    self.checkpoint[task] = success_code
-                    with open(self.checkpoint_path, "wb") as f:
-                        pickle.dump(self.checkpoint, f)
-                else:
-                    logger.info(f"{zone} in {year}: Data previously downloaded.")
+            checkpoint_path = Path(bz_path, "status.pickle")
+            checkpoint = self._load_checkpoint(checkpoint_path)
 
-    def _download_year_zone_data(self, zone: str, year: int) -> int:
-        """Parse data for specific zone and year from ENTSO-E and dump to CSV.
+            logger.info(
+                f"Downloading data in '{bz}' for: {all_dates[0]} to {all_dates[-1]}"
+            )
+            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+                executor.map(
+                    lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
+                    [(bz, d) for d in all_dates],
+                )
+
+    def _get_task_data(self, task: tuple[str, str]) -> pd.DataFrame:  # type: ignore[override]
+        """Get Entso-e generation data per plant for one specific date and bidding zone.
 
         Args:
-            zone (str): Zone to download data for.
-            year (int): Year to download data for.
+            task (tuple): Tuple of (zone, date) to download data for.
 
         Returns:
-            int: Status of the download (1 if successful, 0 if unsuccessful).
+            pd.DataFrame: Dataframe for specific task with the columns
+            ['production_type', 'plant_name', 'plant_code', 'quantity', 'unit',
+            'timestamp']
 
         Raises:
-            ValueError: If Entso-E Transparency Platform is unavailable.
+            ConnectionError: If Entso-E TP is unavailable or the API did not
+            return the requested data (this will cause a retry on the next resume).
+            ValueError: If no data is available for the given task (this will cause
+            the task to be skipped in future).
+            DataStructureError: If data structure has changed and relevant columns
+            are missing (this will cause the entire run to be killed).
         """
+        zone, date = task
+        dt = pd.Period(date, freq="D")
+
         try:
             result = ActualGenerationPerGenerationUnit(
-                period_start=int(f"{year}01010000"),  # start of Jan 1st
-                period_end=int(f"{year}12312359"),  # end of Dec 31st
+                period_start=int(dt.strftime("%Y%m%d0000")),  # start of day
+                period_end=int(dt.strftime("%Y%m%d2359")),  # end of day
                 in_domain=zone,
                 psr_type=None,
                 registered_resource=None,
             ).query_api()
 
         except ServiceUnavailableError:
-            raise ValueError("Entso-E Transparency Platform is currently unavailable!")
+            raise ConnectionError(
+                "Entso-E Transparency Platform is currently unavailable!"
+            )
 
-        if type(result) is ActualGenerationPerGenerationUnit:
-            logger.warning(f"{zone} in {year}: API call did not return requested data!")
-            return 0
+        if type(result) is not list:
+            raise ConnectionError(f"API call did not return requested data for {task}!")
 
         if not result:
-            logger.warning(
-                f"{zone} in {year}: No data available!Setting download status to 1."
+            raise ValueError(
+                f"No data available for {task}! Setting download status to 1."
             )
-            return 1
 
         records = extract_records(result)  # turns into list of dicts
         records = add_timestamps(records)  # adds key 'timestamp' to each dict
         df = pd.DataFrame(records)
 
         try:
+            # Columns names are made to match those on the Entso-E Transparency Platform
             df = df.loc[:, list(RELEVANT_RECORD_KEYS.keys())].rename(
                 columns=RELEVANT_RECORD_KEYS
             )
+        except KeyError as e:
+            raise DataStructureError(
+                f"Entsoe-E structure change detected for {task}! "
+                f"Relevant columns are missing: {e}"
+            )
 
-        except KeyError:
-            logger.warning(f"{zone} in {year}: Relevant data missing!")
-            return 0
+        # Drop rows that have no PSR_Type and neither Unit_Name nor Unit_Code values
+        df = df.dropna(subset=["PSR_Type"])
+        df = df.dropna(subset=["Unit_Name", "Unit_Code"], how="all")
 
-        df["production_type"] = df["production_type"].map(PSRTYPE_MAPPINGS)
-        df = df.dropna(subset=["production_type"])  # remove NaN rows
-
-        write_df_to_csv(
-            df=df, file_path=Path(self.output_path, zone, f"{year}.csv"), index=True
-        )
-        logger.info(f"{zone} in {year}: Data downloaded and saved.")
-        return 1
+        df = df.sort_values(by=["timestamp", "Unit_Name"], ascending=[True, True])
+        return df

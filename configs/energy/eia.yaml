@@ -1,0 +1,4 @@
+paths:
+  dst_dir_raw: /lsdf/raw/energy/eia/
+access:
+  api_key: "YOUR-SECRET-KEY---DON'T-COMMIT!!!"

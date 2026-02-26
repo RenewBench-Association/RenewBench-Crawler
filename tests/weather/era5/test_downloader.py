@@ -54,7 +54,7 @@ def test_downloader_initialization(init_args: dict) -> None:
     """Test basic initialization of Era5Downloader.
 
     Args:
-        init_args (dict): Arguments used to initialise an Era5Downloader instance.
+        init_args (dict): Arguments used to initialize an Era5Downloader instance.
     """
     with patch("rbc.weather.era5.downloader.cdsapi.Client"):
         downloader = Era5Downloader(**init_args)

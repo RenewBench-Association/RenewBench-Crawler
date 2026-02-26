@@ -1,19 +1,18 @@
 #!/usr/bin/env python
-"""ENTSOE-E DATA DOWNLOAD SCRIPT.
+"""EIA DATA DOWNLOAD SCRIPT.
 
-Download data from ENTSO-E Transparency Platform for European bidding zones.
+Download data from EIA website for the USA.
 """
 
 import argparse
 from argparse import ArgumentParser
 
-from entsoe.utils import mappings
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
-from rbc.energy.entsoe import EntsoeDownloader
+from rbc.energy.eia import EiaDownloader
 
-SOURCE = "entsoe"
+SOURCE = "eia"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -22,27 +21,15 @@ def parse_arguments() -> argparse.Namespace:
     Returns:
         argparse.Namespace: Namespace parsed command line arguments.
     """
-    parser = ArgumentParser(prog="Entso-E data download")
+    parser = ArgumentParser(prog="EIA data download")
     parser.add_argument(
         "-y",
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2010, 2026)),
+        default=list(range(2019, 2026)),  # these are the available years for hourly gen
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2010, 2026))}",
-    )
-    parser.add_argument(
-        "-bz",
-        "--bidding_zones",
-        nargs="+",
-        type=str,
-        choices=list(mappings.keys()),
-        default=list(mappings.keys()),
-        metavar="BIDDING_ZONES",
-        help="Bidding zones to download. "
-        "Example: -b '10YES-REE------0' '10YFR-RTE------C'. "
-        "Default: All (see entsoe.utils.mappings)",
+        f"Default: {list(range(2019, 2026))}",
     )
     parser.add_argument(
         "--no-resume",
@@ -63,17 +50,16 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Coordinating Entso-E data download."""
+    """Coordinating EIA data download."""
     args = parse_arguments()
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
     cfg = load_config(source=SOURCE, overrides=overrides)
     logger.info(f"Config loaded for {SOURCE}:\n{cfg}")
 
-    downloader = EntsoeDownloader(
+    downloader = EiaDownloader(
         token=cfg.access.api_key,
         output_path=cfg.paths.dst_dir_raw,
-        bidding_zones=args.bidding_zones,
         years=args.years,
         resume=args.resume,
     )
