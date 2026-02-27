@@ -56,3 +56,26 @@ def test_handle_exceptions(tmp_path: Path):
     assert "Error occurred that killed the run:" in log_content
     assert "ValueError: Simulated Task Failure" in log_content
     assert "test_handle_exceptions" in log_content
+
+
+def test_handle_exceptions_do_nothing_when_keyboardinterrupt(tmp_path: Path):
+    """Happy path for handle_exceptions function when the error is a KeyboardInterrupt.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    logger.remove()
+    setup_logging(tmp_path)
+
+    try:
+        raise KeyboardInterrupt("Simulated CTRL+C")
+    except KeyboardInterrupt:
+        exc_info = sys.exc_info()  # get exception info (type, value, traceback)
+        handle_exceptions(*exc_info)  # manually trigger the handler
+
+    log_dir = Path(tmp_path, "logs")
+    log_file = list(log_dir.glob("*.log"))[0]
+    log_content = log_file.read_text()
+
+    assert "Error occurred that killed the run:" not in log_content
+    assert "Simulated CTRL+C" not in log_content
