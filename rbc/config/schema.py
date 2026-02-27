@@ -194,6 +194,18 @@ class IconDreamEuConfig(BaseModel):
     paths: Paths
 
 
+class BarraConfig(PathValidation, BaseModel):
+    """Configuration schema for the BARRA reanalysis weather data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["barra"] = "barra"
+    paths: Paths
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
@@ -204,4 +216,5 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "era5": Era5Config,
     "icon_dream_global": IconDreamGlobalConfig,
     "icon_dream_eu": IconDreamEuConfig,
+    "barra": BarraConfig,
 }
