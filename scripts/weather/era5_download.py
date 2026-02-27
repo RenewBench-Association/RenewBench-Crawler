@@ -10,6 +10,7 @@ from argparse import ArgumentParser
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
+from rbc.utils import setup_logging
 from rbc.weather.era5 import Era5Downloader
 
 SOURCE = "era5"
@@ -133,7 +134,9 @@ def main() -> None:
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
     cfg = load_config(source=SOURCE, overrides=overrides)
-    logger.info(f"Config loaded for {SOURCE}:\n{cfg}")
+    setup_logging(output_dir=cfg.paths.dst_dir_raw)
+    logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
+    logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
     # Handle pressure and model levels
     # nargs="*" returns empty list [] if flag is used without arguments
