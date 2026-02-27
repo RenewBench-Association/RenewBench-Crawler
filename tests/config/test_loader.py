@@ -1,6 +1,7 @@
 # tests/config/test_loader.py
 import argparse
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -46,9 +47,11 @@ def test_load_config_with_overrides(
         for k, v in cfg_dict.items()
     }
 
-    received_cfg_obj = loader.load_config(
-        source=source, configs_dir=tmp_configs_dir, overrides=overrides
-    )
+    with patch("rbc.config.schema.Path.mkdir"):
+        received_cfg_obj = loader.load_config(
+            source=source, configs_dir=tmp_configs_dir, overrides=overrides
+        )
+
     received_cfg_dict = received_cfg_obj.model_dump(mode="json")
 
     for k, expected_v in overrides.items():
