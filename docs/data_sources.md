@@ -125,8 +125,8 @@ RenewBench-Crawler package.
 - Spatial coverage: global by default; optional subset via a bounding box (`area` parameter)
 - Levels:
   - Single-level (surface/2D variables)
-  - Pressure levels (3D fields at specified hPa levels)
-  - Model levels (3D fields at native model levels)
+  - Pressure levels (3D fields on 37 pressure levels)
+  - Model levels (3D fields on 137 hybrid sigma-pressure levels)
 - Raw output files (as implemented here):
   - Format: GRIB or NetCDF (`file_format` option), extension `.grib` or `.nc`
   - One file per year–month, level type (single/pressure/model) and group of variables
@@ -145,15 +145,18 @@ RenewBench-Crawler package.
 - Requirements: open HTTP access (no authentication)
 
 **Download & data structure**
-- Resolution: ~13 km (icosahedral ICON grid), hourly data
+- Resolution: ~13 km (unstructured grid), hourly data
 - Spatial coverage: global
+- Levels:
+  - Single-level (surface/2D variables)
+  - Model levels (10 lowest 3D fields of 120 full-level (121 half-level) on hybrid sigma-height vertical coordinates)
 - Raw output files (as implemented here):
   - Format: GRIB (`*.grb`)
   - Naming: `ICON-DREAM-Global_<YYYY><MM>_<CODE>_hourly.grb`
   - One file per year–month and variable (parameter code), per region
 - Grid metadata (downloaded separately via `download_metadata`):
   - Grid definition: `icon_grid_0026_R03B07_G.nc`
-  - Grid connectivity: `icon_grid_0026_R03B07_G-grfinfo.nc`
+  - Grid refinement information: `icon_grid_0026_R03B07_G-grfinfo.nc`
 - Key dimensions & variables (conceptual):
   - Dimensions: time, gridpoint index (icosahedral grid)
   - Variables: user-selected ICON-DREAM variables (surface and model-level fields)
@@ -171,15 +174,18 @@ RenewBench-Crawler package.
 **Download & data structure**
 - Resolution: ~6.5 km (icosahedral ICON grid), hourly data
 - Spatial coverage: Europe
-- Raw output files:
+- Levels:
+  - Single-level (surface/2D variables)
+  - Model levels (10 lowest 3D fields of 120 full-level (121 half-level) on hybrid sigma-height vertical coordinates)
+- Raw output files (as implemented here):
   - Format: GRIB (`*.grb`)
   - Naming: `ICON-DREAM-EU_<YYYY><MM>_<CODE>_hourly.grb`
   - One file per year–month and variable (parameter code), per region
 - Grid metadata (downloaded separately via `download_metadata`):
   - Grid definition: `icon_grid_0027_R03B08_N02.nc`
-  - Grid connectivity: `icon_grid_0027_R03B08_N02-grfinfo.nc`
+  - Grid refinement information: `icon_grid_0027_R03B08_N02-grfinfo.nc`
 - Key dimensions & variables (conceptual):
-  - Dimensions: time, gridpoint index (icosahedral grid)
-  - Variables: user-selected ICON-DREAM variables (surface and model-level fields)
+  - Dimensions: time, gridpoint index (unstructured grid)
+  - Variables: user-selected ICON-DREAM variables (2D single level and 3D model level)
 
 </details>
