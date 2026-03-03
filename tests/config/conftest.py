@@ -28,6 +28,7 @@ def source_configs(tmp_path: Path) -> dict:
             "paths": {"dst_dir_raw": str(Path(tmp_path, "epias"))},
             "access": {"username": "name", "password": "pw"},
         },
+        "ieso": {"paths": {"dst_dir_raw": str(Path(tmp_path, "ieso"))}},
         "era5": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "era5"))},
             "access": {"api_key": "token"},

@@ -112,7 +112,7 @@ class AccessValidation:
 
 
 # ----------------------------------
-# Per-source schemas
+# Per-source schemas - ENERGY
 # ----------------------------------
 class EiaConfig(PathValidation, AccessValidation, BaseModel):
     """Configuration schema for the EIA energy data source.
@@ -156,6 +156,21 @@ class EpiasConfig(PathValidation, AccessValidation, BaseModel):
     access: AccessAccount
 
 
+class IesoConfig(BaseModel):
+    """Configuration schema for the IESO energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["ieso"] = "ieso"
+    paths: Paths
+
+
+# ----------------------------------
+# Per-source schemas - WEATHER
+# ----------------------------------
 class Era5Config(PathValidation, AccessValidation, BaseModel):
     """Configuration schema for the ERA5 reanalysis data source.
 
@@ -201,6 +216,7 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "eia": EiaConfig,
     "entsoe": EntsoeConfig,
     "epias": EpiasConfig,
+    "ieso": IesoConfig,
     "era5": Era5Config,
     "icon_dream_global": IconDreamGlobalConfig,
     "icon_dream_eu": IconDreamEuConfig,
