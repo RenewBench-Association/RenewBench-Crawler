@@ -57,7 +57,7 @@ class InvalidError(Exception):
     pass
 
 
-class DailyDownloader(ABC):
+class EnergyDownloader(ABC):
     """Abstract base class for parallelized daily energy downloader classes.
 
     Attributes:

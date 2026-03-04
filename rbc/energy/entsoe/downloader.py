@@ -15,8 +15,8 @@ from loguru import logger
 
 from rbc.energy.utils import (
     WORKERS,
-    DailyDownloader,
     DataStructureError,
+    EnergyDownloader,
 )
 
 RELEVANT_RECORD_KEYS = {
@@ -32,7 +32,7 @@ RELEVANT_RECORD_KEYS = {
 }
 
 
-class EntsoeDownloader(DailyDownloader):
+class EntsoeDownloader(EnergyDownloader):
     """Entsoe-E data downloader.
 
     Attributes:

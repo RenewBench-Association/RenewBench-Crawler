@@ -14,8 +14,8 @@ from requests import exceptions
 
 from rbc.energy.utils import (
     MAX_RETRIES,
-    DailyDownloader,
     DataStructureError,
+    EnergyDownloader,
     InvalidError,
     load_df_from_file,
     write_df_to_csv,
@@ -25,11 +25,11 @@ from rbc.energy.utils import (
 # ----------------------------------
 # Fixtures
 # ----------------------------------
-class MockDownloader(DailyDownloader):
-    """A dummy child class to test DailyDownloader logic directly."""
+class MockDownloader(EnergyDownloader):
+    """A dummy child class to test EnergyDownloader logic directly."""
 
     def _get_task_data(self, task: str | tuple[str, str]):
-        """Dummy method to test DailyDownloader._get_task_data function.
+        """Dummy method to test EnergyDownloader._get_task_data function.
 
         Args:
             task (str | tuple[str, str]): Task for downloading.
@@ -39,13 +39,13 @@ class MockDownloader(DailyDownloader):
 
 @pytest.fixture
 def downloader(tmp_path: Path) -> MockDownloader:
-    """Fixture to create an instance of DailyDownloader.
+    """Fixture to create an instance of EnergyDownloader.
 
     Args:
         tmp_path (Path): Path to temporary directory.
 
     Returns:
-        MockDownloader: Instance of the mock DailyDownloader child class.
+        MockDownloader: Instance of the mock EnergyDownloader child class.
     """
     return MockDownloader(output_path=tmp_path, years=[2020])
 
@@ -86,7 +86,7 @@ def ckpt_setup(downloader: MockDownloader, tmp_path: Path) -> Callable:
 
 
 # ----------------------------------
-# Tests - DailyDownloader
+# Tests - EnergyDownloader
 # ----------------------------------
 @pytest.mark.parametrize(
     "task, use_self_ckpt",
@@ -196,7 +196,7 @@ def test_threading_error_catching(
 
 
 # ----------------------------------
-# Tests - DailyDownloader helper methods
+# Tests - EnergyDownloader helper methods
 # ----------------------------------
 @pytest.mark.parametrize(
     "error, expected_return",

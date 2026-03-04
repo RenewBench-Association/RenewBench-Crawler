@@ -14,8 +14,8 @@ from loguru import logger
 
 from rbc.energy.utils import (
     WORKERS,
-    DailyDownloader,
     DataStructureError,
+    EnergyDownloader,
     load_df_from_file,
 )
 
@@ -26,7 +26,7 @@ EXPECTED_COLS = ["Delivery Date", "Generator", "Fuel Type", "Measurement"] + [
 ]
 
 
-class IesoDownloader(DailyDownloader):
+class IesoDownloader(EnergyDownloader):
     """IESO data downloader.
 
     Attributes:
