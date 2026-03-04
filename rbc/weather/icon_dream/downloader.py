@@ -16,43 +16,9 @@ from rbc.weather.icon_dream.mappings import (
     ALL_MODEL_LEVEL_VARIABLES,
     ALL_SINGLE_LEVEL_VARIABLES,
     DEFAULT_VARIABLES,
+    MODEL_CONFIG,
     VARIABLE_TO_DWD_PARAM,
 )
-
-REGION_CONFIG = {
-    "global": {
-        "label": "ICON-DREAM-Global",
-        "dataset": "ICON-DREAM-Global (DWD Open Data)",
-        "resolution": "~13km (icosahedral grid)",
-        "base_url": "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly",
-        "metadata_files": {
-            "icon_grid_0026_R03B07_G.nc": (
-                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G.nc",
-                "ICON-DREAM Global grid definition",
-            ),
-            "icon_grid_0026_R03B07_G-grfinfo.nc": (
-                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G-grfinfo.nc",
-                "ICON-DREAM Global grid connectivity information",
-            ),
-        },
-    },
-    "eu": {
-        "label": "ICON-DREAM-EU",
-        "dataset": "ICON-DREAM-EU (DWD Open Data)",
-        "resolution": "~6.5km (icosahedral grid)",
-        "base_url": "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-EU/hourly",
-        "metadata_files": {
-            "icon_grid_0027_R03B08_N02.nc": (
-                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0027_R03B08_N02.nc",
-                "ICON-DREAM EU grid definition",
-            ),
-            "icon_grid_0027_R03B08_N02-grfinfo.nc": (
-                "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0027_R03B08_N02-grfinfo.nc",
-                "ICON-DREAM EU grid connectivity information",
-            ),
-        },
-    },
-}
 
 
 def _normalize_region(region: str) -> str:
@@ -63,11 +29,11 @@ def _normalize_region(region: str) -> str:
 
 
 def _get_region_config(region: str) -> dict:
-    if region not in REGION_CONFIG:
+    if region not in MODEL_CONFIG:
         raise ValueError(
-            f"Unknown region '{region}'. Choose from: {', '.join(REGION_CONFIG)}"
+            f"Unknown region '{region}'. Choose from: {', '.join(MODEL_CONFIG)}"
         )
-    return REGION_CONFIG[region]
+    return MODEL_CONFIG[region]
 
 
 class IconDreamDownloader:

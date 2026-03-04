@@ -9,8 +9,7 @@ import pytest
 
 from rbc.weather.barra import BarraDownloader
 from rbc.weather.barra.mappings import (
-    DEFAULT_VARIABLES_C2,
-    DEFAULT_VARIABLES_R2_RE2,
+    DEFAULT_VARIABLES,
 )
 
 
@@ -32,7 +31,7 @@ def basic_args(tmp_path: Path) -> dict:
         "model": "R2",
         "years": [2020],
         "months": ["01"],
-        "variables": ["tas", "pr"],
+        "variables": ["1.5m_temperature", "total_precipitation"],
         "dry_run": False,
         "resume": False,
     }
@@ -75,22 +74,6 @@ def test_downloader_initialization(basic_args: dict) -> None:
     )
 
 
-def test_downloader_initialization_re2(tmp_path: Path) -> None:
-    """Happy path for initialization with RE2 model.
-
-    Args:
-        tmp_path (Path): Path to the temporary directory.
-    """
-    downloader = BarraDownloader(
-        output_path=tmp_path,
-        model="RE2",
-        years=[2021],
-        variables=["tas"],
-    )
-    assert downloader.model == "RE2"
-    assert len(downloader.available_variables) > 0
-
-
 def test_downloader_initialization_c2(tmp_path: Path) -> None:
     """Happy path for initialization with C2 model.
 
@@ -101,7 +84,7 @@ def test_downloader_initialization_c2(tmp_path: Path) -> None:
         output_path=tmp_path,
         model="C2",
         years=[2022],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
     )
     assert downloader.model == "C2"
     assert len(downloader.available_variables) > 0
@@ -118,7 +101,7 @@ def test_downloader_initialization_invalid_model(tmp_path: Path) -> None:
             output_path=tmp_path,
             model="INVALID",
             years=[2020],
-            variables=["tas"],
+            variables=["1.5m_temperature"],
         )
 
 
@@ -135,7 +118,7 @@ def test_downloader_initialization_creates_output_dir(tmp_path: Path) -> None:
         output_path=output_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
     )
     assert output_path.exists()
 
@@ -150,7 +133,7 @@ def test_downloader_initialization_default_months(tmp_path: Path) -> None:
         output_path=tmp_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
     )
     assert len(downloader.months) == 12
     assert downloader.months[0] == "01"
@@ -168,11 +151,11 @@ def test_downloader_initialization_default_variables_r2(tmp_path: Path) -> None:
         model="R2",
         years=[2020],
     )
-    assert downloader.variables == DEFAULT_VARIABLES_R2_RE2
+    assert downloader.variables == DEFAULT_VARIABLES
 
 
 def test_downloader_initialization_default_variables_c2(tmp_path: Path) -> None:
-    """Test that C2 uses correct default variables.
+    """Test that C2 uses the same default variables as R2.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
@@ -182,7 +165,7 @@ def test_downloader_initialization_default_variables_c2(tmp_path: Path) -> None:
         model="C2",
         years=[2020],
     )
-    assert downloader.variables == DEFAULT_VARIABLES_C2
+    assert downloader.variables == DEFAULT_VARIABLES
 
 
 def test_downloader_initialization_custom_pressure_levels(tmp_path: Path) -> None:
@@ -196,7 +179,7 @@ def test_downloader_initialization_custom_pressure_levels(tmp_path: Path) -> Non
         output_path=tmp_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
         pressure_levels=levels,
     )
     assert downloader.pressure_levels == levels
@@ -241,7 +224,7 @@ def test_checkpoint_resume(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     # Save a fake checkpoint
-    checkpoint = {(2020, "01", "tas"): 1}
+    checkpoint = {(2020, "01", "1.5m_temperature"): 1}
     checkpoint_path = Path(tmp_path, "status.pickle")
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -251,7 +234,7 @@ def test_checkpoint_resume(tmp_path: Path) -> None:
         model="R2",
         years=[2020],
         months=["01"],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
         resume=True,
     )
     assert downloader.checkpoint == checkpoint
@@ -264,7 +247,7 @@ def test_checkpoint_not_resumed_if_resume_false(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     # Save a fake checkpoint
-    checkpoint = {(2020, "01", "tas"): 1}
+    checkpoint = {(2020, "01", "1.5m_temperature"): 1}
     checkpoint_path = Path(tmp_path, "status.pickle")
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -274,7 +257,7 @@ def test_checkpoint_not_resumed_if_resume_false(tmp_path: Path) -> None:
         model="R2",
         years=[2020],
         months=["01"],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
         resume=False,
     )
     assert downloader.checkpoint == {}
@@ -284,15 +267,17 @@ def test_checkpoint_not_resumed_if_resume_false(tmp_path: Path) -> None:
 # Tests - File path & URL construction
 # ----------------------------------
 def test_construct_file_path(downloader: BarraDownloader) -> None:
-    """Test file path construction.
+    """Test file path construction resolves to BARRA code.
 
     Args:
         downloader (BarraDownloader): Instance of BarraDownloader class.
     """
-    file_path = downloader._construct_file_path(2020, "01", "tas")
+    file_path = downloader._construct_file_path(2020, "01", "1.5m_temperature")
     assert file_path.parent == downloader.output_path
     assert "R2" in str(file_path)
+    assert "1hr" in str(file_path)
     assert "202001" in str(file_path)
+    # File name uses resolved BARRA code, not descriptive name
     assert "tas" in str(file_path)
     assert str(file_path).endswith(".nc")
 
@@ -303,8 +288,8 @@ def test_construct_file_path_different_vars(downloader: BarraDownloader) -> None
     Args:
         downloader (BarraDownloader): Instance of BarraDownloader class.
     """
-    path1 = downloader._construct_file_path(2020, "01", "tas")
-    path2 = downloader._construct_file_path(2020, "01", "pr")
+    path1 = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    path2 = downloader._construct_file_path(2020, "01", "total_precipitation")
     assert str(path1) != str(path2)
     assert "tas" in str(path1)
     assert "pr" in str(path2)
@@ -320,11 +305,12 @@ def test_build_opendap_url_r2(tmp_path: Path) -> None:
         output_path=tmp_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
     )
-    url = downloader._build_opendap_url(2020, "06", "tas")
+    url = downloader._build_opendap_url(2020, "06", "1.5m_temperature")
     assert "thredds.nci.org.au" in url
     assert "202006" in url
+    # URL uses resolved BARRA code
     assert "tas" in url
 
 
@@ -338,16 +324,16 @@ def test_build_opendap_url_different_models(tmp_path: Path) -> None:
         output_path=tmp_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
     )
     dl_c2 = BarraDownloader(
         output_path=tmp_path,
         model="C2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
     )
-    url_r2 = dl_r2._build_opendap_url(2020, "01", "tas")
-    url_c2 = dl_c2._build_opendap_url(2020, "01", "tas")
+    url_r2 = dl_r2._build_opendap_url(2020, "01", "1.5m_temperature")
+    url_c2 = dl_c2._build_opendap_url(2020, "01", "1.5m_temperature")
     assert url_r2 != url_c2
 
 
@@ -361,25 +347,11 @@ def test_r2_config(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     downloader = BarraDownloader(
-        output_path=tmp_path, model="R2", years=[2020], variables=["tas"]
+        output_path=tmp_path, model="R2", years=[2020], variables=["1.5m_temperature"]
     )
     assert "R2" in downloader.config["label"]
     assert "11 km" in downloader.config["resolution"]
     assert "AUS-11" in downloader.config["grid"]
-
-
-def test_re2_config(tmp_path: Path) -> None:
-    """Test RE2 configuration.
-
-    Args:
-        tmp_path (Path): Path to the temporary directory.
-    """
-    downloader = BarraDownloader(
-        output_path=tmp_path, model="RE2", years=[2020], variables=["tas"]
-    )
-    assert "RE2" in downloader.config["label"]
-    assert "22 km" in downloader.config["resolution"]
-    assert "AUS-22" in downloader.config["grid"]
 
 
 def test_c2_config(tmp_path: Path) -> None:
@@ -389,7 +361,7 @@ def test_c2_config(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     downloader = BarraDownloader(
-        output_path=tmp_path, model="C2", years=[2020], variables=["tas"]
+        output_path=tmp_path, model="C2", years=[2020], variables=["1.5m_temperature"]
     )
     assert "C2" in downloader.config["label"]
     assert "4 km" in downloader.config["resolution"]
@@ -406,13 +378,13 @@ def test_list_variables_r2(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     downloader = BarraDownloader(
-        output_path=tmp_path, model="R2", years=[2020], variables=["tas"]
+        output_path=tmp_path, model="R2", years=[2020], variables=["1.5m_temperature"]
     )
     vars_list = downloader.list_variables()
     assert isinstance(vars_list, list)
     assert len(vars_list) > 0
     assert all(isinstance(v, str) for v in vars_list)
-    assert "tas" in vars_list
+    assert "1.5m_temperature" in vars_list
 
 
 def test_list_variables_c2_has_more(tmp_path: Path) -> None:
@@ -422,28 +394,125 @@ def test_list_variables_c2_has_more(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     dl_r2 = BarraDownloader(
-        output_path=tmp_path, model="R2", years=[2020], variables=["tas"]
+        output_path=tmp_path, model="R2", years=[2020], variables=["1.5m_temperature"]
     )
     dl_c2 = BarraDownloader(
-        output_path=tmp_path, model="C2", years=[2020], variables=["tas"]
+        output_path=tmp_path, model="C2", years=[2020], variables=["1.5m_temperature"]
     )
     assert len(dl_c2.available_variables) >= len(dl_r2.available_variables)
 
 
 # ----------------------------------
-# Tests - Temporal frequency
+# Tests - Temporal resolution
 # ----------------------------------
-def test_temporal_frequency_always_1hr(tmp_path: Path) -> None:
-    """Test that temporal frequency is fixed to 1hr for all models.
+def test_temporal_res_defaults_to_1hr(tmp_path: Path) -> None:
+    """Test that temporal resolution defaults to 1hr for all models.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
     """
-    for model in ["R2", "RE2", "C2"]:
+    for model in ["R2", "C2"]:
         downloader = BarraDownloader(
-            output_path=tmp_path, model=model, years=[2020], variables=["tas"]
+            output_path=tmp_path,
+            model=model,
+            years=[2020],
+            variables=["1.5m_temperature"],
         )
         assert downloader.temporal_res == "1hr"
+
+
+def test_temporal_res_20min_c2(tmp_path: Path) -> None:
+    """Test that C2_20min model key sets 20min temporal resolution.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="C2_20min",
+        years=[2020],
+        variables=["1.5m_temperature"],
+    )
+    assert downloader.temporal_res == "20min"
+
+
+def test_temporal_res_20min_rejected_for_r2(tmp_path: Path) -> None:
+    """Test that selecting C2_20min differs from R2 temporal resolution.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="R2",
+        years=[2020],
+        variables=["1.5m_temperature"],
+    )
+    assert downloader.temporal_res == "1hr"
+
+
+def test_temporal_res_invalid(tmp_path: Path) -> None:
+    """Test that an unrecognized model key is rejected.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with pytest.raises(ValueError, match="Unknown BARRA model"):
+        BarraDownloader(
+            output_path=tmp_path,
+            model="C2_invalid",
+            years=[2020],
+            variables=["1.5m_temperature"],
+        )
+
+
+def test_temporal_res_in_file_path(tmp_path: Path) -> None:
+    """Test that model key controls temporal resolution in file paths.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    dl_1hr = BarraDownloader(
+        output_path=tmp_path,
+        model="C2",
+        years=[2020],
+        variables=["1.5m_temperature"],
+    )
+    dl_20min = BarraDownloader(
+        output_path=tmp_path,
+        model="C2_20min",
+        years=[2020],
+        variables=["1.5m_temperature"],
+    )
+    path_1hr = dl_1hr._construct_file_path(2020, "01", "1.5m_temperature")
+    path_20min = dl_20min._construct_file_path(2020, "01", "1.5m_temperature")
+    assert "1hr" in str(path_1hr)
+    assert "20min" in str(path_20min)
+    assert path_1hr != path_20min
+
+
+def test_temporal_res_in_opendap_url(tmp_path: Path) -> None:
+    """Test that model key controls temporal resolution in OPeNDAP URLs.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    dl_1hr = BarraDownloader(
+        output_path=tmp_path,
+        model="C2",
+        years=[2020],
+        variables=["1.5m_temperature"],
+    )
+    dl_20min = BarraDownloader(
+        output_path=tmp_path,
+        model="C2_20min",
+        years=[2020],
+        variables=["1.5m_temperature"],
+    )
+    url_1hr = dl_1hr._build_opendap_url(2020, "01", "1.5m_temperature")
+    url_20min = dl_20min._build_opendap_url(2020, "01", "1.5m_temperature")
+    assert "/1hr/" in url_1hr
+    assert "/20min/" in url_20min
 
 
 # ----------------------------------
@@ -459,7 +528,7 @@ def test_dry_run_flag(tmp_path: Path) -> None:
         output_path=tmp_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
         dry_run=True,
     )
     assert dl_dry.dry_run is True
@@ -468,7 +537,7 @@ def test_dry_run_flag(tmp_path: Path) -> None:
         output_path=tmp_path,
         model="R2",
         years=[2020],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
         dry_run=False,
     )
     assert dl_normal.dry_run is False
@@ -485,7 +554,7 @@ def test_dry_run_completes_without_error(tmp_path: Path) -> None:
         model="R2",
         years=[2020],
         months=["01"],
-        variables=["tas", "pr"],
+        variables=["1.5m_temperature", "total_precipitation"],
         dry_run=True,
     )
     downloader.download_data()
@@ -501,7 +570,10 @@ def test_download_data_skips_completed(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     # Save a fake checkpoint marking all tasks as done
-    checkpoint = {(2020, "01", "tas"): 1, (2020, "01", "pr"): 1}
+    checkpoint = {
+        (2020, "01", "1.5m_temperature"): 1,
+        (2020, "01", "total_precipitation"): 1,
+    }
     checkpoint_path = Path(tmp_path, "status.pickle")
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -511,7 +583,7 @@ def test_download_data_skips_completed(tmp_path: Path) -> None:
         model="R2",
         years=[2020],
         months=["01"],
-        variables=["tas", "pr"],
+        variables=["1.5m_temperature", "total_precipitation"],
         resume=True,
     )
 
@@ -531,13 +603,15 @@ def test_download_data_calls_download_variable(tmp_path: Path) -> None:
         model="R2",
         years=[2020],
         months=["01"],
-        variables=["tas"],
+        variables=["1.5m_temperature"],
         resume=False,
     )
 
     with patch.object(downloader, "_download_variable", return_value=1) as mock_dl:
         downloader.download_data()
-        mock_dl.assert_called_once_with(year=2020, month="01", variable="tas")
+        mock_dl.assert_called_once_with(
+            year=2020, month="01", variable="1.5m_temperature"
+        )
 
 
 # ----------------------------------
@@ -580,11 +654,17 @@ def test_multiple_models_independent(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     dl_r2 = BarraDownloader(
-        output_path=tmp_path / "r2", model="R2", years=[2020], variables=["tas"]
+        output_path=tmp_path / "r2",
+        model="R2",
+        years=[2020],
+        variables=["1.5m_temperature"],
     )
-    dl_re2 = BarraDownloader(
-        output_path=tmp_path / "re2", model="RE2", years=[2020], variables=["tas"]
+    dl_c2 = BarraDownloader(
+        output_path=tmp_path / "c2",
+        model="C2",
+        years=[2020],
+        variables=["1.5m_temperature"],
     )
     assert dl_r2.model == "R2"
-    assert dl_re2.model == "RE2"
-    assert dl_r2.output_path != dl_re2.output_path
+    assert dl_c2.model == "C2"
+    assert dl_r2.output_path != dl_c2.output_path

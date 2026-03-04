@@ -1,6 +1,6 @@
 """BARRA REANALYSIS DATA DOWNLOADER.
 
-Download BARRA reanalysis data (R2, RE2, or C2) from NCI THREDDS server.
+Download BARRA reanalysis data (R2, C2, or C2_20min) from NCI THREDDS server.
 """
 
 import pickle
@@ -13,12 +13,17 @@ from loguru import logger
 from tqdm import tqdm
 
 from rbc.weather.barra.mappings import (
-    ALL_VARIABLES_C2,
-    ALL_VARIABLES_R2_RE2,
-    DEFAULT_VARIABLES_C2,
-    DEFAULT_VARIABLES_R2_RE2,
+    C2_20MIN_SINGLE_LEVEL_VARIABLES,
+    C2_PRESSURE_LEVEL_VARIABLES,
+    C2_PRESSURE_LEVELS,
+    C2_SINGLE_LEVEL_VARIABLES,
+    DEFAULT_VARIABLES,
+    INVARIANT_VARIABLES,
     MODEL_CONFIG,
-    VARIABLE_AVAILABILITY,
+    R2_PRESSURE_LEVEL_VARIABLES,
+    R2_PRESSURE_LEVELS,
+    R2_SINGLE_LEVEL_VARIABLES,
+    VARIABLE_TO_BARRA_PARAM,
 )
 
 
@@ -29,31 +34,32 @@ def _normalize_model(model: str) -> str:
         model (str): Model name string (case-insensitive).
 
     Returns:
-        str: Normalized model name ("R2", "RE2", or "C2").
+        str: Normalized model name ("R2", "C2", or "C2_20min").
 
     Raises:
         ValueError: If the model name is not recognized.
     """
-    model_key = model.strip().upper()
-    if model_key not in MODEL_CONFIG:
+    normalized_lookup = {key.lower(): key for key in MODEL_CONFIG}
+    model_key = model.strip().lower()
+    if model_key not in normalized_lookup:
         raise ValueError(
             f"Unknown BARRA model '{model}'. "
             f"Choose from: {', '.join(MODEL_CONFIG.keys())}"
         )
-    return model_key
+    return normalized_lookup[model_key]
 
 
 class BarraDownloader:
     """BARRA reanalysis data downloader.
 
     Downloads BARRA NWP reanalysis data from NCI THREDDS server.
-    Supports three models: R2 (11 km), RE2 (22 km), C2 (4 km).
-    Data is always downloaded at 1-hour temporal frequency.
+    Supports three model keys: R2 (11 km, 1 hr), C2 (4 km, 1 hr),
+    and C2_20min (4 km, 20 min).
 
     Attributes:
-        model (str): Model identifier ("R2", "RE2", or "C2").
+        model (str): Model key ("R2", "C2", or "C2_20min").
         config (dict): Model-specific configuration from MODEL_CONFIG.
-        temporal_res (str): Temporal resolution, fixed to "1hr".
+        temporal_res (str): Temporal resolution (from MODEL_CONFIG).
         years (list[int]): List of years to download.
         months (list[str]): List of months to download (01-12).
         variables (list[str]): List of variables to download.
@@ -81,14 +87,14 @@ class BarraDownloader:
 
         Args:
             output_path (Path): Directory to save downloaded data.
-            model (str): BARRA model identifier ("R2", "RE2", or "C2").
+            model (str): BARRA model key ("R2", "C2", or "C2_20min").
             years (list[int]): List of years to download.
             months (list[str] | None, optional): List of months (01-12).
                 Defaults to all months.
             variables (list[str] | None, optional): Variables to download.
                 Defaults to model-specific defaults.
             pressure_levels (list[int] | None, optional): Pressure levels for
-                3D variables (in hPa). Defaults to model-specific defaults.
+                3D variables (in hPa). Defaults to all levels for the model.
             dry_run (bool, optional): If True, print requests without downloading.
                 Defaults to False.
             resume (bool, optional): If True, resume from checkpoint.
@@ -102,31 +108,51 @@ class BarraDownloader:
 
         self.model = _normalize_model(model)
         self.config = MODEL_CONFIG[self.model]
-        self.temporal_res = "1hr"  # Fixed to 1-hour frequency
+        self.temporal_res: str = self.config["temporal_res"][0]
+
         self.years = sorted(years)
         self.months: list[str] = months or [f"{i:02d}" for i in range(1, 13)]
         self.dry_run = dry_run
         self.resume = resume
 
-        # Setup available variables based on model
-        if self.model in ["R2", "RE2"]:
-            self.available_variables = ALL_VARIABLES_R2_RE2
-        else:  # C2
-            self.available_variables = ALL_VARIABLES_C2
-
-        # Setup variables (use model-specific defaults if none provided)
-        if variables is None:
-            self.variables: list[str] = list(
-                self.config["default_vars"],  # type: ignore[arg-type]
+        # Build available BARRA codes for selected model
+        if self.model == "R2":
+            available_codes = (
+                R2_SINGLE_LEVEL_VARIABLES
+                | R2_PRESSURE_LEVEL_VARIABLES
+                | INVARIANT_VARIABLES
             )
+        elif self.model == "C2":
+            available_codes = (
+                C2_SINGLE_LEVEL_VARIABLES
+                | C2_PRESSURE_LEVEL_VARIABLES
+                | INVARIANT_VARIABLES
+            )
+        else:
+            available_codes = C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
+
+        # Build set of descriptive names available for this model key
+        self.available_variables = {
+            name
+            for name, code in VARIABLE_TO_BARRA_PARAM.items()
+            if code in available_codes
+        }
+
+        # Setup variables (use defaults if none provided)
+        if variables is None:
+            self.variables: list[str] = list(DEFAULT_VARIABLES)
         else:
             self.variables = variables
 
-        # Setup pressure levels (use model-specific defaults if none provided)
-        if pressure_levels is None:
-            self.pressure_levels = self.config["pressure_levels"]
-        else:
+        # Setup pressure levels (use model defaults if none provided)
+        if pressure_levels is not None:
             self.pressure_levels = pressure_levels
+        elif self.model == "R2":
+            self.pressure_levels = list(R2_PRESSURE_LEVELS)
+        elif self.model == "C2":
+            self.pressure_levels = list(C2_PRESSURE_LEVELS)
+        else:
+            self.pressure_levels = []
 
         # Validate model-variable compatibility
         self._validate_variables()
@@ -152,32 +178,51 @@ class BarraDownloader:
             f"\n- variables:\t\t{self.variables}"
         )
 
+    def _get_barra_param(self, variable: str) -> str:
+        """Convert descriptive variable name to BARRA parameter code.
+
+        Args:
+            variable (str): Descriptive variable name (e.g. "2m_temperature").
+
+        Returns:
+            str: BARRA parameter code (e.g. "tas").
+        """
+        if variable in VARIABLE_TO_BARRA_PARAM:
+            return VARIABLE_TO_BARRA_PARAM[variable]
+        # Fallback: use variable name directly (e.g. already a BARRA code)
+        return variable
+
     def _validate_variables(self) -> None:
         """Validate that requested variables are available for this model.
 
-        Logs a warning for each variable that may not be available. Pressure-level
-        variables (e.g. "ta500") are always accepted.
+        Checks that all requested variables exist in VARIABLE_TO_BARRA_PARAM
+        and that the resolved BARRA codes are available for this model.
 
         Raises:
-            ValueError: If any requested variable is not recognized at all.
+            ValueError: If any requested variable is not recognized or not
+                available for this model.
         """
-        pressure_level_bases = ["ta", "ua", "va", "hus", "wap", "zg", "wa"]
-        invalid_vars = []
-
-        for var in self.variables:
-            # Pressure-level suffixed variables are always valid
-            if any(
-                var.startswith(base) and var != base for base in pressure_level_bases
-            ):
-                continue
-
-            if var not in self.available_variables and var not in VARIABLE_AVAILABILITY:
-                invalid_vars.append(var)
+        # Check that all requested variables exist in our mapping
+        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_BARRA_PARAM]
 
         if invalid_vars:
             raise ValueError(
-                f"Invalid variables for BARRA-{self.model}: "
-                f"{', '.join(invalid_vars)}.\n"
+                f"Invalid variables: {', '.join(invalid_vars)}.\n"
+                f"Run 'python scripts/weather/barra_download.py "
+                f"--list-variables --model {self.model}' to see available variables."
+            )
+
+        # Check that the BARRA codes are available for this model
+        unavailable_vars = [
+            v for v in self.variables if v not in self.available_variables
+        ]
+
+        if unavailable_vars:
+            barra_codes = [self._get_barra_param(v) for v in unavailable_vars]
+            raise ValueError(
+                f"Variables not available for BARRA-{self.model}: "
+                f"{', '.join(unavailable_vars)} "
+                f"(BARRA codes: {', '.join(barra_codes)}).\n"
                 f"Run 'python scripts/weather/barra_download.py "
                 f"--list-variables --model {self.model}' to see available variables."
             )
@@ -228,7 +273,10 @@ class BarraDownloader:
         Returns:
             Path: Full local file path for the data file.
         """
-        filename = f"barra_{self.model}_{year}{month}_{variable}.nc"
+        barra_code = self._get_barra_param(variable)
+        filename = (
+            f"barra_{self.model}_{self.temporal_res}_{year}{month}_{barra_code}.nc"
+        )
         return self.output_path / filename
 
     def _download_variable(self, year: int, month: str, variable: str) -> int:
@@ -320,9 +368,18 @@ class BarraDownloader:
         Returns:
             str: Full OPeNDAP URL for accessing the file.
         """
-        base_url = self.config["opendap_url"]
+        base_url = str(self.config["opendap_url"]).replace("/dodsC/", "/fileServer/")
+        barra_code = self._get_barra_param(variable)
         year_month = f"{year}{month}"
-        url = f"{base_url}/1hr/{year_month}/{variable}.nc"
+
+        grid = self.config["grid"]
+        dataset_label = self.config["label"]
+        dataset_file = (
+            f"{barra_code}_{grid}_ERA5_historical_hres_BOM_"
+            f"{dataset_label}_v1_{self.temporal_res}_{year_month}-{year_month}.nc"
+        )
+
+        url = f"{base_url}/{self.temporal_res}/{barra_code}/latest/{dataset_file}"
         return url
 
     def discover_variables(self) -> dict[str, dict[str, Any]]:
@@ -365,9 +422,13 @@ class BarraDownloader:
         """
         variables_info: dict[str, dict] = {}
 
-        # Pattern to match NetCDF files in THREDDS catalog
-        # Typical format: BARRA_R2_YYYY_MM_VARIABLE.nc
-        pattern = r"BARRA_[A-Z0-9]+_\d{6}_([a-zA-Z0-9_]+)\.nc"
+        # Pattern to match BARRA file names in THREDDS catalog.
+        # Example:
+        # uas_AUST-04_ERA5_historical_hres_BOM_BARRA-C2_v1_1hr_202203-202203.nc
+        pattern = (
+            r"([A-Za-z0-9_]+)_[A-Z]+-\d{2}_ERA5_historical_[a-z]+_BOM_"
+            r"BARRA-[A-Z0-9]+_v1_[0-9a-z]+_\d{6}-\d{6}\.nc"
+        )
 
         for match in re.finditer(pattern, html_content):
             var_name = match.group(1)
@@ -391,7 +452,7 @@ class BarraDownloader:
         """Print all available BARRA variables for a model.
 
         Args:
-            model (str): Model identifier ("R2", "RE2", "C2", or "all").
+            model (str): Model key ("R2", "C2", "C2_20min", or "all").
         """
         models = (
             list(MODEL_CONFIG.keys())
@@ -401,12 +462,26 @@ class BarraDownloader:
 
         for idx, model_name in enumerate(models):
             config = MODEL_CONFIG[model_name]
-            if model_name in ["R2", "RE2"]:
-                all_vars = ALL_VARIABLES_R2_RE2
-                default_vars = DEFAULT_VARIABLES_R2_RE2
+            if model_name == "R2":
+                available_codes = (
+                    R2_SINGLE_LEVEL_VARIABLES
+                    | R2_PRESSURE_LEVEL_VARIABLES
+                    | INVARIANT_VARIABLES
+                )
+            elif model_name == "C2":
+                available_codes = (
+                    C2_SINGLE_LEVEL_VARIABLES
+                    | C2_PRESSURE_LEVEL_VARIABLES
+                    | INVARIANT_VARIABLES
+                )
             else:
-                all_vars = ALL_VARIABLES_C2
-                default_vars = DEFAULT_VARIABLES_C2
+                available_codes = C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
+
+            all_vars = {
+                name
+                for name, code in VARIABLE_TO_BARRA_PARAM.items()
+                if code in available_codes
+            }
 
             if idx:
                 print("\n")
@@ -415,12 +490,13 @@ class BarraDownloader:
             print("=" * 80)
             print(f"Dataset: {config['description']}")
             print(f"Resolution: {config['resolution']}")
-            print("Temporal: 1-hourly data")
+            print(f"Temporal: {', '.join(config['temporal_res'])}")
             print(f"Total: {len(all_vars)} variables\n")
 
-            for var in sorted(all_vars):
-                marker = " [DEFAULT]" if var in default_vars else ""
-                print(f"  • {var}{marker}")
+            for name in sorted(all_vars):
+                code = VARIABLE_TO_BARRA_PARAM.get(name, name)
+                marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
+                print(f"  • {name} ({code}){marker}")
 
         print("\n" + "=" * 80)
         print("USAGE EXAMPLES:")

@@ -32,11 +32,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "-r",
         "--model",
-        choices=["R2", "RE2", "C2"],
+        choices=["R2", "C2", "C2_20min"],
         default="R2",
         metavar="MODEL",
         help="BARRA model/resolution. "
-        "R2: 11 km deterministic, RE2: 22 km ensemble, C2: 4 km convective-scale. "
+        "R2: 11 km deterministic (1hr), C2: 4 km convective-scale (1hr), "
+        "C2_20min: 4 km convective-scale (20min). "
         "Default: R2",
     )
 
@@ -69,7 +70,7 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         metavar="VARIABLES",
         help="Variables to download. Examples: tas uas vas pr CAPE CIN. "
-        "Default: Model-specific defaults (2m temp, wind, solar radiation, etc.)",
+        "Default: Model-specific defaults (1.5m temp, wind, solar radiation, etc.)",
     )
 
     parser.add_argument(
