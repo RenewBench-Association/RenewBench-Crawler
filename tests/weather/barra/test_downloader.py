@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from rbc.weather.barra import BarraDownloader
 from rbc.weather.barra.mappings import (
@@ -68,9 +69,9 @@ def test_downloader_initialization(basic_args: dict) -> None:
     assert downloader.months == basic_args["months"]
     assert downloader.variables == basic_args["variables"]
     assert downloader.dry_run == basic_args["dry_run"]
-    assert downloader.output_path == basic_args["output_path"]
+    assert downloader.output_path == Path(basic_args["output_path"], "R2")
     assert downloader.checkpoint_path == Path(
-        basic_args["output_path"], "status.pickle"
+        basic_args["output_path"], "R2", "status.pickle"
     )
 
 
@@ -120,7 +121,7 @@ def test_downloader_initialization_creates_output_dir(tmp_path: Path) -> None:
         years=[2020],
         variables=["1.5m_temperature"],
     )
-    assert output_path.exists()
+    assert (output_path / "R2").exists()
 
 
 def test_downloader_initialization_default_months(tmp_path: Path) -> None:
@@ -225,7 +226,8 @@ def test_checkpoint_resume(tmp_path: Path) -> None:
     """
     # Save a fake checkpoint
     checkpoint = {(2020, "01", "1.5m_temperature"): 1}
-    checkpoint_path = Path(tmp_path, "status.pickle")
+    checkpoint_path = Path(tmp_path, "R2", "status.pickle")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
@@ -248,7 +250,8 @@ def test_checkpoint_not_resumed_if_resume_false(tmp_path: Path) -> None:
     """
     # Save a fake checkpoint
     checkpoint = {(2020, "01", "1.5m_temperature"): 1}
-    checkpoint_path = Path(tmp_path, "status.pickle")
+    checkpoint_path = Path(tmp_path, "R2", "status.pickle")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
@@ -295,6 +298,38 @@ def test_construct_file_path_different_vars(downloader: BarraDownloader) -> None
     assert "pr" in str(path2)
 
 
+def test_construct_file_path_invariant_uses_fx_name(tmp_path: Path) -> None:
+    """Invariant files should use fx naming without year/month in filename."""
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="C2_20min",
+        years=[2022],
+        months=["04"],
+        variables=["orography"],
+    )
+
+    file_path = downloader._construct_file_path(2022, "04", "orography")
+
+    assert file_path.parent.name == "invariant"
+    assert file_path.name == "barra_C2_20min_fx_orog.nc"
+    assert "202204" not in file_path.name
+
+
+def test_include_invariants_adds_invariant_variables(tmp_path: Path) -> None:
+    """Test that include_invariants appends invariant fields in downloader."""
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="R2",
+        years=[2022],
+        months=["04"],
+        variables=["1.5m_temperature"],
+        include_invariants=True,
+    )
+
+    assert "orography" in downloader.variables
+    assert "land_sea_mask" in downloader.variables
+
+
 def test_build_opendap_url_r2(tmp_path: Path) -> None:
     """Test OPeNDAP URL construction for R2 model.
 
@@ -335,6 +370,24 @@ def test_build_opendap_url_different_models(tmp_path: Path) -> None:
     url_r2 = dl_r2._build_opendap_url(2020, "01", "1.5m_temperature")
     url_c2 = dl_c2._build_opendap_url(2020, "01", "1.5m_temperature")
     assert url_r2 != url_c2
+
+
+def test_build_opendap_url_invariant_uses_fx_path(tmp_path: Path) -> None:
+    """Invariant variables should be fetched from fx path, not temporal folders."""
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="C2_20min",
+        years=[2022],
+        months=["04"],
+        variables=["land_sea_mask"],
+    )
+
+    url = downloader._build_opendap_url(2022, "04", "land_sea_mask")
+
+    assert "/fx/sftlf/latest/" in url
+    assert "_v1.nc" in url
+    assert "/20min/" not in url
+    assert "202204" not in url
 
 
 # ----------------------------------
@@ -574,7 +627,8 @@ def test_download_data_skips_completed(tmp_path: Path) -> None:
         (2020, "01", "1.5m_temperature"): 1,
         (2020, "01", "total_precipitation"): 1,
     }
-    checkpoint_path = Path(tmp_path, "status.pickle")
+    checkpoint_path = Path(tmp_path, "R2", "status.pickle")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
@@ -615,36 +669,6 @@ def test_download_data_calls_download_variable(tmp_path: Path) -> None:
 
 
 # ----------------------------------
-# Tests - Discovery
-# ----------------------------------
-def test_discover_variables_returns_dict(downloader: BarraDownloader) -> None:
-    """Test that discover_variables returns a dictionary.
-
-    Args:
-        downloader (BarraDownloader): Instance of BarraDownloader class.
-    """
-    with patch("rbc.weather.barra.downloader.requests.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.text = "BARRA_R2_202001_tas.nc BARRA_R2_202001_pr.nc"
-        mock_get.return_value = mock_response
-
-        result = downloader.discover_variables()
-        assert isinstance(result, dict)
-
-
-def test_discover_variables_handles_error(downloader: BarraDownloader) -> None:
-    """Test error handling in discover_variables.
-
-    Args:
-        downloader (BarraDownloader): Instance of BarraDownloader class.
-    """
-    with patch("rbc.weather.barra.downloader.requests.get") as mock_get:
-        mock_get.side_effect = Exception("Connection error")
-        result = downloader.discover_variables()
-        assert result == {}
-
-
-# ----------------------------------
 # Tests - Multiple models independent
 # ----------------------------------
 def test_multiple_models_independent(tmp_path: Path) -> None:
@@ -668,3 +692,104 @@ def test_multiple_models_independent(tmp_path: Path) -> None:
     assert dl_r2.model == "R2"
     assert dl_c2.model == "C2"
     assert dl_r2.output_path != dl_c2.output_path
+
+
+# ----------------------------------
+# Tests - Download variable branches
+# ----------------------------------
+def test_download_variable_skips_when_file_exists(downloader: BarraDownloader) -> None:
+    """Test that existing output file is treated as successful and skipped."""
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    output_file.write_bytes(b"already here")
+
+    result = downloader._download_variable(2020, "01", "1.5m_temperature")
+
+    assert result == 1
+
+
+def test_download_variable_success_writes_file(downloader: BarraDownloader) -> None:
+    """Test successful streamed download path and file creation."""
+    mock_response = MagicMock()
+    mock_response.headers = {"content-length": "4"}
+    mock_response.iter_content.return_value = [b"ab", b"cd"]
+    mock_response.raise_for_status.return_value = None
+
+    with patch(
+        "rbc.weather.barra.downloader.requests.get", return_value=mock_response
+    ), patch("rbc.weather.barra.downloader.tqdm") as mock_tqdm:
+        progress = MagicMock()
+        mock_tqdm.return_value = progress
+
+        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    assert result == 1
+    assert output_file.exists()
+    assert output_file.read_bytes() == b"abcd"
+    assert progress.update.call_count == 2
+    progress.close.assert_called_once()
+
+
+def test_download_variable_request_exception_removes_partial(
+    downloader: BarraDownloader,
+) -> None:
+    """Test RequestException path returns failure and leaves no output file."""
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    assert not output_file.exists()
+
+    with patch(
+        "rbc.weather.barra.downloader.requests.get",
+        side_effect=requests.exceptions.RequestException("boom"),
+    ):
+        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+
+    assert result == 0
+    assert not output_file.exists()
+
+
+def test_download_variable_generic_exception_removes_partial(
+    downloader: BarraDownloader,
+) -> None:
+    """Test generic exception path removes partially written output file."""
+
+    def _broken_chunks(chunk_size: int):
+        del chunk_size
+        yield b"ab"
+        raise RuntimeError("stream error")
+
+    mock_response = MagicMock()
+    mock_response.headers = {"content-length": "4"}
+    mock_response.iter_content.side_effect = _broken_chunks
+    mock_response.raise_for_status.return_value = None
+
+    with patch(
+        "rbc.weather.barra.downloader.requests.get", return_value=mock_response
+    ), patch("rbc.weather.barra.downloader.tqdm") as mock_tqdm:
+        mock_tqdm.return_value = MagicMock()
+        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    assert result == 0
+    assert not output_file.exists()
+
+
+# ----------------------------------
+# Tests - Catalog printing
+# ----------------------------------
+def test_print_available_variables_for_all_models(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Test static variable printing for all models."""
+    BarraDownloader.print_available_variables("all")
+    output = capsys.readouterr().out
+
+    assert "AVAILABLE BARRA-R2 VARIABLES" in output
+    assert "AVAILABLE BARRA-C2 VARIABLES" in output
+    assert "AVAILABLE BARRA-C2_20min VARIABLES" in output
+    assert "USAGE EXAMPLES:" in output
+
+
+def test_print_available_variables_invalid_model_raises() -> None:
+    """Test static variable printer rejects unknown model keys."""
+    with pytest.raises(ValueError, match="Unknown BARRA model"):
+        BarraDownloader.print_available_variables("X2")

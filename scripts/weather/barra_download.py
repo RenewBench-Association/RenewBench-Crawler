@@ -12,8 +12,6 @@ from loguru import logger
 from rbc.config.loader import load_config, parse_key_value_pairs
 from rbc.weather.barra import BarraDownloader
 
-SOURCE = "barra"
-
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments.
@@ -31,14 +29,20 @@ def parse_arguments() -> argparse.Namespace:
 
     parser.add_argument(
         "-r",
-        "--model",
-        choices=["R2", "C2", "C2_20min"],
+        "--region",
+        choices=["R2", "r2", "C2", "c2", "C2_20min", "c2_20min"],
         default="R2",
-        metavar="MODEL",
-        help="BARRA model/resolution. "
+        metavar="REGION",
+        help="BARRA region/model. "
         "R2: 11 km deterministic (1hr), C2: 4 km convective-scale (1hr), "
         "C2_20min: 4 km convective-scale (20min). "
         "Default: R2",
+    )
+
+    parser.add_argument(
+        "--invariant",
+        action="store_true",
+        help="Include invariant variables in addition to requested/default variables.",
     )
 
     parser.add_argument(
@@ -46,10 +50,10 @@ def parse_arguments() -> argparse.Namespace:
         "--years",
         type=int,
         nargs="+",
-        default=[2020, 2021, 2022],
+        default=[2020, 2021, 2022, 2023, 2024, 2025],
         metavar="YEARS",
         help="Years to download. Example: -y 2020 2021 2022. "
-        "Default: [2020, 2021, 2022]",
+        "Default: [2020, 2021, 2022, 2023, 2024, 2025]",
     )
 
     parser.add_argument(
@@ -69,8 +73,8 @@ def parse_arguments() -> argparse.Namespace:
         nargs="+",
         default=None,
         metavar="VARIABLES",
-        help="Variables to download. Examples: tas uas vas pr CAPE CIN. "
-        "Default: Model-specific defaults (1.5m temp, wind, solar radiation, etc.)",
+        help="Variables to download. Examples: -v 1.5m_temperature, total_precipitation. "
+        "Default: Common renewable energy variables",
     )
 
     parser.add_argument(
@@ -81,25 +85,19 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         metavar="LEVELS",
         help="Pressure levels to download (in hPa) for 3D variables. "
-        "Example: -p 500 700 850 1000. Default: all standard levels",
-    )
-
-    parser.add_argument(
-        "--discover",
-        action="store_true",
-        help="Discover available variables from THREDDS catalog (diagnostic).",
+        "Example: -p 500 700 850 1000. Default: model dependent, all available levels between 950 and 1000 hPa.",
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print download plan without downloading files.",
+        help="Print download plan without downloading. Useful for debugging file selections.",
     )
 
     parser.add_argument(
         "--no-resume",
         action="store_true",
-        help="Don't resume from checkpoint; start download from beginning.",
+        help="Do not resume from checkpoint; start download from beginning.",
     )
 
     parser.add_argument(
@@ -119,36 +117,22 @@ def main() -> None:
 
     # Handle --list-variables flag
     if args.list_variables:
-        BarraDownloader.print_available_variables(model=args.model)
+        BarraDownloader.print_available_variables(model=args.region)
         return
 
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
-    cfg = load_config(source=SOURCE, overrides=overrides)
-    logger.info(f"Config loaded for {SOURCE}:\n{cfg}")
-
-    # Handle --discover flag
-    if args.discover:
-        downloader = BarraDownloader(
-            output_path=cfg.paths.dst_dir_raw,
-            model=args.model,
-            years=[2020],
-        )
-        discovered = downloader.discover_variables()
-        logger.info(f"Discovered {len(discovered)} variables from THREDDS catalog:")
-        for var, info in sorted(discovered.items())[:10]:
-            logger.info(f"  {var}: {info}")
-        if len(discovered) > 10:
-            logger.info(f"  ... and {len(discovered) - 10} more")
-        return
+    config = load_config(source="barra", overrides=overrides)
+    logger.info(f"Config loaded for BARRA:\n{config}")
 
     downloader = BarraDownloader(
-        output_path=cfg.paths.dst_dir_raw,
-        model=args.model,
+        output_path=config.paths.dst_dir_raw,
+        model=args.region,
         years=args.years,
         months=args.months,
         variables=args.variables,
         pressure_levels=args.pressure_levels,
+        include_invariants=args.invariant,
         dry_run=args.dry_run,
         resume=not args.no_resume,
     )

@@ -30,6 +30,7 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "-r",
         "--region",
         choices=["global", "eu", "europe", "all"],
         default="all",

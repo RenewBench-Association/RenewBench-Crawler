@@ -1,12 +1,10 @@
 """BARRA REANALYSIS DATA DOWNLOADER.
 
-Download BARRA reanalysis data (R2, C2, or C2_20min) from NCI THREDDS server.
+Download BARRA2 reanalysis data (R2, C2, or C2_20min) from National Computational Infrastructure (NCI) THREDDS server.
 """
 
 import pickle
-import re
 from pathlib import Path
-from typing import Any
 
 import requests
 from loguru import logger
@@ -52,7 +50,7 @@ def _normalize_model(model: str) -> str:
 class BarraDownloader:
     """BARRA reanalysis data downloader.
 
-    Downloads BARRA NWP reanalysis data from NCI THREDDS server.
+    Downloads BARRA2 NWP reanalysis data from NCI THREDDS server.
     Supports three model keys: R2 (11 km, 1 hr), C2 (4 km, 1 hr),
     and C2_20min (4 km, 20 min).
 
@@ -80,6 +78,7 @@ class BarraDownloader:
         months: list[str] | None = None,
         variables: list[str] | None = None,
         pressure_levels: list[int] | None = None,
+        include_invariants: bool = False,
         dry_run: bool = False,
         resume: bool = True,
     ) -> None:
@@ -95,6 +94,9 @@ class BarraDownloader:
                 Defaults to model-specific defaults.
             pressure_levels (list[int] | None, optional): Pressure levels for
                 3D variables (in hPa). Defaults to all levels for the model.
+            include_invariants (bool, optional): If True, include invariant
+                variables (orography, land-sea mask) in download set.
+                Defaults to False.
             dry_run (bool, optional): If True, print requests without downloading.
                 Defaults to False.
             resume (bool, optional): If True, resume from checkpoint.
@@ -103,15 +105,23 @@ class BarraDownloader:
         Raises:
             ValueError: If model name is not recognized.
         """
-        self.output_path = Path(output_path)
+        self.model = _normalize_model(model)
+
+        base_output_path = Path(output_path)
+        if base_output_path.name == self.model:
+            self.output_path = base_output_path
+        else:
+            self.output_path = base_output_path / self.model
         self.output_path.mkdir(parents=True, exist_ok=True)
 
-        self.model = _normalize_model(model)
+        self.invariant_output_path = self.output_path / "invariant"
+
         self.config = MODEL_CONFIG[self.model]
-        self.temporal_res: str = self.config["temporal_res"][0]
+        self.temporal_res: str = self.config["temporal_res"]
 
         self.years = sorted(years)
         self.months: list[str] = months or [f"{i:02d}" for i in range(1, 13)]
+        self.include_invariants = include_invariants
         self.dry_run = dry_run
         self.resume = resume
 
@@ -140,9 +150,23 @@ class BarraDownloader:
 
         # Setup variables (use defaults if none provided)
         if variables is None:
-            self.variables: list[str] = list(DEFAULT_VARIABLES)
+            base_variables: list[str] = list(DEFAULT_VARIABLES)
         else:
-            self.variables = variables
+            base_variables = list(variables)
+
+        if self.include_invariants:
+            invariant_variable_names = sorted(
+                [
+                    name
+                    for name, code in VARIABLE_TO_BARRA_PARAM.items()
+                    if code in INVARIANT_VARIABLES
+                ]
+            )
+            self.variables: list[str] = list(
+                dict.fromkeys([*base_variables, *invariant_variable_names])
+            )
+        else:
+            self.variables = base_variables
 
         # Setup pressure levels (use model defaults if none provided)
         if pressure_levels is not None:
@@ -182,10 +206,10 @@ class BarraDownloader:
         """Convert descriptive variable name to BARRA parameter code.
 
         Args:
-            variable (str): Descriptive variable name (e.g. "2m_temperature").
+            variable (str): Descriptive variable name (e.g. "10m_u_component_of_wind").
 
         Returns:
-            str: BARRA parameter code (e.g. "tas").
+            str: BARRA parameter code (e.g. "uas").
         """
         if variable in VARIABLE_TO_BARRA_PARAM:
             return VARIABLE_TO_BARRA_PARAM[variable]
@@ -209,7 +233,7 @@ class BarraDownloader:
             raise ValueError(
                 f"Invalid variables: {', '.join(invalid_vars)}.\n"
                 f"Run 'python scripts/weather/barra_download.py "
-                f"--list-variables --model {self.model}' to see available variables."
+                f"--list-variables --region {self.model}' to see available variables."
             )
 
         # Check that the BARRA codes are available for this model
@@ -224,7 +248,7 @@ class BarraDownloader:
                 f"{', '.join(unavailable_vars)} "
                 f"(BARRA codes: {', '.join(barra_codes)}).\n"
                 f"Run 'python scripts/weather/barra_download.py "
-                f"--list-variables --model {self.model}' to see available variables."
+                f"--list-variables --region {self.model}' to see available variables."
             )
 
     def download_data(self) -> None:
@@ -274,9 +298,13 @@ class BarraDownloader:
             Path: Full local file path for the data file.
         """
         barra_code = self._get_barra_param(variable)
-        filename = (
-            f"barra_{self.model}_{self.temporal_res}_{year}{month}_{barra_code}.nc"
-        )
+        if barra_code in INVARIANT_VARIABLES:
+            filename = f"barra_{self.model}_fx_{barra_code}.nc"
+            return self.invariant_output_path / filename
+        else:
+            filename = (
+                f"barra_{self.model}_{self.temporal_res}_{year}{month}_{barra_code}.nc"
+            )
         return self.output_path / filename
 
     def _download_variable(self, year: int, month: str, variable: str) -> int:
@@ -310,6 +338,8 @@ class BarraDownloader:
             logger.info(
                 f"{year}-{month} ({variable}): Downloading {output_file.name}..."
             )
+
+            output_file.parent.mkdir(parents=True, exist_ok=True)
 
             # Download with streaming
             response = requests.get(url, stream=True, timeout=300)
@@ -370,74 +400,23 @@ class BarraDownloader:
         """
         base_url = str(self.config["opendap_url"]).replace("/dodsC/", "/fileServer/")
         barra_code = self._get_barra_param(variable)
-        year_month = f"{year}{month}"
+        grid = str(self.config["grid"])
+        dataset_label = str(self.config["label"])
 
-        grid = self.config["grid"]
-        dataset_label = self.config["label"]
-        dataset_file = (
-            f"{barra_code}_{grid}_ERA5_historical_hres_BOM_"
-            f"{dataset_label}_v1_{self.temporal_res}_{year_month}-{year_month}.nc"
-        )
-
-        url = f"{base_url}/{self.temporal_res}/{barra_code}/latest/{dataset_file}"
-        return url
-
-    def discover_variables(self) -> dict[str, dict[str, Any]]:
-        """Discover available variables from THREDDS catalog.
-
-        Parses the NCI THREDDS HTML catalog to find available variables and their
-        metadata for the configured model.
-
-        Returns:
-            dict[str, dict[str, Any]]: Dict mapping variable names to
-                availability info (temporal_res, available).
-        """
-        logger.info("Discovering variables from THREDDS catalog...")
-
-        try:
-            catalog_url = str(self.config["catalog_url"])
-            response = requests.get(catalog_url, timeout=30)
-            response.raise_for_status()
-
-            variables_info = self._parse_thredds_catalog(response.text)
-
-            logger.info(
-                f"Found {len(variables_info)} available variables "
-                f"for {self.config['label']}"
+        if barra_code in INVARIANT_VARIABLES:
+            invariant_path = str(self.config.get("invariant_path", "fx"))
+            dataset_file = (
+                f"{barra_code}_{grid}_ERA5_historical_hres_BOM_{dataset_label}_v1.nc"
             )
-            return variables_info
-
-        except Exception as e:
-            logger.error(f"Failed to discover variables: {e}")
-            return {}
-
-    def _parse_thredds_catalog(self, html_content: str) -> dict[str, dict]:
-        """Parse THREDDS HTML catalog to extract variable names.
-
-        Args:
-            html_content (str): HTML content from THREDDS catalog page.
-
-        Returns:
-            dict[str, dict]: Dictionary of available variables and their metadata.
-        """
-        variables_info: dict[str, dict] = {}
-
-        # Pattern to match BARRA file names in THREDDS catalog.
-        # Example:
-        # uas_AUST-04_ERA5_historical_hres_BOM_BARRA-C2_v1_1hr_202203-202203.nc
-        pattern = (
-            r"([A-Za-z0-9_]+)_[A-Z]+-\d{2}_ERA5_historical_[a-z]+_BOM_"
-            r"BARRA-[A-Z0-9]+_v1_[0-9a-z]+_\d{6}-\d{6}\.nc"
-        )
-
-        for match in re.finditer(pattern, html_content):
-            var_name = match.group(1)
-            variables_info[var_name] = {
-                "temporal_res": self.temporal_res,
-                "available": True,
-            }
-
-        return variables_info
+            url = f"{base_url}/{invariant_path}/{barra_code}/latest/{dataset_file}"
+        else:
+            year_month = f"{year}{month}"
+            dataset_file = (
+                f"{barra_code}_{grid}_ERA5_historical_hres_BOM_"
+                f"{dataset_label}_v1_{self.temporal_res}_{year_month}-{year_month}.nc"
+            )
+            url = f"{base_url}/{self.temporal_res}/{barra_code}/latest/{dataset_file}"
+        return url
 
     def list_variables(self) -> list[str]:
         """List all available variables for this model.
@@ -490,7 +469,7 @@ class BarraDownloader:
             print("=" * 80)
             print(f"Dataset: {config['description']}")
             print(f"Resolution: {config['resolution']}")
-            print(f"Temporal: {', '.join(config['temporal_res'])}")
+            print(f"Temporal: {config['temporal_res']}")
             print(f"Total: {len(all_vars)} variables\n")
 
             for name in sorted(all_vars):
@@ -502,15 +481,15 @@ class BarraDownloader:
         print("USAGE EXAMPLES:")
         print("=" * 80)
         print("\n1. Download default variables for R2 model:")
-        print("   python scripts/weather/barra_download.py --model R2 -y 2020 2021\n")
+        print("   python scripts/weather/barra_download.py --region R2 -y 2020 2021\n")
         print("2. Download specific variables for C2:")
         print(
             "   python scripts/weather/barra_download.py "
-            "-m C2 -y 2022 -v tas uas vas CAPE\n"
+            "-r C2 -y 2022 -v 1.5m_temperature 10m_u_component_of_wind 10m_v_component_of_wind CAPE\n"
         )
         print("3. Dry run to see what would be downloaded:")
         print(
             "   python scripts/weather/barra_download.py "
-            "--model R2 -y 2020 --months 01 02 --dry-run\n"
+            "--region R2 -y 2020 --months 01 02 --dry-run\n"
         )
         print("=" * 80 + "\n")

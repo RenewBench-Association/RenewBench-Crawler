@@ -229,9 +229,11 @@ MODEL_CONFIG = {
         "resolution": "11 km (0.11°)",
         "grid": "AUS-11",
         "domain": "Australia + surrounding (88.48-207.39°E, -57.97-12.98°N)",
-        "temporal_res": ["1hr"],
+        "temporal_res": "1hr",
         "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html",
+        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1",
+        "invariant_path": "fx",
     },
     "C2": {
         "label": "BARRA-C2",
@@ -239,9 +241,11 @@ MODEL_CONFIG = {
         "resolution": "4 km (0.04°)",
         "grid": "AUST-04",
         "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
-        "temporal_res": ["1hr"],
+        "temporal_res": "1hr",
         "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html",
+        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
+        "invariant_path": "fx",
     },
     "C2_20min": {
         "label": "BARRA-C2",
@@ -249,9 +253,11 @@ MODEL_CONFIG = {
         "resolution": "4 km (0.04°)",
         "grid": "AUST-04",
         "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
-        "temporal_res": ["20min"],
+        "temporal_res": "20min",
         "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/20min/catalog.html",
+        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
+        "invariant_path": "fx",
     },
 }
 
