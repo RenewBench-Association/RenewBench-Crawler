@@ -4,15 +4,20 @@
 import pickle
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, cast
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
+from requests import exceptions
 
 from rbc.energy.utils import (
+    MAX_RETRIES,
     DailyDownloader,
     DataStructureError,
+    InvalidError,
+    load_df_from_file,
     write_df_to_csv,
 )
 
@@ -115,11 +120,23 @@ def test_threading_wrapper(
     "task, use_self_ckpt",
     [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
 )
+@pytest.mark.parametrize(
+    "code, expected_status, expected_sleep_calls",
+    [
+        (None, 0, MAX_RETRIES - 1),
+        (300, 0, MAX_RETRIES - 1),
+        (404, 1, 0),
+        (400, 1, 0),
+    ],
+)
 def test_threading_error_catching(
     downloader: MockDownloader,
     ckpt_setup: Callable,
     task: str | tuple[str, str],
     use_self_ckpt: bool,
+    code: int | None,
+    expected_status: int,
+    expected_sleep_calls: int,
 ) -> None:
     """Failure path suite for _threading_wrapper (and, inherently, _download_task_data).
 
@@ -132,6 +149,9 @@ def test_threading_error_catching(
         ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
         task (str | tuple[str, str]): Task for downloading.
         use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+        code (int | None): Status code for HTTPError logic.
+        expected_status (int): Expected status for resuming logic.
+        expected_sleep_calls (int): Expected number of times sleep is called.
     """
     # 1. Test error requiring immediate exit (DataStructureError / RateLimitError -> exit)
     checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
@@ -151,16 +171,19 @@ def test_threading_error_catching(
             assert checkpoint[task] == 1
             mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
-    # 3. Test connection issues (ConnectionError -> status 0)
+    # 3. Test HTTPError - no code: (->0), retry: code=300 (->0), missing: code=404 (->1), client: code=400 (->1)
     checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
-    with patch.object(downloader, "_get_task_data", side_effect=ConnectionError):
-        with patch("rbc.energy.utils.time.sleep") as mock_sleep:
-            with patch.object(downloader, "_save_checkpoint") as mock_save:
-                downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+    with patch.object(
+        downloader, "_get_task_data", side_effect=exceptions.HTTPError("")
+    ):
+        with patch.object(downloader, "_get_status_code", return_value=code):
+            with patch("rbc.energy.utils.time.sleep") as mock_sleep:
+                with patch.object(downloader, "_save_checkpoint") as mock_save:
+                    downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
-                mock_sleep.assert_called()
-                assert checkpoint[task] == 0
-                mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+                    assert checkpoint[task] == expected_status
+                    assert mock_sleep.call_count == expected_sleep_calls
+                    mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
     # 4. Test other errors (that are not specifically handled in _download_task_data)
     checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
@@ -175,6 +198,24 @@ def test_threading_error_catching(
 # ----------------------------------
 # Tests - DailyDownloader helper methods
 # ----------------------------------
+@pytest.mark.parametrize(
+    "error, expected_return",
+    [
+        (SimpleNamespace(response=SimpleNamespace(status_code=404)), 404),  # requests
+        (SimpleNamespace(code=503), 503),  # urllib
+        (Exception("No attributes"), None),
+    ],
+)
+def test_get_status_code(error: Exception, expected_return: str | None) -> None:
+    """Happy path for _get_status_code with different inputs.
+
+    Args:
+        error (Exception): Exception from which to get the status code (if it exists).
+        expected_return (str | None): Expected status code (None if error has no attributes).
+    """
+    assert MockDownloader._get_status_code(error) == expected_return
+
+
 @pytest.mark.parametrize(
     "valid_input, expected_csv",
     [("str", Path("str.csv")), (("str1", "str2"), Path("str1", "str2.csv"))],
@@ -275,6 +316,38 @@ def test_get_date_list_future_years(downloader: MockDownloader) -> None:
         downloader._get_date_list()
 
 
+def test_get_month_list_current_year(downloader: MockDownloader) -> None:
+    """Happy path for _get_month_list when current year is provided.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+    """
+    fake_today = pd.Timestamp("2025-02-01")
+
+    with patch("pandas.Timestamp.now", return_value=fake_today):
+        downloader.years = [2025]
+        months = downloader._get_month_list()
+
+        assert len(months) == 1
+        assert months[-1] == "2025-01"
+
+
+def test_get_year_list_current_year(downloader: MockDownloader) -> None:
+    """Happy path for _get_year_list when current year is provided.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+    """
+    fake_today = pd.Timestamp("2025-02-01")
+
+    with patch("pandas.Timestamp.now", return_value=fake_today):
+        downloader.years = [2025]
+        years = downloader._get_year_list()
+
+        assert len(years) == 1
+        assert years[-1] == "2025"
+
+
 # ----------------------------------
 # Tests - Other utils
 # ----------------------------------
@@ -295,3 +368,32 @@ def test_write_df_to_csv_no_csv(tmp_path: Path) -> None:
 
     read_df = pd.read_csv(csv_path)
     pd.testing.assert_frame_equal(read_df, mock_df)
+
+
+def test_load_df_from_file_invalid_extension() -> None:
+    """Verify helper raises InvalidError for unsupported extensions."""
+    with pytest.raises(InvalidError, match="Invalid extension"):
+        load_df_from_file("test.txt")
+
+
+def test_load_df_from_file_not_found() -> None:
+    """Verify helper handles missing files."""
+    with pytest.raises(InvalidError, match="Invalid path"):
+        load_df_from_file("non_existent_file.csv")
+
+
+def test_load_df_from_file_bad_args() -> None:
+    """Verify helper catches invalid pandas arguments (TypeError)."""
+    with pytest.raises(InvalidError, match="Invalid argument"):
+        load_df_from_file("test.csv", sheet_name="Sheet1")
+
+
+def test_load_df_from_file_inaccessible_url() -> None:
+    """Verify helper raises a RETRY_ERRORS error when an inaccessible url is provided."""
+    with patch(
+        "rbc.energy.utils.pd.read_csv", side_effect=ConnectionError
+    ) as mock_read_csv:
+        with pytest.raises(ConnectionError):
+            load_df_from_file("https://www.website.com/test.csv")
+
+            mock_read_csv.assert_called_once()

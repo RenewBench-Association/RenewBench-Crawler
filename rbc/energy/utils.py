@@ -182,11 +182,9 @@ class DailyDownloader(ABC):
         Returns:
             int | None: HTTP status code if it was a HTTPError, otherwise None.
         """
-        if hasattr(e, "response") and hasattr(
-            e.response, "status_code"
-        ):  # for requests
+        if hasattr(e, "response") and hasattr(e.response, "status_code"):  # requests
             return e.response.status_code
-        if hasattr(e, "code"):  # for urllib
+        if hasattr(e, "code"):  # urllib
             return e.code
         return None
 
