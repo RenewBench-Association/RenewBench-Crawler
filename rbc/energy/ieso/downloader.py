@@ -117,13 +117,14 @@ class IesoDownloader(DailyDownloader):
 
         if not all(col in df.columns for col in EXPECTED_COLS):
             raise DataStructureError(
-                f"IESO file structure change detected for {task}! "
+                f"IESO file structure change detected for task: '{task}'! "
                 f"Missing columns: {[c for c in EXPECTED_COLS if c not in df.columns]}"
             )
 
         return df
 
-    def _get_from_new_source(self, year: int, month: int) -> pd.DataFrame:
+    @staticmethod
+    def _get_from_new_source(year: int, month: int) -> pd.DataFrame:
         """Extract data from post-04-2019 (new) source for a given month.
 
         Args:
@@ -134,21 +135,17 @@ class IesoDownloader(DailyDownloader):
             pd.DataFrame: Dataframe for a desired month.
 
         Raises:
-            ConnectionError/Timeout/HTTPError: If loading data from the URL fails.
+            RETRY_ERRORS / InvalidError: If loading data from the URL fails.
             DataStructureError: If downloaded data does not have the 'Measurement' column.
         """
         url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{year}{str(month).zfill(2)}.csv"
-
-        try:
-            df = load_df_from_file(url, header=3, index_col=False)
-        except self.RETRY_ERRORS as e:
-            raise type(e)(f"HTTP request failed: {e}") from e  # dynamically reraise
+        df = load_df_from_file(url, header=3, index_col=False)
 
         try:
             df = df[df["Measurement"] != "Forecast"]
         except KeyError:
             raise DataStructureError(
-                f"IESO file structure change detected for new csv: '{url}'! "
+                f"IESO file structure change detected in new csv: '{url}'! "
                 f"'Measurement' column is missing!"
             )
         return df
@@ -179,8 +176,8 @@ class IesoDownloader(DailyDownloader):
             )
         except AttributeError as e:
             raise DataStructureError(
-                f"IESO file structure change detected for old excel: '{url}'! "
-                f"DATE column is no longer datetimelike: {e}"
+                f"IESO file structure change detected in old excel: '{url}'! "
+                f"'Delivery Date' is no longer datetimelike: {e}"
             )
 
         df_month = df_year[month_mask].copy()
@@ -197,35 +194,30 @@ class IesoDownloader(DailyDownloader):
             pd.DataFrame: Dataframe for the desired year.
 
         Raises:
-            ConnectionError/Timeout/HTTPError: If loading data from the URL fails.
+            RETRY_ERRORS / InvalidError: If loading data from the URL fails.
+            DataStructureError: If downloaded data does not have capacity values.
         """
-        # 1. get generation ('Output') data
-        try:
-            df_gen = load_df_from_file(url, sheet_name="Output")
-            df_gen = self.standardize_old_data(df_gen, "Output")
-        except Exception as e:
-            raise type(e)(f"Could not load 'Output' sheet from {url}: {e}") from e
+        # 1. get generation ('Output') data and standardize
+        df_gen = load_df_from_file(url, sheet_name="Output")
+        df_gen = self.standardize_old_data(df_gen, "Output")
 
-        # 2. get capacity data
+        # 2. get capacity ('Capability') data and standardize
         df_cap = None
-        priority_cap_sheet_list = [
-            "Available Capacities",  # Best for 2015-2018 (correct wind/solar values)
-            "Capability - see Notes",  # Best for 2014 (weird naming in 2014)
-            "Capability",  # Default for 2010-2013 and 2019
-        ]
-
-        for sheet in priority_cap_sheet_list:
+        for sheet in [
+            "Available Capacities",  # for 2015-2018 (correct wind/solar values)
+            "Capability - see Notes",  # for 2014 (weird naming in 2014)
+            "Capability",  # for 2010-2013 and 2019
+        ]:
             try:
                 df_cap = load_df_from_file(url, sheet_name=sheet)
-                logger.info(f"Used capacity sheet: '{sheet}'")
                 break
             except ValueError:  # continue to next one if sheet does not exist
                 continue
 
         if df_cap is None:
             raise DataStructureError(
-                f"IESO file structure change detected for old excel: '{url}'! "
-                f"None of the expected capacity sheets {priority_cap_sheet_list} exist!"
+                f"IESO file structure change detected in old excel: '{url}'! "
+                f"No valid capacity sheets found!"
             )
 
         df_cap = self.standardize_old_data(df_cap, "Capability")
@@ -245,6 +237,12 @@ class IesoDownloader(DailyDownloader):
         Args:
             df (pd.DataFrame): Dataframe for a desired year.
             measurement_type (str): Type of measurement.
+
+        Returns:
+            pd.DataFrame: restructured Dataframe for a specific year.
+
+        Raises:
+            DataStructureError: If the downloaded df is missing any required columns.
         """
         try:
             df.columns = df.columns.str.upper()
@@ -278,7 +276,7 @@ class IesoDownloader(DailyDownloader):
 
         except KeyError as e:
             raise DataStructureError(
-                f"IESO file structure change detected for old excel! "
+                f"IESO file structure change detected in old excel! "
                 f"Relevant columns are missing: {e}"
             )
 

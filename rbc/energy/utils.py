@@ -7,6 +7,7 @@ import os
 import pickle
 import threading
 import time
+import urllib
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -19,6 +20,23 @@ WORKERS = 4
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 MAX_RATE_LIMIT_RETRIES = 6
+
+RETRY_ERRORS = (
+    # requests / urllib3 (used by requests.get/head)
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.HTTPError,
+    urllib3.exceptions.TimeoutError,
+    urllib3.exceptions.ReadTimeoutError,
+    urllib3.exceptions.ConnectTimeoutError,
+    urllib3.exceptions.HTTPError,
+    # urllib (standard - used by pandas)
+    urllib.error.HTTPError,
+    urllib.error.URLError,
+    # low-level errors (caught by both)
+    ConnectionError,
+    TimeoutError,
+)
 
 
 class DataStructureError(Exception):
@@ -51,16 +69,7 @@ class DailyDownloader(ABC):
         RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
     """
 
-    RETRY_ERRORS = (
-        requests.exceptions.Timeout,
-        requests.exceptions.ConnectionError,
-        requests.exceptions.HTTPError,
-        urllib3.exceptions.TimeoutError,
-        urllib3.exceptions.ReadTimeoutError,
-        urllib3.exceptions.ConnectTimeoutError,
-        ConnectionError,
-        TimeoutError,
-    )
+    RETRY_ERRORS = RETRY_ERRORS
 
     def __init__(self, output_path: Path, years: list[int], resume: bool = True):
         """Initializes the instance.
@@ -308,7 +317,7 @@ def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> N
 
 
 def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
-    """Load pandas dataframe from a file such as an Excel or csv file.
+    """Load pandas dataframe from a file such as an Excel or csv (file or URL directly).
 
     Args:
         file_path (Path | str): Path to the Excel file.
@@ -321,6 +330,7 @@ def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
     Raises:
         InvalidError: If the file doesn't have one of the expected suffixes, if the file
         doesn't exist, if invalid arguments (args) were provided for loading with pandas.
+        RETRY_ERRORS: If the file is a URL that is inaccessible for some reason.
     """
     try:
         if Path(file_path).suffix == ".xlsx":
@@ -335,10 +345,13 @@ def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
             )
 
     except FileNotFoundError:
-        raise InvalidError(f"File '{file_path}' does not exist!")
+        raise InvalidError(f"Invalid path - file '{file_path}' does not exist!")
 
     except TypeError as e:
         raise InvalidError(f"Invalid argument for loading from '{file_path}': {e}")
+
+    except RETRY_ERRORS:  # these can occur when the file is a URL!
+        raise
 
     logger.info(f"Successfully loaded dataframe from '{file_path}'")
     return df
