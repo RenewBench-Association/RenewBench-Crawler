@@ -352,7 +352,7 @@ def test_get_year_list_current_year(downloader: MockDownloader) -> None:
 # Tests - Other utils
 # ----------------------------------
 def test_write_df_to_csv_and_load_df_from_file(tmp_path: Path) -> None:
-    """Happy path for _write_df_to_csv, ensuring writing / reading a dataframe to / from csv.
+    """Happy path for _write_df_to_csv, ensuring writing a dataframe to a csv works.
 
     Args:
         tmp_path (Path): Path to temporary directory.
@@ -366,8 +366,26 @@ def test_write_df_to_csv_and_load_df_from_file(tmp_path: Path) -> None:
     assert not non_csv_path.exists()
     assert csv_path.is_file()
 
-    # check that reading df from csv works
-    read_df = load_df_from_file(csv_path)
+
+@pytest.mark.parametrize("file_name", ["valid.csv", "valid.xlsx"])
+def test_load_df_from_file(tmp_path: Path, file_name) -> None:
+    """Happy path for _load_df_from_file, ensuring reading a df from a csv / excel works.
+
+    Args:
+        tmp_path (Path): Path to temporary directory.
+        file_name (str): Name of file.
+    """
+    file_path = Path(tmp_path, file_name)
+    mock_df = pd.DataFrame({"total": [16.2]})
+
+    if file_path.suffix == ".csv":
+        mock_df.to_csv(file_path, index=False)
+    else:
+        pytest.importorskip("openpyxl")
+        mock_df.to_excel(file_path, index=False)
+    assert file_path.is_file()
+
+    read_df = load_df_from_file(file_path)
     pd.testing.assert_frame_equal(read_df, mock_df)
 
 
@@ -381,7 +399,6 @@ def test_load_df_from_file_not_found() -> None:
     """Failure path for "load_df_from_file" when file is missing."""
     with pytest.raises(InvalidError, match="Invalid path"):
         load_df_from_file("non_existent_file.csv")
-        load_df_from_file("non_existent_file.xlsx")
 
 
 def test_load_df_from_file_bad_args() -> None:
@@ -398,4 +415,4 @@ def test_load_df_from_file_inaccessible_url() -> None:
         with pytest.raises(ConnectionError):
             load_df_from_file("https://www.website.com/test.csv")
 
-            mock_read_csv.assert_called_once()
+    mock_read_csv.assert_called_once()
