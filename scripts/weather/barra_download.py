@@ -42,7 +42,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--no-invariant",
         action="store_true",
-        help="Invariant variables are downloaded by default. Do not include invariant variables.",
+        help="Do not download invariant variables.",
     )
 
     parser.add_argument(
