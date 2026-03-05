@@ -351,45 +351,47 @@ def test_get_year_list_current_year(downloader: MockDownloader) -> None:
 # ----------------------------------
 # Tests - Other utils
 # ----------------------------------
-def test_write_df_to_csv_no_csv(tmp_path: Path) -> None:
-    """Happy path for _write_df_to_csv when provided non-csv file is converted for usage.
+def test_write_df_to_csv_and_load_df_from_file(tmp_path: Path) -> None:
+    """Happy path for _write_df_to_csv, ensuring writing / reading a dataframe to / from csv.
 
     Args:
         tmp_path (Path): Path to temporary directory.
     """
-    non_csv_path = Path(tmp_path, "invalid")
+    non_csv_path = Path(tmp_path, "invalid.txt")
+    csv_path = Path(tmp_path, "invalid.csv")
     mock_df = pd.DataFrame({"total": [16.2]})
 
+    # check that writing df to csv works, with conversion to csv if incorrect suffix is given
     write_df_to_csv(mock_df, non_csv_path)
     assert not non_csv_path.exists()
-
-    csv_path = Path(tmp_path, "invalid.csv")
     assert csv_path.is_file()
 
-    read_df = pd.read_csv(csv_path)
+    # check that reading df from csv works
+    read_df = load_df_from_file(csv_path)
     pd.testing.assert_frame_equal(read_df, mock_df)
 
 
 def test_load_df_from_file_invalid_extension() -> None:
-    """Verify helper raises InvalidError for unsupported extensions."""
+    """Failure path for "load_df_from_file" when file has unsupported extensions."""
     with pytest.raises(InvalidError, match="Invalid extension"):
         load_df_from_file("test.txt")
 
 
 def test_load_df_from_file_not_found() -> None:
-    """Verify helper handles missing files."""
+    """Failure path for "load_df_from_file" when file is missing."""
     with pytest.raises(InvalidError, match="Invalid path"):
         load_df_from_file("non_existent_file.csv")
+        load_df_from_file("non_existent_file.xlsx")
 
 
 def test_load_df_from_file_bad_args() -> None:
-    """Verify helper catches invalid pandas arguments (TypeError)."""
+    """Failure path for "load_df_from_file" when pandas arguments are invalid (TypeError)."""
     with pytest.raises(InvalidError, match="Invalid argument"):
         load_df_from_file("test.csv", sheet_name="Sheet1")
 
 
 def test_load_df_from_file_inaccessible_url() -> None:
-    """Verify helper raises a RETRY_ERRORS error when an inaccessible url is provided."""
+    """Failure path for "load_df_from_file" when an inaccessible url is provided."""
     with patch(
         "rbc.energy.utils.pd.read_csv", side_effect=ConnectionError
     ) as mock_read_csv:
