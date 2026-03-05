@@ -40,9 +40,9 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--invariant",
+        "--no-invariant",
         action="store_true",
-        help="Include invariant variables in addition to requested/default variables.",
+        help="Invariant variables are downloaded by default. Do not include invariant variables.",
     )
 
     parser.add_argument(
@@ -132,7 +132,7 @@ def main() -> None:
         months=args.months,
         variables=args.variables,
         pressure_levels=args.pressure_levels,
-        include_invariants=args.invariant,
+        include_invariants=not args.no_invariant,
         dry_run=args.dry_run,
         resume=not args.no_resume,
     )

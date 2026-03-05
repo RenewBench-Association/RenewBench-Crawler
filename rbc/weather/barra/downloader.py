@@ -111,10 +111,10 @@ class BarraDownloader:
         if base_output_path.name == self.model:
             self.output_path = base_output_path
         else:
-            self.output_path = base_output_path / self.model
+            self.output_path = Path(base_output_path, self.model)
         self.output_path.mkdir(parents=True, exist_ok=True)
 
-        self.invariant_output_path = self.output_path / "invariant"
+        self.invariant_output_path = Path(self.output_path, "invariant")
 
         self.config = MODEL_CONFIG[self.model]
         self.temporal_res: str = self.config["temporal_res"]
@@ -182,7 +182,7 @@ class BarraDownloader:
         self._validate_variables()
 
         # Setup checkpoint
-        self.checkpoint_path = self.output_path / "status.pickle"
+        self.checkpoint_path = Path(self.output_path, "status.pickle")
 
         # Initialize or load checkpoint
         self.checkpoint: dict[tuple[int, str, str], int] = {}
@@ -300,12 +300,12 @@ class BarraDownloader:
         barra_code = self._get_barra_param(variable)
         if barra_code in INVARIANT_VARIABLES:
             filename = f"barra_{self.model}_fx_{barra_code}.nc"
-            return self.invariant_output_path / filename
+            return Path(self.invariant_output_path, filename)
         else:
             filename = (
                 f"barra_{self.model}_{self.temporal_res}_{year}{month}_{barra_code}.nc"
             )
-        return self.output_path / filename
+        return Path(self.output_path, filename)
 
     def _download_variable(self, year: int, month: str, variable: str) -> int:
         """Download a single BARRA data file from the NCI THREDDS server.
@@ -332,7 +332,7 @@ class BarraDownloader:
             logger.info(
                 f"{year}-{month} ({variable}): DRY RUN - Would download from {url}"
             )
-            return 1
+            return 0
 
         try:
             logger.info(
