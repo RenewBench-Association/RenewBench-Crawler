@@ -212,13 +212,13 @@ def test_downloader_initialization_invalid_year(tmp_path: Path) -> None:
 
 
 def test_downloader_initialization_invalid_month(tmp_path: Path) -> None:
-    """Failure path for initialization with a non-zero-padded month.
+    """Failure path for initialization with an invalid month.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
     """
     with pytest.raises(ValueError, match="Invalid months"):
-        BarraDownloader(output_path=tmp_path, model="R2", years=[2020], months=["1"])
+        BarraDownloader(output_path=tmp_path, model="R2", years=[2020], months=["13"])
 
 
 # ----------------------------------
