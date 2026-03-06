@@ -201,6 +201,26 @@ def test_downloader_initialization_invalid_variables(tmp_path: Path) -> None:
         )
 
 
+def test_downloader_initialization_invalid_year(tmp_path: Path) -> None:
+    """Failure path for initialization with an out-of-range year.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with pytest.raises(ValueError, match="Invalid years"):
+        BarraDownloader(output_path=tmp_path, model="R2", years=[1800])
+
+
+def test_downloader_initialization_invalid_month(tmp_path: Path) -> None:
+    """Failure path for initialization with a non-zero-padded month.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    with pytest.raises(ValueError, match="Invalid months"):
+        BarraDownloader(output_path=tmp_path, model="R2", years=[2020], months=["1"])
+
+
 # ----------------------------------
 # Tests - Checkpoint handling
 # ----------------------------------
@@ -308,7 +328,8 @@ def test_construct_file_path_invariant_uses_fx_name(tmp_path: Path) -> None:
         variables=["orography"],
     )
 
-    file_path = downloader._construct_file_path(2022, "04", "orography")
+    # Invariant variables ignore year/month; use sentinel values matching the actual call site.
+    file_path = downloader._construct_file_path(0, "fx", "orography")
 
     assert file_path.parent.name == "invariant"
     assert file_path.name == "barra_C2_20min_fx_orog.nc"
@@ -382,7 +403,8 @@ def test_build_opendap_url_invariant_uses_fx_path(tmp_path: Path) -> None:
         variables=["land_sea_mask"],
     )
 
-    url = downloader._build_opendap_url(2022, "04", "land_sea_mask")
+    # Invariant variables ignore year/month; use sentinel values matching the actual call site.
+    url = downloader._build_opendap_url(0, "fx", "land_sea_mask")
 
     assert "/fx/sftlf/latest/" in url
     assert "_v1.nc" in url
@@ -489,8 +511,8 @@ def test_temporal_res_20min_c2(tmp_path: Path) -> None:
     assert downloader.temporal_res == "20min"
 
 
-def test_temporal_res_20min_rejected_for_r2(tmp_path: Path) -> None:
-    """Test that selecting C2_20min differs from R2 temporal resolution.
+def test_temporal_res_r2_is_1hr(tmp_path: Path) -> None:
+    """Test that R2 model temporal resolution is 1hr.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
@@ -612,6 +634,10 @@ def test_dry_run_completes_without_error(tmp_path: Path) -> None:
     )
     downloader.download_data()
 
+    # Dry run must not write to checkpoint
+    assert downloader.checkpoint == {}
+    assert not downloader.checkpoint_path.exists()
+
 
 # ----------------------------------
 # Tests - Download data
@@ -668,6 +694,52 @@ def test_download_data_calls_download_variable(tmp_path: Path) -> None:
         )
 
 
+def test_download_data_calls_download_variable_for_invariant(tmp_path: Path) -> None:
+    """Test that download_data calls _download_variable with fx sentinels for invariants.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="R2",
+        years=[2020],
+        months=["01"],
+        variables=["orography"],
+        resume=False,
+    )
+
+    with patch.object(downloader, "_download_variable", return_value=1) as mock_dl:
+        downloader.download_data()
+        mock_dl.assert_called_once_with(year=0, month="fx", variable="orography")
+
+
+def test_download_data_skips_completed_invariant(tmp_path: Path) -> None:
+    """Test that download_data skips an invariant already marked in the checkpoint.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    checkpoint: dict = {("fx", "fx", "orography"): 1}
+    checkpoint_path = Path(tmp_path, "R2", "status.pickle")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(checkpoint_path, "wb") as f:
+        pickle.dump(checkpoint, f)
+
+    downloader = BarraDownloader(
+        output_path=tmp_path,
+        model="R2",
+        years=[2020],
+        months=["01"],
+        variables=["orography"],
+        resume=True,
+    )
+
+    with patch.object(downloader, "_download_variable") as mock_dl:
+        downloader.download_data()
+        mock_dl.assert_not_called()
+
+
 # ----------------------------------
 # Tests - Multiple models independent
 # ----------------------------------
@@ -718,6 +790,7 @@ def test_download_variable_success_writes_file(downloader: BarraDownloader) -> N
         "rbc.weather.barra.downloader.requests.get", return_value=mock_response
     ), patch("rbc.weather.barra.downloader.tqdm") as mock_tqdm:
         progress = MagicMock()
+        progress.__enter__.return_value = progress  # make context manager return itself
         mock_tqdm.return_value = progress
 
         result = downloader._download_variable(2020, "01", "1.5m_temperature")
@@ -727,7 +800,7 @@ def test_download_variable_success_writes_file(downloader: BarraDownloader) -> N
     assert output_file.exists()
     assert output_file.read_bytes() == b"abcd"
     assert progress.update.call_count == 2
-    progress.close.assert_called_once()
+    progress.__exit__.assert_called_once()
 
 
 def test_download_variable_request_exception_removes_partial(
@@ -765,7 +838,9 @@ def test_download_variable_generic_exception_removes_partial(
     with patch(
         "rbc.weather.barra.downloader.requests.get", return_value=mock_response
     ), patch("rbc.weather.barra.downloader.tqdm") as mock_tqdm:
-        mock_tqdm.return_value = MagicMock()
+        progress = MagicMock()
+        progress.__enter__.return_value = progress
+        mock_tqdm.return_value = progress
         result = downloader._download_variable(2020, "01", "1.5m_temperature")
 
     output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")

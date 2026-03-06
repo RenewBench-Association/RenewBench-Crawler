@@ -4,8 +4,7 @@
 Download BARRA reanalysis data from NCI THREDDS server.
 """
 
-import argparse
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 
 from loguru import logger
 
@@ -13,7 +12,7 @@ from rbc.config.loader import load_config, parse_key_value_pairs
 from rbc.weather.barra import BarraDownloader
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> Namespace:
     """Parse command line arguments.
 
     Returns:
@@ -96,14 +95,16 @@ def parse_arguments() -> argparse.Namespace:
 
     parser.add_argument(
         "--no-resume",
-        action="store_true",
-        help="Do not resume from checkpoint; start download from beginning.",
+        dest="resume",
+        action="store_false",
+        help="Do not resume download from a previous checkpoint.",
     )
+    parser.set_defaults(resume=True)
 
     parser.add_argument(
         "-o",
         "--cfg-options",
-        type=str,
+        action="append",
         nargs="+",
         help="Override YAML config values (supports nested keys). "
         "Example: -o paths.dst_dir_raw=/your/path/",
@@ -134,7 +135,7 @@ def main() -> None:
         pressure_levels=args.pressure_levels,
         include_invariants=not args.no_invariant,
         dry_run=args.dry_run,
-        resume=not args.no_resume,
+        resume=args.resume,
     )
     downloader.download_data()
 

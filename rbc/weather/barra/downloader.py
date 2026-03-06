@@ -3,6 +3,7 @@
 Download BARRA2 reanalysis data (R2, C2, or C2_20min) from National Computational Infrastructure (NCI) THREDDS server.
 """
 
+import datetime
 import pickle
 from pathlib import Path
 
@@ -47,6 +48,31 @@ def _normalize_model(model: str) -> str:
     return normalized_lookup[model_key]
 
 
+def _get_available_codes(model_name: str) -> set[str]:
+    """Return the set of BARRA codes available for a given model.
+
+    Args:
+        model_name (str): Normalized model key ("R2", "C2", or "C2_20min").
+
+    Returns:
+        set[str]: Set of BARRA parameter codes available for the model.
+    """
+    if model_name == "R2":
+        return (
+            R2_SINGLE_LEVEL_VARIABLES
+            | R2_PRESSURE_LEVEL_VARIABLES
+            | INVARIANT_VARIABLES
+        )
+    elif model_name == "C2":
+        return (
+            C2_SINGLE_LEVEL_VARIABLES
+            | C2_PRESSURE_LEVEL_VARIABLES
+            | INVARIANT_VARIABLES
+        )
+    else:
+        return C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
+
+
 class BarraDownloader:
     """BARRA reanalysis data downloader.
 
@@ -66,6 +92,7 @@ class BarraDownloader:
         output_path (Path): Path to output directory.
         checkpoint_path (Path): Path to checkpoint file for resume capability.
         checkpoint (dict): Dict tracking download status per (year, month, variable).
+        include_invariants (bool): If True, invariant variables are included in the download.
         dry_run (bool): If True, print requests without downloading.
         resume (bool): If True, resume from previous checkpoint.
     """
@@ -103,7 +130,8 @@ class BarraDownloader:
                 Defaults to True.
 
         Raises:
-            ValueError: If model name is not recognized.
+            ValueError: If model name is not recognized, any year is invalid,
+                or any month is out of range (01-12).
         """
         self.model = _normalize_model(model)
 
@@ -121,31 +149,34 @@ class BarraDownloader:
 
         self.years = sorted(years)
         self.months: list[str] = months or [f"{i:02d}" for i in range(1, 13)]
+
+        invalid_months = [
+            m for m in self.months if m not in {f"{i:02d}" for i in range(1, 13)}
+        ]
+        if invalid_months:
+            raise ValueError(
+                f"Invalid months: {invalid_months}. Months must be zero-padded strings '01'–'12'."
+            )
+
+        current_year = datetime.date.today().year
+        invalid_years = [y for y in self.years if not (1979 <= y <= current_year)]
+        if invalid_years:
+            raise ValueError(
+                f"Invalid years: {invalid_years}. Years must be between 1979 and {current_year}."
+            )
+
         self.include_invariants = include_invariants
         self.dry_run = dry_run
         self.resume = resume
 
         # Build available BARRA codes for selected model
-        if self.model == "R2":
-            available_codes = (
-                R2_SINGLE_LEVEL_VARIABLES
-                | R2_PRESSURE_LEVEL_VARIABLES
-                | INVARIANT_VARIABLES
-            )
-        elif self.model == "C2":
-            available_codes = (
-                C2_SINGLE_LEVEL_VARIABLES
-                | C2_PRESSURE_LEVEL_VARIABLES
-                | INVARIANT_VARIABLES
-            )
-        else:
-            available_codes = C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
+        self._available_codes = _get_available_codes(self.model)
 
         # Build set of descriptive names available for this model key
         self.available_variables = {
             name
             for name, code in VARIABLE_TO_BARRA_PARAM.items()
-            if code in available_codes
+            if code in self._available_codes
         }
 
         # Setup variables (use defaults if none provided)
@@ -185,7 +216,7 @@ class BarraDownloader:
         self.checkpoint_path = Path(self.output_path, "status.pickle")
 
         # Initialize or load checkpoint
-        self.checkpoint: dict[tuple[int, str, str], int] = {}
+        self.checkpoint: dict[tuple[int | str, str, str], int] = {}
         if resume and self.checkpoint_path.is_file():
             with open(self.checkpoint_path, "rb") as f:
                 self.checkpoint = pickle.load(f)
@@ -226,8 +257,11 @@ class BarraDownloader:
             ValueError: If any requested variable is not recognized or not
                 available for this model.
         """
-        # Check that all requested variables exist in our mapping
-        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_BARRA_PARAM]
+        # Check that all requested variables exist in our mapping or is already a BARRA code
+        all_known_vars = set(VARIABLE_TO_BARRA_PARAM.keys()) | set(
+            VARIABLE_TO_BARRA_PARAM.values()
+        )
+        invalid_vars = [v for v in self.variables if v not in all_known_vars]
 
         if invalid_vars:
             raise ValueError(
@@ -238,7 +272,9 @@ class BarraDownloader:
 
         # Check that the BARRA codes are available for this model
         unavailable_vars = [
-            v for v in self.variables if v not in self.available_variables
+            v
+            for v in self.variables
+            if self._get_barra_param(v) not in self._available_codes
         ]
 
         if unavailable_vars:
@@ -256,17 +292,47 @@ class BarraDownloader:
 
         Fetches files from NCI THREDDS server and downloads them according to
         checkpoint status. Supports resume capability.
+        Invariant (time-independent) variables are downloaded once before the
+        temporal loop.
         """
         logger.info(
             f"Starting BARRA {self.config['label']} download "
             f"({self.temporal_res} frequency)"
         )
 
+        # Split variables into invariant (time-independent) and temporal
+        invariant_vars = [
+            v for v in self.variables if self._get_barra_param(v) in INVARIANT_VARIABLES
+        ]
+        temporal_vars = [
+            v
+            for v in self.variables
+            if self._get_barra_param(v) not in INVARIANT_VARIABLES
+        ]
+
+        # Download invariant variables once (not per year/month)
+        for variable in invariant_vars:
+            task: tuple[int | str, str, str] = ("fx", "fx", variable)
+
+            if self.checkpoint.get(task, 0) == 1:
+                logger.info(f"({variable}): Invariant already downloaded. Skipping.")
+                continue
+
+            success_code = self._download_variable(
+                year=0, month="fx", variable=variable
+            )
+
+            if not self.dry_run:
+                self.checkpoint[task] = success_code
+                with open(self.checkpoint_path, "wb") as f:
+                    pickle.dump(self.checkpoint, f)
+
+        # Download temporal variables per year/month
         for year in self.years:
             logger.info(f"Processing year {year}...")
 
             for month in self.months:
-                for variable in self.variables:
+                for variable in temporal_vars:
                     task = (year, month, variable)
 
                     # Check if task was previously completed
@@ -280,9 +346,10 @@ class BarraDownloader:
                         year=year, month=month, variable=variable
                     )
 
-                    self.checkpoint[task] = success_code
-                    with open(self.checkpoint_path, "wb") as f:
-                        pickle.dump(self.checkpoint, f)
+                    if not self.dry_run:
+                        self.checkpoint[task] = success_code
+                        with open(self.checkpoint_path, "wb") as f:
+                            pickle.dump(self.checkpoint, f)
 
         logger.info("All downloads completed!")
 
@@ -305,7 +372,7 @@ class BarraDownloader:
             filename = (
                 f"barra_{self.model}_{self.temporal_res}_{year}{month}_{barra_code}.nc"
             )
-        return Path(self.output_path, filename)
+            return Path(self.output_path, filename)
 
     def _download_variable(self, year: int, month: str, variable: str) -> int:
         """Download a single BARRA data file from the NCI THREDDS server.
@@ -353,20 +420,18 @@ class BarraDownloader:
 
             # Download with progress tracking using tqdm
             chunk_size = 8192  # 8KB chunks
-            progress_bar = tqdm(
+            with tqdm(
                 total=total_size,
                 unit="B",
                 unit_scale=True,
                 desc=f"{year}-{month} ({variable})",
                 unit_divisor=1024,
-            )
-
-            with open(output_file, "wb") as f:
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        f.write(chunk)
-                        progress_bar.update(len(chunk))
-            progress_bar.close()
+            ) as progress_bar:
+                with open(output_file, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            f.write(chunk)
+                            progress_bar.update(len(chunk))
 
             logger.info(
                 f"{year}-{month} ({variable}): Successfully downloaded to {output_file}"
@@ -441,20 +506,7 @@ class BarraDownloader:
 
         for idx, model_name in enumerate(models):
             config = MODEL_CONFIG[model_name]
-            if model_name == "R2":
-                available_codes = (
-                    R2_SINGLE_LEVEL_VARIABLES
-                    | R2_PRESSURE_LEVEL_VARIABLES
-                    | INVARIANT_VARIABLES
-                )
-            elif model_name == "C2":
-                available_codes = (
-                    C2_SINGLE_LEVEL_VARIABLES
-                    | C2_PRESSURE_LEVEL_VARIABLES
-                    | INVARIANT_VARIABLES
-                )
-            else:
-                available_codes = C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
+            available_codes = _get_available_codes(model_name)
 
             all_vars = {
                 name
