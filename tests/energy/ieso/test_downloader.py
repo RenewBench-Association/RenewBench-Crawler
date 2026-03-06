@@ -414,7 +414,7 @@ def test_load_yearly_excel_missing_capacity(downloader: IesoDownloader) -> None:
             downloader._load_yearly_excel(url="http://fake.xlsx")
 
 
-def test_standardize_old_data(downloader: IesoDownloader):
+def test_standardize_old_data(downloader: IesoDownloader) -> None:
     """Happy path for "_standardize_old_data" method, ensuring transformations work.
 
     Args:

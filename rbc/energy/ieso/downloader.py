@@ -99,7 +99,7 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             ValueError: If an earlier year was provided than data exists for or if the
             dataframe is empty.
-            DataStructurError: If downloaded data does not have the required columns.
+            DataStructureError: If downloaded data does not have the required columns.
         """
         year = int(task[:4])
         month = int(task[5:7])
@@ -150,7 +150,7 @@ class IesoDownloader(EnergyDownloader):
             )
         return df
 
-    def _get_from_old_source(self, year: int, month: int):
+    def _get_from_old_source(self, year: int, month: int) -> pd.DataFrame:
         """Extract data from pre-04-2019 (old) source for a given month using the year's Excel.
 
         Args:
