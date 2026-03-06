@@ -183,12 +183,16 @@ def test_download_task_data(downloader: IesoDownloader, task: str) -> None:
         ("2019-05", 0, 1),  # first month routed to new source
     ],
 )
-def test_get_task_data(downloader: IesoDownloader, task: str) -> None:
+def test_get_task_data(
+    downloader: IesoDownloader, task: str, expect_old: int, expect_new: int
+) -> None:
     """Happy path for "_get_task_data" method.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (str): Month to download.
+        expect_old (int): Expected call count for _get_from_old_source.
+        expect_new (int): Expected call count for _get_from_new_source.
     """
     mock_df = get_mock_df(task)
     with patch.object(
