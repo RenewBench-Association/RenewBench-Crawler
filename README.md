@@ -1,5 +1,5 @@
 <p align="center">
-<img src="logos/RenewBench-Logo.png" alt="logo" width="400"/>
+<img src="docs/logos/RenewBench-Logo.png" alt="logo" width="400"/>
 </p>
 
 # RenewBench Crawlers and Data Processing
@@ -33,15 +33,50 @@ Alternatively, you can install ``rcb`` locally. To achieve this, there are two s
    - Install an editable version with developer dependencies: ``pip install -e ."[dev]"``
 
 ## Structure
-The RenewBench-Crawlers repository is structured as shown below:
-```
+The RenewBench-Crawler repository is structured as follows:
+
+```text
 .
-├── he he he - todo: https://tree.nathanfriend.com
+├── rbc/                     # Main package
+│   ├── config/                 # Processing of YAML configs
+│   │   ├── loader.py             # Load and validate configs
+│   │   └── schema.py             # Pydantic config models and registry
+│   ├── energy/                 # Energy data crawlers
+│   │   ├── eia/                  # EIA (US)
+│   │   ├── entsoe/               # ENTSO-e (EU)
+│   │   ├── epias/                # EPIAS (Turkey)
+│   │   └── taipower/             # Taipower (Taiwan)
+│   └── weather/                # Weather data crawlers
+│       ├── era5/                 # ERA5 (Global)
+│       └── icon_dream/           # ICON-DREAM (Global/Europe)
+│
+├── configs/                 # YAML config files
+│   ├── energy/                 # Energy source configs (EIA, ENTSO-E, EPIAS, ...)
+│   └── weather/                # Weather source configs (ERA5, ICON-DREAM, ...)
+│
+├── scripts/                 # CLI entry points
+│   ├── energy/                 # Scripts for energy sources
+│   └── weather/                # Scripts for weather sources
+│
+├── tests/                   # Test suite
+│   ├── config/                 # Tests for configuration schemas & loader
+│   ├── energy/                 # Tests for energy sources
+│   └── weather/                # Tests for weather sources
+│
+├── docs/                    # Project docs
+│   ├── logos/                  # Project logos
+│   └── *.md                    # Markdown overviews and guides
+│
+├── pyproject.toml           # Project configuration
+├── .pre-commit-config.yaml  # Pre-commit hooks configuration
+└── README.md                # This file
 ```
 
 ## Documentation
-Coming soon :fire:
+For an overview of what the repository has to offer as well as getting
+started, the following are available:
 
+<<<<<<< HEAD
 ### Data sources
 
 #### Energy
@@ -135,21 +170,32 @@ include your `<source>` for `<type> = energy | weather` data.
        each of the given functionalities, i.e. `test_downloader.py`.
 
        --- [Example: _test_downloader.py_ file](tests/energy/entsoe/test_downloader.py)
+=======
+- [**Data sources catalogue**](docs/data_sources.md):
+  Overview of all supported energy and weather data sources, including access
+  requirements and links to official docs.
+- [**Usage guide**](docs/guide_usage.md):
+  How to run the provided scripts of this repository (command-line interface,
+  config files, output locations).
+>>>>>>> main
 
 ## How to contribute
 Check out our [contribution guidelines](CONTRIBUTING.md) if you are interested in contributing to the RenewBench project :fire:.
-Please also carefully check our [code of conduct](CODE_OF_CONDUCT.md) :blue_heart:.
+Please also carefully check our [code of conduct](CODE_OF_CONDUCT.md) :blue_heart:
+
+For details on how to include a new energy or weather data source, see the
+[**step-by-step guide**](docs/guide_adding_new_source.md).
 
 ## Acknowledgments
 This work is funded under the Helmholtz UNLOCK Benchmarking call and supported by the
-[Helmholtz AI](https://www.helmholtz.ai/) platform grant.
+[Helmholtz AI](https://www.helmholtz.ai/) platform grant. It was performed with the
+help of the Large Scale Data Facility at the Karlsruhe Institute of
+Technology funded by the Ministry of Science, Research and the Arts
+Baden-Württemberg and by the Federal Ministry of Education and Research.
 
 
 -----------
-<div align="center">
-  <a href="http://www.kit.edu/english/index.php"><img src="./logos/logo_kit.svg" height="50px" hspace="3%" vspace="25px"></a>
-</div>
 
-<div align="center">
-<a href="https://www.helmholtz.ai/"><img src="./logos/logo_hai.svg" height="25px" hspace="3%" vspace="25px"></a>
-</div>
+<p align="center">
+  <a href="http://www.kit.edu/english/index.php"><img src="docs/logos/logo_kit.svg" height="50px" vspace="15" hspace="20" style="vertical-align: middle;"></a><a href="https://www.helmholtz.ai/"><img src="docs/logos/logo_hai.svg" height="25px" vspace="15" hspace="20" style="vertical-align: middle;"></a><a href="https://www.helmholtz.ai/"><img src="docs/logos/logo_hereon.svg" height="45px" vspace="15" hspace="20" style="vertical-align: middle;"></a>
+</p>

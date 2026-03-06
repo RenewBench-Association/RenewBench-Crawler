@@ -1,34 +1,33 @@
 #!/usr/bin/env python
-"""EPIAS DATA DOWNLOAD SCRIPT.
+"""IESO DATA DOWNLOAD SCRIPT.
 
-Download data from EPIAS Transparency Platform for Turkey.
+Download data from IESO website for Ontario, Canada.
 """
 
-import argparse
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
-from rbc.energy.epias import EpiasDownloader
+from rbc.energy.ieso import IesoDownloader
 from rbc.utils import setup_logging
 
-SOURCE = "epias"
+SOURCE = "ieso"
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> Namespace:
     """Parse command line arguments.
 
     Returns:
         argparse.Namespace: Namespace parsed command line arguments.
     """
-    parser = ArgumentParser(prog="EPIAS data download")
+    parser = ArgumentParser(prog="IESO data download")
     parser.add_argument(
         "-y",
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2010, 2026)),
+        default=list(range(2010, 2026)),  # these are the available years for hourly gen
         help=f"Years to download. Example: -y 2020 2021. "
         f"Default: {list(range(2010, 2026))}",
     )
@@ -44,14 +43,13 @@ def parse_arguments() -> argparse.Namespace:
         "--cfg_options",
         action="append",
         help="Override YAML config values (supports nested keys). "
-        "Example: -o paths.dst_dir_raw=/your/path/ -o "
-        "access.username=YOUR-SECRET-USERNAME",
+        "Example: -o paths.dst_dir_raw=/your/path/",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Coordinating EPIAS data download."""
+    """Coordinating IESO data download."""
     args = parse_arguments()
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
@@ -60,9 +58,7 @@ def main() -> None:
     logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
     logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
-    downloader = EpiasDownloader(
-        username=cfg.access.username,
-        password=cfg.access.password,
+    downloader = IesoDownloader(
         output_path=cfg.paths.dst_dir_raw,
         years=args.years,
         resume=args.resume,

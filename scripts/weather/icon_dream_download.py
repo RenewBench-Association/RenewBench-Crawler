@@ -12,6 +12,7 @@ from argparse import ArgumentParser
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
+from rbc.utils import setup_logging
 from rbc.weather.icon_dream import IconDreamDownloader
 
 
@@ -127,10 +128,13 @@ def get_downloader(
 
     source = "icon_dream_global" if region_name == "global" else "icon_dream_eu"
     logger.info(f"Loading '{source}' YAML config...")
-    config = load_config(source, overrides=overrides)
+    cfg = load_config(source, overrides=overrides)
+    setup_logging(output_dir=cfg.paths.dst_dir_raw)
+    logger.info(f"Flags for the '{source}' download:\n{args}")
+    logger.info(f"Config for the '{source}' download:\n{cfg}")
 
     downloader = IconDreamDownloader(
-        output_path=config.paths.dst_dir_raw,
+        output_path=cfg.paths.dst_dir_raw,
         years=args.years,
         months=args.months or None,
         variables=args.variables,
@@ -139,7 +143,7 @@ def get_downloader(
         resume=args.resume,
     )
 
-    logger.info(f"Config loaded for {source}: {config}")
+    logger.info(f"Config loaded for {source}: {cfg}")
     downloaders[region_name] = downloader
     return downloader
 
