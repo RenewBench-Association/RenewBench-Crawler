@@ -86,11 +86,12 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume download from a previous checkpoint. "
-        "Skips already downloaded year/month/variable combinations.",
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Do not resume download from a previous checkpoint.",
     )
+    parser.set_defaults(resume=True)
 
     parser.add_argument(
         "-o",

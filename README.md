@@ -53,16 +53,16 @@ The RenewBench-Crawler repository is structured as follows:
 │
 ├── configs/                 # YAML config files
 │   ├── energy/                 # Energy source configs (EIA, ENTSO-E, EPIAS, ...)
-│   └── weather/                # Weather source configs (BARRA2, ERA5, ICON-DREAM, ...)
+│   └── weather/                # Weather source configs (ERA5, ICON-DREAM, ...)
 │
 ├── scripts/                 # CLI entry points
 │   ├── energy/                 # Scripts for energy sources
-│   └── weather/                # Scripts for weather sources (barra_download.py, era5_download.py, ...)
+│   └── weather/                # Scripts for weather sources
 │
 ├── tests/                   # Test suite
 │   ├── config/                 # Tests for configuration schemas & loader
 │   ├── energy/                 # Tests for energy sources
-│   └── weather/                # Tests for weather sources (barra/, era5/, icon_dream/)
+│   └── weather/                # Tests for weather sources
 │
 ├── docs/                    # Project docs
 │   ├── logos/                  # Project logos
