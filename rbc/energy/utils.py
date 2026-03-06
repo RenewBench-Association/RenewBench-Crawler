@@ -7,6 +7,7 @@ import os
 import pickle
 import threading
 import time
+import urllib
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -19,6 +20,23 @@ WORKERS = 4
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 MAX_RATE_LIMIT_RETRIES = 6
+
+RETRY_ERRORS = (
+    # requests / urllib3 (used by requests.get/head)
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.HTTPError,
+    urllib3.exceptions.TimeoutError,
+    urllib3.exceptions.ReadTimeoutError,
+    urllib3.exceptions.ConnectTimeoutError,
+    urllib3.exceptions.HTTPError,
+    # urllib (standard - used by pandas)
+    urllib.error.HTTPError,
+    urllib.error.URLError,
+    # low-level errors (caught by both)
+    ConnectionError,
+    TimeoutError,
+)
 
 
 class DataStructureError(Exception):
@@ -33,7 +51,13 @@ class RateLimitError(Exception):
     pass
 
 
-class DailyDownloader(ABC):
+class InvalidError(Exception):
+    """Raised when provided values/arguments are invalid in some way that force a stop."""
+
+    pass
+
+
+class EnergyDownloader(ABC):
     """Abstract base class for parallelized daily energy downloader classes.
 
     Attributes:
@@ -45,16 +69,7 @@ class DailyDownloader(ABC):
         RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
     """
 
-    RETRY_ERRORS = (
-        requests.exceptions.Timeout,
-        requests.exceptions.ConnectionError,
-        requests.exceptions.HTTPError,
-        urllib3.exceptions.TimeoutError,
-        urllib3.exceptions.ReadTimeoutError,
-        urllib3.exceptions.ConnectTimeoutError,
-        ConnectionError,
-        TimeoutError,
-    )
+    RETRY_ERRORS = RETRY_ERRORS
 
     def __init__(self, output_path: Path, years: list[int], resume: bool = True):
         """Initializes the instance.
@@ -113,15 +128,31 @@ class DailyDownloader(ABC):
                 write_df_to_csv(df=df_gen, file_path=file_path)
                 return 1
 
-            except (DataStructureError, RateLimitError) as e:  # error that warrant exit
+            # errors that warrant immediate run kill
+            except (DataStructureError, RateLimitError, InvalidError) as e:
                 logger.critical(f"FATAL! Stopping run due to error: {e}")
                 os._exit(1)
 
             except ValueError as e:
                 logger.error(f"Missing data for {task}: {e}")
-                return 1  # skip day
+                return 1  # skip task
 
             except self.RETRY_ERRORS as e:
+                code = self._get_status_code(e)
+
+                if code:
+                    # 1. permanent missing data
+                    if code == 404:
+                        logger.warning(
+                            f"Data for task {task} not found (404). Skipping."
+                        )
+                        return 1
+                    # 2. permanent client errors (400-499, except rate limits 429)
+                    if 400 <= code < 500 and code != 429:
+                        logger.error(f"Permanent error {code} for {task}. Skipping.")
+                        return 1
+
+                # 3. everything else (500s, Timeouts, 429s) -> Retry
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY)
                 else:
@@ -141,6 +172,22 @@ class DailyDownloader(ABC):
     # --------------------------------------------
     # Helper methods
     # --------------------------------------------
+    @staticmethod
+    def _get_status_code(e: Exception) -> int | None:
+        """Extracts HTTP status code from various library exceptions.
+
+        Args:
+            e (Exception): Exception raised when an error occurs.
+
+        Returns:
+            int | None: HTTP status code if it was a HTTPError, otherwise None.
+        """
+        if hasattr(e, "response") and hasattr(e.response, "status_code"):  # requests
+            return e.response.status_code
+        if hasattr(e, "code"):  # urllib
+            return e.code
+        return None
+
     def _get_csv_path(self, task: str | tuple[str, str]) -> Path:
         """Get csv file path to which resume logic will be saved.
 
@@ -202,13 +249,13 @@ class DailyDownloader(ABC):
         os.replace(temp_path, checkpoint_path)
 
     def _get_date_list(self) -> list[str]:
-        """Get a list of all dates in the provided year(s).
+        """Get a list of all valid dates in the provided year(s).
 
         Includes checks to ensure future years are not evaluated and that if the
         current year is provided, nothing beyond the previous day is taken into account.
 
         Returns:
-            list[str]: List of all dates in the provided years.
+            list[str]: List of all valid dates, formatted as YYYY-MM-DD.
         """
         yesterday = (pd.Timestamp.now() - pd.Timedelta(days=1)).normalize()
 
@@ -233,6 +280,22 @@ class DailyDownloader(ABC):
 
         return all_dates
 
+    def _get_month_list(self) -> list[str]:
+        """Get a list of all valid months in the provided year(s).
+
+        Returns:
+            list[str]: List of all valid months, formatted as YYYY-MM.
+        """
+        return list(dict.fromkeys(d[:7] for d in self._get_date_list()))
+
+    def _get_year_list(self) -> list[str]:
+        """Get a list of all valid years among the provided year(s).
+
+        Returns:
+            list[str]: List of all valid years, formatted as YYYY.
+        """
+        return list(dict.fromkeys(d[:4] for d in self._get_date_list()))
+
 
 def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> None:
     """Write dataframe to csv file.
@@ -249,3 +312,44 @@ def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> N
     file_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(file_path, index=index)
     logger.info(f"Successfully wrote dataframe to '{file_path}'")
+
+
+def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
+    """Load pandas dataframe from a file such as an Excel or csv (file or URL directly).
+
+    Args:
+        file_path (Path | str): Path to the Excel file.
+        args (optional): Additional arguments to be passed to pandas loading
+        function, i.e. sheet_name for an Excel or index_col for a CSV.
+
+    Returns:
+        pd.DataFrame: Pandas dataframe extracted from the provided file.
+
+    Raises:
+        InvalidError: If the file doesn't have one of the expected suffixes, if the file
+        doesn't exist, if invalid arguments (args) were provided for loading with pandas.
+        RETRY_ERRORS: If the file is a URL that is inaccessible for some reason.
+    """
+    try:
+        if Path(file_path).suffix == ".xlsx":
+            df = pd.read_excel(str(file_path), **args)
+
+        elif Path(file_path).suffix == ".csv":
+            df = pd.read_csv(str(file_path), **args)
+
+        else:
+            raise InvalidError(
+                f"Invalid extension in '{file_path}' - not a csv or xlsx!"
+            )
+
+    except FileNotFoundError:
+        raise InvalidError(f"Invalid path - file '{file_path}' does not exist!")
+
+    except TypeError as e:
+        raise InvalidError(f"Invalid argument for loading from '{file_path}': {e}")
+
+    except RETRY_ERRORS:  # these can occur when the file is a URL!
+        raise
+
+    logger.info(f"Successfully loaded dataframe from '{file_path}'")
+    return df

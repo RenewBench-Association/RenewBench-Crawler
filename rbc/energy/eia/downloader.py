@@ -15,7 +15,7 @@ from requests import exceptions
 from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     WORKERS,
-    DailyDownloader,
+    EnergyDownloader,
     RateLimitError,
 )
 
@@ -23,7 +23,7 @@ URL_ROOT = "https://api.eia.gov/v2/"
 URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
 
 
-class EiaDownloader(DailyDownloader):
+class EiaDownloader(EnergyDownloader):
     """EIA data downloader.
 
     Attributes:

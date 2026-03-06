@@ -12,10 +12,10 @@ import pandas as pd
 from eptr2 import EPTR2
 from loguru import logger
 
-from rbc.energy.utils import WORKERS, DailyDownloader
+from rbc.energy.utils import WORKERS, EnergyDownloader
 
 
-class EpiasDownloader(DailyDownloader):
+class EpiasDownloader(EnergyDownloader):
     """EPIAS data downloader.
 
     Attributes:
