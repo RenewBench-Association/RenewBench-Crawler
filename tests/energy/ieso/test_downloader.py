@@ -176,7 +176,13 @@ def test_download_task_data(downloader: IesoDownloader, task: str) -> None:
         assert saved_df.iloc[0]["Hour 1"] == 16.2
 
 
-@pytest.mark.parametrize("task", ["2019-01", "2019-06"])
+@pytest.mark.parametrize(
+    "task, expect_old, expect_new",
+    [
+        ("2019-04", 1, 0),  # last month routed to old source
+        ("2019-05", 0, 1),  # first month routed to new source
+    ],
+)
 def test_get_task_data(downloader: IesoDownloader, task: str) -> None:
     """Happy path for "_get_task_data" method.
 
@@ -198,7 +204,8 @@ def test_get_task_data(downloader: IesoDownloader, task: str) -> None:
     assert df.iloc[0]["Delivery Date"] == f"{task}-01"
     assert df.iloc[0]["Generator"] == "A"
     assert df.iloc[0]["Hour 1"] == "10"
-    assert mock_old.call_count == 1 or mock_new.call_count == 1
+    assert mock_old.call_count == expect_old
+    assert mock_new.call_count == expect_new
 
 
 def test_get_task_data_year_before_2010(downloader: IesoDownloader) -> None:
