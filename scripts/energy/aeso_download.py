@@ -5,6 +5,7 @@ Download data from AESO box cloud storage site for Alberta, Canada.
 """
 
 from argparse import ArgumentParser, Namespace
+from datetime import datetime
 
 from loguru import logger
 
@@ -27,9 +28,9 @@ def parse_arguments() -> Namespace:
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2015, 2026)),  # 2015-2026 for 1h, 2015-2023 for 5min
+        default=list(range(2015, datetime.now().year + 1)),  # 5min: 2015-2023
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2015, 2026))}",
+        f"Default: {list(range(2015, datetime.now().year + 1))}",
     )
     parser.add_argument(
         "-tr",

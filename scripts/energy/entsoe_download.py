@@ -4,8 +4,8 @@
 Download data from ENTSO-E Transparency Platform for European bidding zones.
 """
 
-import argparse
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
+from datetime import datetime
 
 from entsoe.utils import mappings
 from loguru import logger
@@ -17,7 +17,7 @@ from rbc.utils import setup_logging
 SOURCE = "entsoe"
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> Namespace:
     """Parse command line arguments.
 
     Returns:
@@ -29,9 +29,9 @@ def parse_arguments() -> argparse.Namespace:
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2010, 2026)),
+        default=list(range(2005, datetime.now().year + 1)),
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2010, 2026))}",
+        f"Default: {list(range(2005, datetime.now().year + 1))}",
     )
     parser.add_argument(
         "-bz",
