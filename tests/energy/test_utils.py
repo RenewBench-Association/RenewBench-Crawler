@@ -2,7 +2,6 @@
 """Tests for energy utility functions and classes."""
 
 import pickle
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, cast
@@ -21,10 +20,12 @@ from rbc.energy.utils import (
     write_df_to_csv,
 )
 
-
 # ----------------------------------
 # Fixtures
 # ----------------------------------
+TASK_YESTERDAY = (pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m")
+
+
 class MockDownloader(EnergyDownloader):
     """A dummy child class to test EnergyDownloader logic directly."""
 
@@ -117,8 +118,13 @@ def test_threading_wrapper(
 
 
 @pytest.mark.parametrize(
-    "task, use_self_ckpt",
-    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
+    "task, use_self_ckpt, expected_valueerror_status",
+    [
+        ("2020-01-01", True, 1),  # for EIA/EPIAS/...
+        (TASK_YESTERDAY, True, 0),
+        (("ZONE_A", "2020-01-01"), False, 1),  # for Entso-E
+        (("ZONE_A", TASK_YESTERDAY), False, 0),
+    ],
 )
 @pytest.mark.parametrize(
     "code, expected_status, expected_sleep_calls",
@@ -134,6 +140,7 @@ def test_threading_error_catching(
     ckpt_setup: Callable,
     task: str | tuple[str, str],
     use_self_ckpt: bool,
+    expected_valueerror_status: int,
     code: int | None,
     expected_status: int,
     expected_sleep_calls: int,
@@ -149,6 +156,7 @@ def test_threading_error_catching(
         ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
         task (str | tuple[str, str]): Task for downloading.
         use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+        expected_valueerror_status (int): Expected ValueError status.
         code (int | None): Status code for HTTPError logic.
         expected_status (int): Expected status for resuming logic.
         expected_sleep_calls (int): Expected number of times sleep is called.
@@ -162,13 +170,13 @@ def test_threading_error_catching(
 
     mock_exit.assert_called_once_with(1)  # assert outside "with"-block for correct exec
 
-    # 2. Test missing data (ValueError -> status 1)
+    # 2. Test missing data (ValueError -> status 0 = current year, status 1 = prior year)
     checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
     with patch.object(downloader, "_get_task_data", side_effect=ValueError):
         with patch.object(downloader, "_save_checkpoint") as mock_save:
             downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
-            assert checkpoint[task] == 1
+            assert checkpoint[task] == expected_valueerror_status
             mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
     # 3. Test HTTPError - no code: (->0), retry: code=300 (->0), missing: code=404 (->1), client: code=400 (->1)
@@ -310,7 +318,7 @@ def test_get_date_list_future_years(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    downloader.years = [datetime.now().year + 1]
+    downloader.years = [pd.Timestamp.now().year + 1]
 
     with pytest.raises(ValueError, match="lie in the future"):
         downloader._get_date_list()

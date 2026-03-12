@@ -113,6 +113,11 @@ class EnergyDownloader(ABC):
     def _download_task_data(self, task: str | tuple[str, str]) -> int:
         """Parse data for a specific task and dump to CSV.
 
+        Child classes must raise / propagate errors the following errors to be handled here:
+        - DataStructureError / RateLimitError / InvalidError: to immediately kill a run.
+        - ValueError: when data is missing for a specific task.
+        - self.RETRY_ERRORS: when accessing generally fails.
+
         Args:
             task (str | tuple): Date or (zone, date) to download data for.
 
@@ -128,16 +133,22 @@ class EnergyDownloader(ABC):
                 write_df_to_csv(df=df_gen, file_path=file_path)
                 return 1
 
-            # errors that warrant immediate run kill
-            except (DataStructureError, RateLimitError, InvalidError) as e:
+            except (DataStructureError, RateLimitError, InvalidError) as e:  # kill run
                 logger.critical(f"FATAL! Stopping run due to error: {e}")
                 os._exit(1)
 
-            except ValueError as e:
+            except ValueError as e:  # handle missing data for task
                 logger.error(f"Missing data for {task}: {e}")
+
+                date = task[-1] if isinstance(task, tuple) else task
+                year = pd.Timestamp(date).year
+
+                if year == pd.Timestamp.now().year:
+                    return 0  # current year task -> might become available later!
+
                 return 1  # skip task
 
-            except self.RETRY_ERRORS as e:
+            except self.RETRY_ERRORS as e:  # handle access failures
                 code = self._get_status_code(e)
 
                 if code:
