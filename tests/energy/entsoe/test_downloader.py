@@ -11,7 +11,12 @@ import pytest
 from entsoe.query.decorators import ServiceUnavailableError
 
 from rbc.energy.entsoe import EntsoeDownloader
-from rbc.energy.utils import DataStructureError, DownloadKey
+from rbc.energy.utils import (
+    DataStructureError,
+    DownloadKey,
+    InvalidError,
+    MissingDataError,
+)
 
 
 # ----------------------------------
@@ -107,7 +112,7 @@ def test_downloader_initialization(
     args["bidding_zones"] = [bz]
 
     if not valid:
-        with pytest.raises(ValueError, match="not supported"):
+        with pytest.raises(InvalidError, match="not supported"):
             EntsoeDownloader(**args)
     else:
         downloader = EntsoeDownloader(**args)
@@ -273,7 +278,7 @@ def test_get_task_data_no_data_available(
     ) as mock_api:
         mock_api.return_value.query_api.return_value = []
 
-        with pytest.raises(ValueError, match="No data available"):
+        with pytest.raises(MissingDataError, match="No data available"):
             downloader._get_task_data(task)
 
 

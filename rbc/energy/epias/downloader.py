@@ -12,7 +12,13 @@ import pandas as pd
 from eptr2 import EPTR2
 from loguru import logger
 
-from rbc.energy.utils import WORKERS, DownloadKey, EnergyDownloader
+from rbc.energy.utils import (
+    WORKERS,
+    DownloadKey,
+    EnergyDownloader,
+    InvalidError,
+    MissingDataError,
+)
 
 
 class EpiasDownloader(EnergyDownloader):
@@ -40,10 +46,10 @@ class EpiasDownloader(EnergyDownloader):
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
 
         Raises:
-            ValueError: If login credentials are incorrect.
+            InvalidError: If login credentials are incorrect.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self.checkpoint_path = Path(self.output_path, "status.pickle")
@@ -54,7 +60,7 @@ class EpiasDownloader(EnergyDownloader):
         try:
             self.eptr = EPTR2(username=username, password=password)
         except Exception:
-            raise ValueError("Provided username and password are incorrect.")
+            raise InvalidError("Provided username and password are incorrect.")
 
     def download_data(self):
         """Parse data for all given years from EPIAS Platform and save to CSV."""
@@ -79,7 +85,7 @@ class EpiasDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for specific date.
 
         Raises:
-            ValueError: If no power plant or generation data is available.
+            MissingDataError: If no power plant or generation data is available.
         """
         task.validate_required_fields("date")
 
@@ -88,7 +94,7 @@ class EpiasDownloader(EnergyDownloader):
         end = (pd.Timestamp(start) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         df_pp = self.eptr.call("pp-list-for-date-range", start_date=start, end_date=end)
         if df_pp.empty:
-            raise ValueError(f"No power plant data available for {task}!")
+            raise MissingDataError(f"No power plant data available for {task}!")
 
         # get generation data in batches
         num_batches = math.ceil(len(df_pp) / 1000)  # max allowed batch size = 1000
@@ -101,6 +107,6 @@ class EpiasDownloader(EnergyDownloader):
 
         df_gen = pd.concat(gen_data)
         if df_gen.empty:
-            raise ValueError(f"No generation data available for {task}!")
+            raise MissingDataError(f"No generation data available for {task}!")
 
         return df_gen

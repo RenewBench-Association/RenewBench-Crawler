@@ -15,8 +15,11 @@ from requests import exceptions
 from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     WORKERS,
+    DataStructureError,
     DownloadKey,
     EnergyDownloader,
+    InvalidError,
+    MissingDataError,
     RateLimitError,
 )
 
@@ -47,10 +50,10 @@ class EiaDownloader(EnergyDownloader):
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
 
         Raises:
-            ValueError: If token is invalid or basic API call fails.
+            InvalidError: If token is invalid or basic API call fails.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self.token = token
@@ -63,11 +66,11 @@ class EiaDownloader(EnergyDownloader):
             response = requests.get(URL_ROOT, params={"api_key": self.token})
             if response.status_code != 200:
                 logger.info(f"Failed: {response.json().get('error', {}).get('code')}")
-                raise ValueError(f"Provided API token {token} incorrect.")
+                raise InvalidError(f"Provided API token {token} incorrect.")
 
         except Exception as e:
             logger.info(f"Failed: {e}")
-            raise ValueError(f"Provided API token {token} incorrect.")
+            raise InvalidError(f"Provided API token {token} incorrect.")
 
     def download_data(self):
         """Parse data for all given years from EIA site and save to CSV."""
@@ -100,11 +103,12 @@ class EiaDownloader(EnergyDownloader):
             'value', 'value-units']
 
         Raises:
-            ConnectionError/Timeout: If API issue occurred with connection or timeout.
+            ConnectionError/Timeout: If API issue occurred with connection or timeout or if
+                not all available data was downloaded.
             HTTPError: If request response is not 200.
             RateLimitError: If API rate limit has been exceeded.
-            ValueError: If response parsing failed, if not all available data was
-            downloaded, or if the dataframe is empty.
+            DataStructureError: If response parsing failed due to a change in EIA structure.
+            MissingDataError: If the loaded dataframe is empty.
         """
         task.validate_required_fields("date")
 
@@ -162,7 +166,8 @@ class EiaDownloader(EnergyDownloader):
                 all_data.extend(dict_data)
 
             except (requests.exceptions.JSONDecodeError, KeyError, ValueError) as e:
-                raise ValueError(
+                raise DataStructureError(
+                    f"EIA API structure change detected for task: {task}."
                     f"Failed parsing of data from {URL} with parameters {params}: "
                     f"{type(e).__name__}!"
                 )
@@ -180,11 +185,13 @@ class EiaDownloader(EnergyDownloader):
 
         # Check all available data was downloaded
         if len(all_data) != total_available:
-            raise ValueError(f"Incomplete download: {len(all_data)}/{total_available}")
+            raise ConnectionError(
+                f"Incomplete download: {len(all_data)}/{total_available}"
+            )
 
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
-            raise ValueError(f"No generation data available for {task}!")
+            raise MissingDataError(f"No generation data available for {task}!")
 
         df_gen = df_gen[df_gen["period"] != end]  # remove included hour from next day
         df_gen = df_gen.sort_values(["period", "respondent"], ignore_index=True)

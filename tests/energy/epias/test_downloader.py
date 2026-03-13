@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from rbc.energy.epias import EpiasDownloader
-from rbc.energy.utils import DownloadKey
+from rbc.energy.utils import DownloadKey, InvalidError, MissingDataError
 
 
 # ----------------------------------
@@ -97,7 +97,7 @@ def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
     with patch("rbc.energy.epias.downloader.EPTR2") as mock_eptr2:
         mock_eptr2.side_effect = Exception("Login Failed")
 
-        with pytest.raises(ValueError, match="incorrect"):
+        with pytest.raises(InvalidError, match="incorrect"):
             EpiasDownloader(**init_args)
 
 
@@ -214,7 +214,7 @@ def test_get_task_data_no_pp_data(
 
     downloader.eptr.call.side_effect = call_side_effect
 
-    with pytest.raises(ValueError, match="No power plant data"):
+    with pytest.raises(MissingDataError, match="No power plant data"):
         downloader._get_task_data(task)
 
 
@@ -239,5 +239,5 @@ def test_get_task_data_no_gen_data(
 
     downloader.eptr.call.side_effect = call_side_effect
 
-    with pytest.raises(ValueError, match="No generation data"):
+    with pytest.raises(MissingDataError, match="No generation data"):
         downloader._get_task_data(task)

@@ -15,7 +15,14 @@ import requests
 from box_sdk_gen import BoxClient, BoxDeveloperTokenAuth, FileBaseTypeField
 from loguru import logger
 
-from rbc.energy.utils import WORKERS, DataStructureError, DownloadKey, EnergyDownloader
+from rbc.energy.utils import (
+    WORKERS,
+    DataStructureError,
+    DownloadKey,
+    EnergyDownloader,
+    InvalidError,
+    MissingDataError,
+)
 
 URL_BASE = "https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5"
 BOXAPI = f"shared_link={URL_BASE}"
@@ -66,7 +73,7 @@ class AesoDownloader(EnergyDownloader):
                 or start from scratch (False). Defaults to True.
 
         Raises:
-            ValueError: If provided temporal_resolutions are invalid (not 1h &/ 5min).
+            InvalidError: If provided temporal_resolutions are invalid (not 1h &/ 5min).
             ConnectionError: If the AESO box endpoint isn't reachable.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
@@ -74,7 +81,9 @@ class AesoDownloader(EnergyDownloader):
         self.temporal_resolutions = temporal_resolutions
         invalid_t_res = set(temporal_resolutions) - set(FOLDER_ID_DICT.keys())
         if invalid_t_res:
-            raise ValueError(f"Invalid temporal resolution(s): {sorted(invalid_t_res)}")
+            raise InvalidError(
+                f"Invalid temporal resolution(s): {sorted(invalid_t_res)}"
+            )
 
         logger.info(
             f"AESO Downloader initialized for:"
@@ -143,7 +152,7 @@ class AesoDownloader(EnergyDownloader):
              "Planning Area", "Region"]
 
         Raises:
-            ValueError: If a month date was requested for which no data exists or if the
+            MissingDataError: If a month date was requested for which no data exists or if the
                 returned dataframe is empty.
             DataStructureError: If downloaded data does not have the required columns or
                 unparsable dates.
@@ -154,13 +163,13 @@ class AesoDownloader(EnergyDownloader):
         try:
             item = self._source_lookup[task.temporal_resolution][task.date]
         except KeyError:
-            raise ValueError("No AESO data available!")
+            raise MissingDataError("No AESO data available!")
 
         # load remote data into dataframe (using id and name because dict can't be cached!)
         df = self._load_zip(item_id=item["id"], item_name=item["name"])
 
         if df.empty:
-            raise ValueError("No generation data exists!")
+            raise MissingDataError("No generation data exists!")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:
@@ -182,7 +191,7 @@ class AesoDownloader(EnergyDownloader):
         df = df.loc[date_col.dt.to_period("M") == pd.Period(task.date, freq="M")].copy()
 
         if df.empty:
-            raise ValueError("No generation data left after month filter!")
+            raise MissingDataError("No generation data left after month filter!")
 
         df = df.sort_values(
             by=["Date (MST)", "Date (MPT)", "Asset Name"], ignore_index=True

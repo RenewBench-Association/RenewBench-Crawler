@@ -41,6 +41,12 @@ RETRY_ERRORS = (
 )
 
 
+class MissingDataError(Exception):
+    """Raised when a data source is missing data that a task is trying to download."""
+
+    pass
+
+
 class DataStructureError(Exception):
     """Raised when a data source changes its structure significantly."""
 
@@ -88,13 +94,13 @@ class DownloadKey:
         """Validates the date format if a date is provided.
 
         Raises:
-            AttributeError: If provided date or temporal resolution are in the wrong format.
+            ValueError: If provided date or temporal resolution are in the wrong format.
         """
         if self.date is not None and not self._DATE_PATTERN.match(self.date):
-            raise AttributeError(f"Invalid date / date format: '{self.date}'")
+            raise ValueError(f"Invalid date / date format: '{self.date}'")
 
         if not self._TRES_PATTERN.match(self.temporal_resolution):
-            raise AttributeError(
+            raise ValueError(
                 f"Invalid temporal resolution: '{self.temporal_resolution}'"
             )
 
@@ -116,12 +122,12 @@ class DownloadKey:
               fields (str): List of fields to check.
 
         Raises:
-              AttributeError: If any of the required fields are None.
+              ValueError: If any of the required fields are None.
         """
         for field in fields:
             value = getattr(self, field)
             if value is None or (isinstance(value, str) and not value.strip()):
-                raise AttributeError(
+                raise ValueError(
                     f"Required attribute '{field}' missing for task: {self}"
                 )
 
@@ -185,7 +191,7 @@ class EnergyDownloader(ABC):
 
         Child classes must raise / propagate errors the following errors to be handled here:
         - DataStructureError / RateLimitError / InvalidError: to immediately kill a run.
-        - ValueError: when data is missing for a specific task.
+        - MissingDataError: when data is missing for a specific task.
         - self.RETRY_ERRORS: when accessing generally fails.
 
         Args:
@@ -204,7 +210,7 @@ class EnergyDownloader(ABC):
                 logger.critical(f"FATAL! Stopping run due to error: {e}")
                 os._exit(1)
 
-            except ValueError as e:  # handle missing data for task
+            except MissingDataError as e:  # handle missing data for task
                 logger.error(f"Missing data for {task}: {e}")
 
                 task.validate_required_fields("date")
@@ -353,9 +359,6 @@ class EnergyDownloader(ABC):
 
         Returns:
             Path: Path to the csv file.
-
-        Raises:
-            ValueError: If date is missing.
         """
         task.validate_required_fields("date")
         parts: list[str | Path] = [self.output_path, task.temporal_resolution]
@@ -368,6 +371,39 @@ class EnergyDownloader(ABC):
     # --------------------------------------------
     # General helper methods
     # --------------------------------------------
+    # @staticmethod
+    # def _check_connection(requests_func: Callable[[], requests.Response]) -> None:
+    #     """Generic wrapper to check the API/URL connection status using requests.
+    #
+    #     Args:
+    #         requests_func (Callable): Function to check the requests call response.
+    #
+    #     Raises:
+    #         HTTPError: If access to remote site failed.
+    #         ConnectionError: If remote site is unreachable.
+    #     """
+    #     try:
+    #         response = requests_func()
+    #         response.raise_for_status()
+    #
+    #     except requests.exceptions.HTTPError:  # catch 4xx/5xx status codes
+    #         if response.content:
+    #             reason = response.json().get("error", {}).get("code", "Unknown Error")
+    #             error_msg = f"status {response.status_code} ({reason})"
+    #         elif response.reason:
+    #             error_msg = f"status {response.status_code} ({response.reason})"
+    #         else:
+    #             error_msg = f"status {response.status_code} (Empty Response)"
+    #
+    #         logger.error(f"API/URL request failed with {error_msg}")
+    #         raise requests.exceptions.HTTPError(
+    #             f"API/URL access failed with {error_msg}"
+    #         )
+    #
+    #     except requests.exceptions.RequestException as e:  # catch connection/timeout/..
+    #         logger.error("Initialization connectivity check failed!")
+    #         raise ConnectionError(f"API/URL unreachable: {e}") from e
+
     @staticmethod
     def _get_status_code(e: Exception) -> int | None:
         """Extracts HTTP status code from various library exceptions.
@@ -412,7 +448,7 @@ class EnergyDownloader(ABC):
             )
 
         if not all_dates:
-            raise ValueError(f"Provided years '{self.years}' lie in the future!")
+            raise InvalidError(f"Provided years '{self.years}' lie in the future!")
 
         return all_dates
 

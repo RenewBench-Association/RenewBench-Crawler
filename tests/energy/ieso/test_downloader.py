@@ -11,7 +11,7 @@ from requests import exceptions
 
 from rbc.energy.ieso import IesoDownloader
 from rbc.energy.ieso.downloader import EXPECTED_COLS, URL_NEW_BASE, URL_OLD_BASE
-from rbc.energy.utils import DataStructureError, DownloadKey
+from rbc.energy.utils import DataStructureError, DownloadKey, MissingDataError
 
 
 # ----------------------------------
@@ -237,7 +237,7 @@ def test_get_task_data_year_before_2010(downloader: IesoDownloader) -> None:
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
         with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
-            with pytest.raises(ValueError, match="No data for year"):
+            with pytest.raises(MissingDataError, match="No data for year"):
                 downloader._get_task_data(task)
 
 
@@ -252,7 +252,7 @@ def test_get_task_data_df_empty(downloader: IesoDownloader, task: DownloadKey) -
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
         with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
-            with pytest.raises(ValueError, match="No generation data available"):
+            with pytest.raises(MissingDataError, match="No generation data available"):
                 downloader._get_task_data(task)
 
 

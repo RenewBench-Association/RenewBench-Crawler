@@ -19,6 +19,8 @@ from rbc.energy.utils import (
     DataStructureError,
     DownloadKey,
     EnergyDownloader,
+    InvalidError,
+    MissingDataError,
     write_df_to_csv,
 )
 
@@ -61,14 +63,14 @@ class EntsoeDownloader(EnergyDownloader):
             or start from scratch (False). Defaults to True.
 
         Raises:
-            ValueError: If bidding zone is unsupported or token is invalid.
+            InvalidError: If bidding zone is unsupported or token is invalid.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self.bidding_zones = list(bidding_zones)
 
         for bz in self.bidding_zones:
             if bz not in list(mappings.keys()):
-                raise ValueError(f"Bidding zone '{bz}' is not supported.")
+                raise InvalidError(f"Bidding zone '{bz}' is not supported.")
 
         logger.info(
             f"Entsoe-E Downloader initialized for:"
@@ -78,7 +80,7 @@ class EntsoeDownloader(EnergyDownloader):
 
         set_config(security_token=token)
         if get_config().security_token is None:
-            raise ValueError(
+            raise InvalidError(
                 f"Entsoe-apy failed to successfully configure token '{token}'!"
             )
 
@@ -116,7 +118,7 @@ class EntsoeDownloader(EnergyDownloader):
         Raises:
             ConnectionError: If Entso-E TP is unavailable or the API did not
             return the requested data (this will cause a retry on the next resume).
-            ValueError: If no data is available for the given task (this will cause
+            MissingDataError: If no data is available for the given task (this will cause
             the task to be skipped in future).
             DataStructureError: If data structure has changed and relevant columns
             are missing (this will cause the entire run to be killed).
@@ -142,7 +144,7 @@ class EntsoeDownloader(EnergyDownloader):
             raise ConnectionError(f"API call did not return requested data for {task}!")
 
         if not result:
-            raise ValueError(
+            raise MissingDataError(
                 f"No data available for {task}! Setting download status to 1."
             )
 
@@ -182,12 +184,12 @@ class EntsoeDownloader(EnergyDownloader):
             DataStructureError: If columns are missing temporal resolution values
         """
         df_full = df.dropna(subset=["Temporal_Resolution"])
-        if df.all().all() != df_full.all().all():
+        if len(df_full) != len(df):
             logger.warning(
-                "Some rows are missing temporal resolution values! Skipping."
+                "Some rows are missing temporal resolution values! Removing those rows."
             )
 
-        for t_res, df_t_res in df.groupby("Temporal_Resolution", sort=True):
+        for t_res, df_t_res in df_full.groupby("Temporal_Resolution", sort=True):
             updated_task = task.update(
                 temporal_resolution=self._normalize_temporal_resolution(str(t_res))
             )

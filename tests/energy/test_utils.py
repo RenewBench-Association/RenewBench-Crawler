@@ -17,6 +17,7 @@ from rbc.energy.utils import (
     DownloadKey,
     EnergyDownloader,
     InvalidError,
+    MissingDataError,
     load_df_from_file,
     write_df_to_csv,
 )
@@ -131,7 +132,7 @@ def test_threading_wrapper(
 
 
 @pytest.mark.parametrize(
-    "task, use_self_ckpt, expected_valueerror_status",
+    "task, use_self_ckpt, expected_error_status",
     [
         (TASK_DAY, True, 1),  # for EIA/EPIAS/...
         (TASK_YESTERDAY, True, 0),
@@ -153,7 +154,7 @@ def test_threading_error_catching(
     ckpt_setup: Callable,
     task: DownloadKey,
     use_self_ckpt: bool,
-    expected_valueerror_status: int,
+    expected_error_status: int,
     code: int | None,
     expected_status: int,
     expected_sleep_calls: int,
@@ -169,7 +170,7 @@ def test_threading_error_catching(
         ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
         task (DownloadKey): The metadata for a task to download data for.
         use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
-        expected_valueerror_status (int): Expected ValueError status.
+        expected_error_status (int): Expected MissingDataError status.
         code (int | None): Status code for HTTPError logic.
         expected_status (int): Expected status for resuming logic.
         expected_sleep_calls (int): Expected number of times sleep is called.
@@ -185,13 +186,13 @@ def test_threading_error_catching(
 
     mock_exit.assert_called_once_with(1)  # assert outside "with"-block for correct exec
 
-    # 2. Test missing data (ValueError -> status 0 = current year, status 1 = prior year)
+    # 2. Test missing data (MissingDataError -> status 0 = current year, status 1 = prior)
     checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
-    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
+    with patch.object(downloader, "_get_task_data", side_effect=MissingDataError):
         with patch.object(downloader, "_save_checkpoint") as mock_save:
             downloader._threading_wrapper(task, checkpoint, checkpoint_path)
 
-            assert checkpoint[ckpt_key] == expected_valueerror_status
+            assert checkpoint[ckpt_key] == expected_error_status
             mock_save.assert_called_once_with(checkpoint, checkpoint_path)
 
     # 3. Test HTTPError - no code: (->0), retry: code=300 (->0), missing: code=404 (->1), client: code=400 (->1)
@@ -268,7 +269,7 @@ def test_build_task_path_invalid_task(downloader: MockDownloader) -> None:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
     invalid_task = DownloadKey()
-    with pytest.raises(AttributeError, match="Required attribute 'date'"):
+    with pytest.raises(ValueError, match="Required attribute 'date'"):
         downloader._build_task_path(invalid_task)
 
 
@@ -339,7 +340,7 @@ def test_get_date_list_future_years(downloader: MockDownloader) -> None:
     """
     downloader.years = [pd.Timestamp.now().year + 1]
 
-    with pytest.raises(ValueError, match="lie in the future"):
+    with pytest.raises(InvalidError, match="lie in the future"):
         downloader._get_date_list()
 
 

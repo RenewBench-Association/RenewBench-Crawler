@@ -17,6 +17,7 @@ from rbc.energy.utils import (
     DataStructureError,
     DownloadKey,
     EnergyDownloader,
+    MissingDataError,
     load_df_from_file,
 )
 
@@ -48,7 +49,7 @@ class IesoDownloader(EnergyDownloader):
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
 
         Raises:
             ConnectionError: If the base URLs aren't reachable.
@@ -98,8 +99,8 @@ class IesoDownloader(EnergyDownloader):
             'Hour 1', 'Hour 2', 'Hour 3', ..., 'Hour 23', 'Hour 24']
 
         Raises:
-            ValueError: If an earlier year was provided than data exists for or if the
-            dataframe is empty.
+            MissingDataError: If an earlier year was provided than data exists for or if the
+                dataframe is empty.
             DataStructureError: If downloaded data does not have the required columns.
         """
         task.validate_required_fields("date")
@@ -109,7 +110,7 @@ class IesoDownloader(EnergyDownloader):
         month = dt.month
 
         if year < 2010:
-            raise ValueError(f"No data for year {year}, as it's before 2010")
+            raise MissingDataError(f"No data for year {year}, as it's before 2010")
 
         if year < 2019 or (year == 2019 and month <= 4):
             df = self._get_from_old_source(year, month)
@@ -117,7 +118,7 @@ class IesoDownloader(EnergyDownloader):
             df = self._get_from_new_source(year, month)
 
         if df.empty:
-            raise ValueError(f"No generation data available for {year}-{month}")
+            raise MissingDataError(f"No generation data available for {year}-{month}")
 
         if not all(col in df.columns for col in EXPECTED_COLS):
             raise DataStructureError(

@@ -10,7 +10,14 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.eia import EiaDownloader
-from rbc.energy.utils import MAX_RATE_LIMIT_RETRIES, DownloadKey, RateLimitError
+from rbc.energy.utils import (
+    MAX_RATE_LIMIT_RETRIES,
+    DataStructureError,
+    DownloadKey,
+    InvalidError,
+    MissingDataError,
+    RateLimitError,
+)
 
 
 # ----------------------------------
@@ -118,7 +125,7 @@ def test_downloader_initialization_invalid_token(init_args: dict) -> None:
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = MagicMock(status_code=400)
 
-        with pytest.raises(ValueError, match="incorrect"):
+        with pytest.raises(InvalidError, match="incorrect"):
             EiaDownloader(**init_args)
 
 
@@ -280,7 +287,7 @@ def test_get_task_data_failed_response_parsing(
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
 
-        with pytest.raises(ValueError, match="Failed parsing"):
+        with pytest.raises(DataStructureError, match="Failed parsing"):
             downloader._get_task_data(task)
 
 
@@ -299,7 +306,7 @@ def test_get_task_data_incomplete_download(
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
 
-        with pytest.raises(ValueError, match="Incomplete download"):
+        with pytest.raises(ConnectionError, match="Incomplete download"):
             downloader._get_task_data(task)
 
 
@@ -318,5 +325,5 @@ def test_get_task_data_empty_response(
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
 
-        with pytest.raises(ValueError, match="No generation data available"):
+        with pytest.raises(MissingDataError, match="No generation data available"):
             downloader._get_task_data(task)
