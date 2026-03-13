@@ -15,6 +15,7 @@ from requests import exceptions
 from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     WORKERS,
+    DownloadKey,
     EnergyDownloader,
     RateLimitError,
 )
@@ -70,18 +71,18 @@ class EiaDownloader(EnergyDownloader):
 
     def download_data(self):
         """Parse data for all given years from EIA site and save to CSV."""
-        all_dates = self._get_date_list()
+        tasks = [DownloadKey(date=d) for d in self._get_date_list()]
 
-        logger.info(f"Downloading data for: {all_dates[0]} to {all_dates[-1]}")
+        logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
             executor.map(
                 lambda t: self._threading_wrapper(
                     t, self.checkpoint, self.checkpoint_path
                 ),
-                all_dates,
+                tasks,
             )
 
-    def _get_task_data(self, task: str) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
         """Get EIA generation data per plant for one specific date.
 
         The parsing cap lies at 5000 rows per API call. The amount of hourly data
@@ -91,7 +92,7 @@ class EiaDownloader(EnergyDownloader):
         instead of per month/year.
 
         Args:
-            task (str): Date to get data for.
+            task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
 
         Returns:
             pd.DataFrame: Dataframe for specific date with the columns
@@ -105,7 +106,9 @@ class EiaDownloader(EnergyDownloader):
             ValueError: If response parsing failed, if not all available data was
             downloaded, or if the dataframe is empty.
         """
-        dt = pd.Period(task, freq="D")
+        task.validate_required_fields("date")
+
+        dt = pd.Period(task.date, freq="D")
         start = dt.strftime("%Y-%m-%dT00")
         end = pd.Period((dt + pd.Timedelta(days=1)), freq="D").strftime("%Y-%m-%dT00")
 

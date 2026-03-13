@@ -11,7 +11,7 @@ import pytest
 from entsoe.query.decorators import ServiceUnavailableError
 
 from rbc.energy.entsoe import EntsoeDownloader
-from rbc.energy.utils import DataStructureError
+from rbc.energy.utils import DataStructureError, DownloadKey
 
 
 # ----------------------------------
@@ -65,17 +65,20 @@ def downloader(api_config: Generator, init_args: dict) -> EntsoeDownloader:
 
 
 @pytest.fixture
-def download_args(init_args: dict) -> tuple[tuple, dict, Path]:
+def download_args(init_args: dict) -> tuple[DownloadKey, dict, Path]:
     """Gets a set of download arguments from the initialisation arguments.
 
     Args:
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
 
     Returns:
-        tuple[tuple, dict, Path]: Tuple of ((bidding zone, date), checkpoint,
-        checkpoint_path) for downloading.
+        tuple[DownloadKey, dict, Path]: Tuple of (task, checkpoint, checkpoint_path) for
+            downloading.
     """
-    task = (init_args["bidding_zones"][0], f"{init_args['years'][0]}-01-01")
+    task = DownloadKey(
+        date=f"{init_args['years'][0]}-01-01",
+        bidding_zone=init_args["bidding_zones"][0],
+    )
     checkpoint: dict = {}
     checkpoint_path = Path(
         init_args["output_path"], init_args["bidding_zones"][0], "status.pickle"
@@ -127,20 +130,21 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
     bz = args["bidding_zones"][0]
     y = args["years"][0]
     checkpoint = {
-        (bz, d): 1
+        EntsoeDownloader._turn_task_into_checkpoint_key(
+            DownloadKey(date=d, bidding_zone=bz)
+        ): 1
         for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31")
         .strftime("%Y-%m-%d")
         .tolist()
     }
 
-    bz_path = Path(args["output_path"], bz)
-    bz_path.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = Path(bz_path, "status.pickle")
-    with open(checkpoint_path, "wb") as f:
-        pickle.dump(checkpoint, f)
-
     args["resume"] = True
     downloader = EntsoeDownloader(**args)
+
+    checkpoint_path = downloader._build_checkpoint_path(DownloadKey(bidding_zone=bz))
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(checkpoint_path, "wb") as f:
+        pickle.dump(checkpoint, f)
 
     with patch.object(downloader, "_download_task_data") as mock_dump:
         downloader.download_data()
@@ -159,13 +163,13 @@ def test_download_day_data(downloader: EntsoeDownloader, download_args: tuple) -
         download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
-    mock_df = pd.DataFrame({"Generation_MW": [16.2]})
+    mock_df = pd.DataFrame({"Generation_MW": [16.2], "Temporal_Resolution": ["PT60M"]})
 
     with patch.object(downloader, "_get_task_data", return_value=mock_df):
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = Path(downloader.output_path, task[0], task[1] + ".csv")
+        expected_file = downloader._build_task_path(task)
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
@@ -180,7 +184,7 @@ def test_get_task_data(downloader: EntsoeDownloader, download_args: tuple) -> No
         download_args (tuple): Tuple of download arguments for running _get_task_data.
     """
     task, checkpoint, checkpoint_path = download_args
-    timestamp = f"{task[1]}T00:00:00+00:00"
+    timestamp = f"{task.date}T00:00:00+00:00"
     return_value = [
         {
             "timestamp": timestamp,

@@ -15,6 +15,7 @@ from loguru import logger
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
+    DownloadKey,
     EnergyDownloader,
     load_df_from_file,
 )
@@ -69,18 +70,18 @@ class IesoDownloader(EnergyDownloader):
 
     def download_data(self) -> None:
         """Parse data for all given years from IESO site and save to CSV."""
-        all_months = self._get_month_list()
+        tasks = [DownloadKey(date=d) for d in self._get_month_list()]
 
-        logger.info(f"Downloading data for: {all_months[0]} to {all_months[-1]}")
+        logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
             executor.map(
                 lambda t: self._threading_wrapper(
                     t, self.checkpoint, self.checkpoint_path
                 ),
-                all_months,
+                tasks,
             )
 
-    def _get_task_data(self, task: str) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
         """Get IESO generation data per plant for one specific month.
 
         IESO's data storing structure and method was changed in April 2019 from
@@ -89,7 +90,7 @@ class IesoDownloader(EnergyDownloader):
         in the newer data and stored per month as well.
 
         Args:
-            task (str): Month to get data for.
+            task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for specific date with the columns
@@ -101,8 +102,11 @@ class IesoDownloader(EnergyDownloader):
             dataframe is empty.
             DataStructureError: If downloaded data does not have the required columns.
         """
-        year = int(task[:4])
-        month = int(task[5:7])
+        task.validate_required_fields("date")
+
+        dt = pd.Period(task.date, freq="M")
+        year = dt.year
+        month = dt.month
 
         if year < 2010:
             raise ValueError(f"No data for year {year}, as it's before 2010")
@@ -227,6 +231,9 @@ class IesoDownloader(EnergyDownloader):
         df = df.sort_values(by=["Delivery Date", "Generator", "Measurement"])
         return df
 
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
     @staticmethod
     def standardize_old_data(df: pd.DataFrame, measurement_type: str) -> pd.DataFrame:
         """Standardize old (pre-2019) dataframes to match the newer CSV format.

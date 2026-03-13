@@ -15,7 +15,7 @@ import requests
 from box_sdk_gen import BoxClient, BoxDeveloperTokenAuth, FileBaseTypeField
 from loguru import logger
 
-from rbc.energy.utils import WORKERS, DataStructureError, EnergyDownloader
+from rbc.energy.utils import WORKERS, DataStructureError, DownloadKey, EnergyDownloader
 
 URL_BASE = "https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5"
 BOXAPI = f"shared_link={URL_BASE}"
@@ -108,22 +108,21 @@ class AesoDownloader(EnergyDownloader):
         all_months = self._get_month_list()
 
         for t_res in self.temporal_resolutions:
-            t_res_path = Path(self.output_path, t_res)
-            t_res_path.mkdir(parents=True, exist_ok=True)
-
-            checkpoint_path = Path(t_res_path, "status.pickle")
+            checkpoint_path = self._build_checkpoint_path(
+                DownloadKey(temporal_resolution=t_res)
+            )
             checkpoint = self._load_checkpoint(checkpoint_path)
 
-            logger.info(
-                f"Downloading data in '{t_res}' for: {all_months[0]} to {all_months[-1]}"
-            )
+            tasks = [DownloadKey(date=d, temporal_resolution=t_res) for d in all_months]
+
+            logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
             with ThreadPoolExecutor(max_workers=WORKERS) as executor:
                 executor.map(
                     lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
-                    [(t_res, d) for d in all_months],
+                    tasks,
                 )
 
-    def _get_task_data(self, task: tuple[str, str]) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
         """Get AESO generation data per plant for one specific month.
 
         AESO provides 5-min (2015 - 2023) and hourly (2015 - now) data on their site.
@@ -134,7 +133,8 @@ class AesoDownloader(EnergyDownloader):
         - "CSD Generation (hourly) - YYYY-MM.zip" from 2025-07 onward.
 
         Args:
-            task (tuple[str, str]): Tuple of (temporal res, month (YYYY-MM)) to get data for.
+            task (DownloadKey): The metadata of a downloading task,
+                here: date (YYYY-MM), temporal_resolution
 
         Returns:
             pd.DataFrame: Dataframe for specific date with the columns
@@ -148,18 +148,16 @@ class AesoDownloader(EnergyDownloader):
             DataStructureError: If downloaded data does not have the required columns or
                 unparsable dates.
         """
-        t_res, date = task
+        task.validate_required_fields("date", "temporal_resolution")
 
         # find remote item that contains relevant data
         try:
-            item = self._source_lookup[t_res][date]
+            item = self._source_lookup[task.temporal_resolution][task.date]
         except KeyError:
             raise ValueError("No AESO data available!")
 
-        # load remote data into dataframe
-        df = self._load_zip(
-            item_id=item["id"], item_name=item["name"]
-        )  # can't cache dict
+        # load remote data into dataframe (using id and name because dict can't be cached!)
+        df = self._load_zip(item_id=item["id"], item_name=item["name"])
 
         if df.empty:
             raise ValueError("No generation data exists!")
@@ -181,7 +179,7 @@ class AesoDownloader(EnergyDownloader):
                 f"'Date (MPT)' contains unparsable values."
             )
 
-        df = df.loc[date_col.dt.to_period("M") == pd.Period(date, freq="M")].copy()
+        df = df.loc[date_col.dt.to_period("M") == pd.Period(task.date, freq="M")].copy()
 
         if df.empty:
             raise ValueError("No generation data left after month filter!")
@@ -236,20 +234,20 @@ class AesoDownloader(EnergyDownloader):
         """Build lookup table from AESO box site of all relevant files that can be downloaded.
 
         Returns:
-            dict: Lookup dict {<tr>: YYYY-MM: {"id": <id>, "name": <name>}, ...}
+            dict: Lookup dict {<t_res>: {YYYY-MM: {"id": <id>, "name": <name>}}, ...}
 
         Raises:
             DataStructureError: If downloaded data does not have capacity values.
         """
-        lookup: dict = {tr: {} for tr in self.temporal_resolutions}
+        lookup: dict = {t_res: {} for t_res in self.temporal_resolutions}
 
-        for tr in self.temporal_resolutions:
+        for t_res in self.temporal_resolutions:
             limit = 1000  # max allowed by box
             offset = 0
 
             while True:
                 items = self.client.folders.get_folder_items(
-                    FOLDER_ID_DICT[tr], boxapi=BOXAPI, limit=limit, offset=offset
+                    FOLDER_ID_DICT[t_res], boxapi=BOXAPI, limit=limit, offset=offset
                 )
 
                 for item in items.entries:
@@ -257,7 +255,7 @@ class AesoDownloader(EnergyDownloader):
                         item_dates = re.findall(r"\d{4}-\d{2}(?=[^0-9])", item.name)
 
                         if len(item_dates) == 1:
-                            lookup[tr][item_dates[0]] = {
+                            lookup[t_res][item_dates[0]] = {
                                 "id": item.id,
                                 "name": item.name,
                             }
@@ -267,7 +265,7 @@ class AesoDownloader(EnergyDownloader):
                                 start=item_dates[0], end=item_dates[1], freq="MS"
                             )
                             for date in date_range.strftime("%Y-%m"):
-                                lookup[tr][date] = {"id": item.id, "name": item.name}
+                                lookup[t_res][date] = {"id": item.id, "name": item.name}
 
                         else:
                             raise DataStructureError(
@@ -280,10 +278,10 @@ class AesoDownloader(EnergyDownloader):
                 if offset >= items.total_count:
                     break
 
-            if not lookup[tr]:
+            if not lookup[t_res]:
                 raise DataStructureError(
                     f"AESO file structure change detected! "
-                    f"No data for temporal resolution: {tr}"
+                    f"No data for temporal resolution: {t_res}"
                 )
 
         return lookup

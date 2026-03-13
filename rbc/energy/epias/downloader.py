@@ -12,7 +12,7 @@ import pandas as pd
 from eptr2 import EPTR2
 from loguru import logger
 
-from rbc.energy.utils import WORKERS, EnergyDownloader
+from rbc.energy.utils import WORKERS, DownloadKey, EnergyDownloader
 
 
 class EpiasDownloader(EnergyDownloader):
@@ -58,22 +58,22 @@ class EpiasDownloader(EnergyDownloader):
 
     def download_data(self):
         """Parse data for all given years from EPIAS Platform and save to CSV."""
-        all_dates = self._get_date_list()
+        tasks = [DownloadKey(date=d) for d in self._get_date_list()]
 
-        logger.info(f"Downloading data for: {all_dates[0]} to {all_dates[-1]}")
+        logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
             executor.map(
                 lambda t: self._threading_wrapper(
                     t, self.checkpoint, self.checkpoint_path
                 ),
-                all_dates,
+                tasks,
             )
 
-    def _get_task_data(self, task: str) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
         """Get EPIAS generation data per plant for one specific date.
 
         Args:
-            task (str): Date to get data for.
+            task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
 
         Returns:
             pd.DataFrame: Dataframe for specific date.
@@ -81,8 +81,10 @@ class EpiasDownloader(EnergyDownloader):
         Raises:
             ValueError: If no power plant or generation data is available.
         """
+        task.validate_required_fields("date")
+
         # get power-plants   # ['id', 'name', 'eic', 'shortName']
-        start = task
+        start = task.date
         end = (pd.Timestamp(start) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         df_pp = self.eptr.call("pp-list-for-date-range", start_date=start, end_date=end)
         if df_pp.empty:
@@ -93,7 +95,8 @@ class EpiasDownloader(EnergyDownloader):
         batches = np.array_split(df_pp["id"].values, num_batches)
 
         gen_data = [
-            self.eptr.call("rt-gen-bulk", date=task, pp_ids=b.tolist()) for b in batches
+            self.eptr.call("rt-gen-bulk", date=task.date, pp_ids=b.tolist())
+            for b in batches
         ]
 
         df_gen = pd.concat(gen_data)

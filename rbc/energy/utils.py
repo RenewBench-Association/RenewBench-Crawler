@@ -5,10 +5,12 @@ Shared helper functions for data downloaders
 
 import os
 import pickle
+import re
 import threading
 import time
 import urllib
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
@@ -57,6 +59,73 @@ class InvalidError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class DownloadKey:
+    """Dataclass for defining downloading metadata for a task or checkpoint grouping.
+
+    A key with a `date` represents one concrete download task.
+    A key without a `date` can be used to define a checkpoint/output grouping.
+
+    This defines a task's relevant attributes, which in turn is used to build a consistent
+    path structure:
+    raw/energy/<source>/<resolution>/<optional ...>/<optional bidding_zone>/<date>.csv
+
+    Attributes:
+        date (str | None): Date in the format YYYY-MM(-DD) to download data for.
+        temporal_resolution (str): Temporal resolution of data. Defaults to "1h".
+        bidding_zone (str | None): Optional bidding zone of data. Defaults to None.
+    """
+
+    date: str | None = None
+    temporal_resolution: str = "1h"
+    bidding_zone: str | None = None
+
+    # patterns for matching
+    _DATE_PATTERN = re.compile(r"^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$")
+    _TRES_PATTERN = re.compile(r"^\d+(?:h|min|d)$")
+
+    def __post_init__(self) -> None:
+        """Validates the date format if a date is provided.
+
+        Raises:
+            AttributeError: If provided date or temporal resolution are in the wrong format.
+        """
+        if self.date is not None and not self._DATE_PATTERN.match(self.date):
+            raise AttributeError(f"Invalid date / date format: '{self.date}'")
+
+        if not self._TRES_PATTERN.match(self.temporal_resolution):
+            raise AttributeError(
+                f"Invalid temporal resolution: '{self.temporal_resolution}'"
+            )
+
+    def update(self, **changes) -> "DownloadKey":
+        """Update a key with provided changes.
+
+        Args:
+            changes: Dictionary of changes to make to the DownloadKey instance.
+
+        Returns:
+            DownloadKey: Updated download task instance.
+        """
+        return replace(self, **changes)
+
+    def validate_required_fields(self, *fields: str) -> None:
+        """Check that specific fields are not None.
+
+        Args:
+              fields (str): List of fields to check.
+
+        Raises:
+              AttributeError: If any of the required fields are None.
+        """
+        for field in fields:
+            value = getattr(self, field)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                raise AttributeError(
+                    f"Required attribute '{field}' missing for task: {self}"
+                )
+
+
 class EnergyDownloader(ABC):
     """Abstract base class for parallelized daily energy downloader classes.
 
@@ -86,17 +155,18 @@ class EnergyDownloader(ABC):
         self._lock = threading.Lock()
 
     def _threading_wrapper(
-        self, task: str | tuple[str, str], checkpoint: dict, checkpoint_path: Path
+        self, task: DownloadKey, checkpoint: dict[str, int], checkpoint_path: Path
     ) -> None:
-        """Threading wrapper for data download and checkpoint reading/saving.
+        """Thread-safe wrapper for one download task (download and checkpoint reading/saving).
 
         Args:
-            task (str | tuple): Date or (zone, date) to download data for.
+            task (DownloadKey): The metadata for a task to download data for.
             checkpoint (dict): Dict of 0 and 1 values for resuming.
             checkpoint_path (Path): Path to the checkpoint file for resuming.
         """
+        ckpt_key = self._turn_task_into_checkpoint_key(task)
         with self._lock:
-            if checkpoint.get(task) == 1:
+            if checkpoint.get(ckpt_key) == 1:
                 logger.info(f"{task}: Data already downloaded. Skipping.")
                 return
 
@@ -107,10 +177,10 @@ class EnergyDownloader(ABC):
             status = 0
 
         with self._lock:
-            checkpoint[task] = status
+            checkpoint[ckpt_key] = status
             self._save_checkpoint(checkpoint, checkpoint_path)
 
-    def _download_task_data(self, task: str | tuple[str, str]) -> int:
+    def _download_task_data(self, task: DownloadKey) -> int:
         """Parse data for a specific task and dump to CSV.
 
         Child classes must raise / propagate errors the following errors to be handled here:
@@ -119,18 +189,15 @@ class EnergyDownloader(ABC):
         - self.RETRY_ERRORS: when accessing generally fails.
 
         Args:
-            task (str | tuple): Date or (zone, date) to download data for.
+            task (DownloadKey): The metadata for a task to download data for.
 
         Returns:
             int: Status of the download (1 if successful, 0 if unsuccessful).
         """
-        file_path = self._get_csv_path(task)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 df_gen = self._get_task_data(task=task)
-                write_df_to_csv(df=df_gen, file_path=file_path)
+                self._save_task_data(task=task, df=df_gen)
                 return 1
 
             except (DataStructureError, RateLimitError, InvalidError) as e:  # kill run
@@ -140,10 +207,8 @@ class EnergyDownloader(ABC):
             except ValueError as e:  # handle missing data for task
                 logger.error(f"Missing data for {task}: {e}")
 
-                date = task[-1] if isinstance(task, tuple) else task
-                year = pd.Timestamp(date).year
-
-                if year == pd.Timestamp.now().year:
+                task.validate_required_fields("date")
+                if pd.Timestamp(task.date).year == pd.Timestamp.now().year:
                     return 0  # current year task -> might become available later!
 
                 return 1  # skip task
@@ -173,54 +238,71 @@ class EnergyDownloader(ABC):
         return 1  # pragma: no cover
 
     @abstractmethod
-    def _get_task_data(self, task: str | tuple[str, str]) -> pd.DataFrame:
+    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:
         """Method to get the task's data (child classes MUST implement/overwrite this!).
 
         Args:
-            task (str | tuple): Date or (zone, date) to download data for.
+            task (DownloadKey): The metadata for a task to download data for.
+
+        Returns:
+            DataFrame: The task's downloaded data (child classes MUST implement this!).
         """
 
-    # --------------------------------------------
-    # Helper methods
-    # --------------------------------------------
+    def _save_task_data(self, task: DownloadKey, df: pd.DataFrame) -> None:
+        """Save downloaded task data to disk.
+
+        Functionality is separated here to allow child classes to overwrite (i.e. Entso-e).
+
+        Args:
+            task (DownloadKey): The metadata for the task that was downloaded.
+            df (pd.DataFrame): Downloaded dataframe for the task.
+        """
+        file_path = self._build_task_path(task)
+        write_df_to_csv(df=df, file_path=file_path)
+
+    # ------------------------------------------------------------------
+    # Path definition and checkpoint helpers (using DownloadKey)
+    # ------------------------------------------------------------------
     @staticmethod
-    def _get_status_code(e: Exception) -> int | None:
-        """Extracts HTTP status code from various library exceptions.
+    def _turn_task_into_checkpoint_key(task: DownloadKey) -> str:
+        """Convert a task to a string key for checkpointing.
 
         Args:
-            e (Exception): Exception raised when an error occurs.
+            task (DownloadKey): The metadata for a task to download data for.
 
         Returns:
-            int | None: HTTP status code if it was a HTTPError, otherwise None.
+            str: String to use as key in checkpointing dict.
         """
-        if hasattr(e, "response") and hasattr(e.response, "status_code"):  # requests
-            return e.response.status_code
-        if hasattr(e, "code"):  # urllib
-            return e.code
-        return None
+        parts = [
+            f"date={task.date}" if task.date else None,
+            f"temporal_res={task.temporal_resolution}"
+            if task.temporal_resolution
+            else None,
+            f"bidding_zone={task.bidding_zone}" if task.bidding_zone else None,
+        ]
+        return "|".join(p for p in parts if p is not None)
 
-    def _get_csv_path(self, task: str | tuple[str, str]) -> Path:
-        """Get csv file path to which resume logic will be saved.
+    def _build_checkpoint_path(self, task: DownloadKey) -> Path:
+        """Return checkpoint path for a task grouping.
+
+        By default, checkpoints are stored per temporal resolution and optional zone.
+        The structure for the path is:
+        <output_path>/<temporal_resolution>/<optional...>/<optional bz>/status.pickle
 
         Args:
-            task (str | tuple): Date or (zone, date) to download data for.
+            task (DownloadKey): The metadata for a task grouping without a 'date'.
 
         Returns:
-            Path: Path to the csv file.
-
-        Raises:
-            ValueError: If task is not a string or tuple.
+            Path: Path to the checkpoint file.
         """
-        if isinstance(task, str):  # Case for EIA / EPIAS
-            return Path(self.output_path, f"{task}.csv")
+        parts: list[str | Path] = [self.output_path, task.temporal_resolution]
 
-        if isinstance(task, tuple) and len(task) == 2:  # Case for Entsoe (zone, date)
-            zone, date = task
-            return Path(self.output_path, zone, f"{date}.csv")
+        if task.bidding_zone:
+            parts.append(task.bidding_zone)
 
-        raise ValueError(f"CSV path can't be defined. Unsupported task format: {task}")
+        return Path(*parts, "status.pickle")
 
-    def _load_checkpoint(self, checkpoint_path: Path) -> dict:
+    def _load_checkpoint(self, checkpoint_path: Path) -> dict[str, int]:
         """Load checkpoint from checkpoint path depending on resume logic.
 
         Args:
@@ -247,17 +329,60 @@ class EnergyDownloader(ABC):
             return {}
 
     @staticmethod
-    def _save_checkpoint(checkpoint: dict, checkpoint_path: Path) -> None:
+    def _save_checkpoint(checkpoint: dict[str, int], checkpoint_path: Path) -> None:
         """Save checkpoint safely (ensure abrupt terminations don't corrupt the file).
 
         Args:
             checkpoint (dict): Checkpoint to be saved.
             checkpoint_path (Path): Path to checkpoint file.
         """
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = checkpoint_path.with_suffix(".tmp")
         with open(temp_path, "wb") as f:
             pickle.dump(checkpoint, f)
         os.replace(temp_path, checkpoint_path)
+
+    def _build_task_path(self, task: DownloadKey) -> Path:
+        """Build the CSV file path to which the downloaded task data will be saved.
+
+        Designed structure:
+        <output_path>/<temporal_resolution>/<optional ...>/<optional bz>/<date>.csv
+
+        Args:
+            task (DownloadKey): The metadata for a task to download data for.
+
+        Returns:
+            Path: Path to the csv file.
+
+        Raises:
+            ValueError: If date is missing.
+        """
+        task.validate_required_fields("date")
+        parts: list[str | Path] = [self.output_path, task.temporal_resolution]
+
+        if task.bidding_zone:
+            parts.append(task.bidding_zone)
+
+        return Path(*parts, f"{task.date}.csv")
+
+    # --------------------------------------------
+    # General helper methods
+    # --------------------------------------------
+    @staticmethod
+    def _get_status_code(e: Exception) -> int | None:
+        """Extracts HTTP status code from various library exceptions.
+
+        Args:
+            e (Exception): Exception raised when an error occurs.
+
+        Returns:
+            int | None: HTTP status code if it was a HTTPError, otherwise None.
+        """
+        if hasattr(e, "response") and hasattr(e.response, "status_code"):  # requests
+            return e.response.status_code
+        if hasattr(e, "code"):  # urllib
+            return e.code
+        return None
 
     def _get_date_list(self) -> list[str]:
         """Get a list of all valid dates in the provided year(s).

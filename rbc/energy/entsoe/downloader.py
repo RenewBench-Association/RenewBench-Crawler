@@ -3,6 +3,7 @@
 Remote API access of ENTSO-E Platform using the entsoe-apy package.
 """
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -16,7 +17,9 @@ from loguru import logger
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
+    DownloadKey,
     EnergyDownloader,
+    write_df_to_csv,
 )
 
 RELEVANT_RECORD_KEYS = {
@@ -84,26 +87,26 @@ class EntsoeDownloader(EnergyDownloader):
         all_dates = self._get_date_list()
 
         for bz in self.bidding_zones:
-            bz_path = Path(self.output_path, bz)
-            bz_path.mkdir(parents=True, exist_ok=True)
-
-            checkpoint_path = Path(bz_path, "status.pickle")
+            checkpoint_path = self._build_checkpoint_path(
+                task=DownloadKey(bidding_zone=bz)
+            )
             checkpoint = self._load_checkpoint(checkpoint_path)
 
-            logger.info(
-                f"Downloading data in '{bz}' for: {all_dates[0]} to {all_dates[-1]}"
-            )
+            tasks = [DownloadKey(date=d, bidding_zone=bz) for d in all_dates]
+
+            logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
             with ThreadPoolExecutor(max_workers=WORKERS) as executor:
                 executor.map(
                     lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
-                    [(bz, d) for d in all_dates],
+                    tasks,
                 )
 
-    def _get_task_data(self, task: tuple[str, str]) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
         """Get Entso-e generation data per plant for one specific date and bidding zone.
 
         Args:
-            task (tuple): Tuple of (zone, date) to download data for.
+            task (DownloadKey): The metadata of a downloading task,
+                here: date (YYYY-MM-DD), bidding_zone
 
         Returns:
             pd.DataFrame: Dataframe for specific task with the columns
@@ -118,14 +121,14 @@ class EntsoeDownloader(EnergyDownloader):
             DataStructureError: If data structure has changed and relevant columns
             are missing (this will cause the entire run to be killed).
         """
-        zone, date = task
-        dt = pd.Period(date, freq="D")
+        task.validate_required_fields("date", "bidding_zone")
+        dt = pd.Period(task.date, freq="D")
 
         try:
             result = ActualGenerationPerGenerationUnit(
                 period_start=int(dt.strftime("%Y%m%d0000")),  # start of day
                 period_end=int(dt.strftime("%Y%m%d2359")),  # end of day
-                in_domain=zone,
+                in_domain=task.bidding_zone,
                 psr_type=None,
                 registered_resource=None,
             ).query_api()
@@ -164,3 +167,48 @@ class EntsoeDownloader(EnergyDownloader):
 
         df = df.sort_values(by=["timestamp", "Unit_Name"], ascending=[True, True])
         return df
+
+    def _save_task_data(self, task: DownloadKey, df: pd.DataFrame) -> None:
+        """Save ENTSO-E downloaded task data to disk, splitting by temporal resolution.
+
+        The API does not allow temporal resolution arguments, but ENTSO-E data has varying
+        resolutions. The df is grouped by t_res and subsets are written to the correct folder.
+
+        Args:
+            task (DownloadKey): The metadata for the task that was downloaded.
+            df (pd.DataFrame): Downloaded dataframe for the task.
+
+        Raises:
+            DataStructureError: If columns are missing temporal resolution values
+        """
+        df_full = df.dropna(subset=["Temporal_Resolution"])
+        if df.all().all() != df_full.all().all():
+            logger.warning(
+                "Some rows are missing temporal resolution values! Skipping."
+            )
+
+        for t_res, df_t_res in df.groupby("Temporal_Resolution", sort=True):
+            updated_task = task.update(
+                temporal_resolution=self._normalize_temporal_resolution(str(t_res))
+            )
+            file_path = self._build_task_path(updated_task)
+            write_df_to_csv(df=df_t_res, file_path=file_path)
+
+    @staticmethod
+    def _normalize_temporal_resolution(t_res: str) -> str:
+        """Convert ENTSO-E ISO-like temporal resolution string to name, i.e. PT60M -> 1h.
+
+        Args:
+            t_res (str): Temporal resolution string as defined in ENTSO-E (i.e. PT60M).
+
+        Returns:
+            Normalized temporal resolution name.
+
+        Raises:
+            DataStructureError: If the resolution format is unknown.
+        """
+        if match := re.search(r"^PT(\d+)M$", t_res):
+            minutes = int(match.group(1))
+            return "1h" if minutes == 60 else f"{minutes}min"
+
+        raise DataStructureError(f"Unknown ENTSO-E temporal resolution '{t_res}'")
