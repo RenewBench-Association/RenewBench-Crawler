@@ -51,7 +51,7 @@ def downloader(init_args: dict) -> IesoDownloader:
 
 @pytest.fixture
 def task(init_args: dict) -> DownloadTask:
-    """Gets a task (month) as YYYY-MM from the given year.
+    """Gets a task as 'date=YYYY-MM' from the init arguments.
 
     Args:
         init_args (dict): Arguments used to initialize an IesoDownloader instance.
@@ -366,7 +366,7 @@ def test_get_from_old_source(
 
 
 def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None:
-    """Happy path for @lru_cache decorator of _load_yearly_excel method.
+    """Happy path for @lru_cache decorator for _load_yearly_excel method.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.

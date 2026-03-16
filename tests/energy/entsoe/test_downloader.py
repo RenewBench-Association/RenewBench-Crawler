@@ -57,7 +57,7 @@ def downloader(init_args: dict) -> EntsoeDownloader:
 
 @pytest.fixture
 def task(init_args: dict) -> DownloadTask:
-    """Gets a task (month) as YYYY-MM-DD from the given year.
+    """Gets a task as 'date=YYYY-MM-DD,bidding_zone=<ZONE>' from the init arguments.
 
     Args:
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
@@ -118,9 +118,9 @@ def test_download_data_resume(init_args: dict) -> None:
     y = args["years"][0]
     checkpoint = {
         DownloadTask(date=d, bidding_zone=bz).identifier: 1
-        for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31")
-        .strftime("%Y-%m-%d")
-        .tolist()
+        for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31").strftime(
+            "%Y-%m-%d"
+        )
     }
     checkpoint_path = Path(args["output_path"], "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

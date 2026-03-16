@@ -58,7 +58,7 @@ def downloader(init_args: dict) -> EiaDownloader:
 
 @pytest.fixture
 def task(init_args: dict) -> DownloadTask:
-    """Gets a task (date) as YYYY-MM-DD from the given year.
+    """Gets a task as 'date=YYYY-MM-DD' from the init arguments.
 
     Args:
         init_args (dict): Arguments used to initialize an EiaDownloader instance.

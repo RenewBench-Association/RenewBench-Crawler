@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from rbc.energy.epias import EpiasDownloader
+from rbc.energy.epias.downloader import EXPECTED_COLS
 from rbc.energy.utils import (
     DataStructureError,
     DownloadTask,
@@ -55,7 +56,7 @@ def downloader(init_args: dict) -> EpiasDownloader:
 
 @pytest.fixture
 def task(init_args: dict) -> DownloadTask:
-    """Gets a task (date) as YYYY-MM-DD from the given year.
+    """Gets a task as 'date=YYYY-MM-DD' from the init arguments.
 
     Args:
         init_args (dict): Arguments used to initialize an EpiasDownloader instance.
@@ -73,31 +74,19 @@ def get_mock_df(date: str) -> pd.DataFrame:
     Args:
         date (str): Date to return a mock EPIAS generation dataframe.
 
+    Returns:
+        pandas.DataFrame: Mock dataframe.
     """
-    return pd.DataFrame(
+    row: dict[str, object] = {c: 0.0 for c in EXPECTED_COLS}
+    row.update(
         {
-            "date": [date],
-            "hour": [1],
-            "total": [16.2],
-            "powerPlantName": ["3S KALE JES-40W000000012366M-2336"],
-            "naturalGas": [0.0],
-            "dammedHydro": [0.0],
-            "lignite": [0.0],
-            "river": [0.0],
-            "importCoal": [0.0],
-            "wind": [0.0],
-            "sun": [0.0],
-            "fueloil": [0.0],
-            "geothermal": [0.0],
-            "asphaltiteCoal": [0.0],
-            "blackCoal": [0.0],
-            "biomass": [0.0],
-            "naphta": [0.0],
-            "lng": [0.0],
-            "importExport": [0.0],
-            "wasteheat": [0.0],
+            "date": date,
+            "hour": 1,
+            "total": 16.2,
+            "powerPlantName": "3S KALE JES-40W000000012366M-2336",
         }
     )
+    return pd.DataFrame(row, index=[0])
 
 
 # ----------------------------------

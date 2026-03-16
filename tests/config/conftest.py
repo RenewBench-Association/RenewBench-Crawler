@@ -16,6 +16,10 @@ def source_configs(tmp_path: Path) -> dict:
         dict: Dictionary of example source config dicts.
     """
     return {
+        "aeso": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "aeso"))},
+            "access": {"api_key": "token"},
+        },
         "eia": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "eia"))},
             "access": {"api_key": "token"},

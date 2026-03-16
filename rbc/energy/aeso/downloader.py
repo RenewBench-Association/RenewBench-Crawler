@@ -177,9 +177,7 @@ class AesoDownloader(EnergyDownloader):
             )
 
         # slice relevant month excerpt from dataframe (some files cover multiple months!)
-        date_col = pd.to_datetime(
-            df["Date (MPT)"], errors="coerce"
-        )  # AESO uses MPT, not MST
+        date_col = pd.to_datetime(df["Date (MPT)"], errors="coerce")  # AESO uses MPT!
         if date_col.isna().any():
             raise DataStructureError(
                 f"AESO file structure change detected for '{task.identifier}'! "
