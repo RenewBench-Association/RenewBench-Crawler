@@ -1,1 +1,1 @@
-"""Tests for BARRA downloader."""
+"""Tests for BARRA2 downloader."""

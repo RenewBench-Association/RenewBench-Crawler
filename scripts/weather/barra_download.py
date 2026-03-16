@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""BARRA REANALYSIS DATA DOWNLOAD SCRIPT.
+"""BARRA2 REANALYSIS DATA DOWNLOAD SCRIPT.
 
-Download BARRA reanalysis data from NCI THREDDS server.
+Download BARRA2 reanalysis data from NCI THREDDS server.
 """
 
 from argparse import ArgumentParser, Namespace
@@ -9,7 +9,10 @@ from argparse import ArgumentParser, Namespace
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
-from rbc.weather.barra import BarraDownloader
+from rbc.utils import setup_logging
+from rbc.weather.barra import Barra2Downloader
+
+SOURCE = "barra2"
 
 
 def parse_arguments() -> Namespace:
@@ -18,24 +21,24 @@ def parse_arguments() -> Namespace:
     Returns:
         argparse.Namespace: Namespace parsed command line arguments.
     """
-    parser = ArgumentParser(prog="BARRA reanalysis data download")
+    parser = ArgumentParser(prog="BARRA2 reanalysis data download")
 
     parser.add_argument(
         "--list-variables",
         action="store_true",
-        help="List all available BARRA variables and exit.",
+        help="List all available BARRA2 variables and exit.",
     )
 
     parser.add_argument(
         "-r",
         "--region",
-        choices=["R2", "r2", "C2", "c2", "C2_20min", "c2_20min"],
-        default="R2",
+        choices=["R2", "r2", "C2", "c2", "C2_20min", "c2_20min", "all"],
+        default=None,
         metavar="REGION",
-        help="BARRA region/model. "
+        help="BARRA2 region/model. "
         "R2: 11 km deterministic (1hr), C2: 4 km convective-scale (1hr), "
         "C2_20min: 4 km convective-scale (20min). "
-        "Default: R2",
+        "For --list-variables, default is all models. For download, default is R2.",
     )
 
     parser.add_argument(
@@ -113,22 +116,28 @@ def parse_arguments() -> Namespace:
 
 
 def main() -> None:
-    """Coordinate BARRA data download."""
+    """Coordinate BARRA2 data download."""
     args = parse_arguments()
 
     # Handle --list-variables flag
     if args.list_variables:
-        BarraDownloader.print_available_variables(model=args.region)
+        Barra2Downloader.print_available_variables(model=args.region or "all")
         return
 
+    selected_region = args.region or "R2"
+    if selected_region.lower() == "all":
+        raise ValueError(
+            "'all' is only valid with --list-variables, not for downloads."
+        )
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
+    cfg = load_config(source=SOURCE, overrides=overrides)
+    setup_logging(output_dir=cfg.paths.dst_dir_raw)
+    logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
+    logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
-    config = load_config(source="barra", overrides=overrides)
-    logger.info(f"Config loaded for BARRA:\n{config}")
-
-    downloader = BarraDownloader(
-        output_path=config.paths.dst_dir_raw,
-        model=args.region,
+    downloader = Barra2Downloader(
+        output_path=cfg.paths.dst_dir_raw,
+        model=selected_region,
         years=args.years,
         months=args.months,
         variables=args.variables,
@@ -137,6 +146,9 @@ def main() -> None:
         dry_run=args.dry_run,
         resume=args.resume,
     )
+
+    logger.info(f"Config loaded for BARRA2:\n{cfg}")
+
     downloader.download_data()
 
 

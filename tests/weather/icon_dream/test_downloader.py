@@ -1010,7 +1010,7 @@ def test_print_available_variables() -> None:
 
     Check that print_available_variables executes without errors.
     """
-    with patch("builtins.print"):
+    with patch("rbc.weather.icon_dream.downloader.logger.info"):
         IconDreamDownloader.print_available_variables()
         # Should not raise any exception
 
@@ -1020,7 +1020,7 @@ def test_print_available_variables_all_regions() -> None:
 
     Check that print_available_variables prints variables for all regions.
     """
-    with patch("builtins.print") as mock_print:
+    with patch("rbc.weather.icon_dream.downloader.logger.info") as mock_log:
         IconDreamDownloader.print_available_variables(region="all")
-        # Should print for both global and eu
-        assert mock_print.call_count > 10  # Multiple print calls for both regions
+        # Should log one block for global, one for eu, and one usage block
+        assert mock_log.call_count == 3

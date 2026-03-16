@@ -156,7 +156,7 @@ class EpiasConfig(PathValidation, AccessValidation, BaseModel):
     access: AccessAccount
 
 
-class IesoConfig(BaseModel):
+class IesoConfig(PathValidation, BaseModel):
     """Configuration schema for the IESO energy data source.
 
     Attributes:
@@ -185,7 +185,7 @@ class Era5Config(PathValidation, AccessValidation, BaseModel):
     access: AccessAPI
 
 
-class IconDreamGlobalConfig(BaseModel):
+class IconDreamGlobalConfig(PathValidation, BaseModel):
     """Configuration schema for the ICON-DREAM Global weather data source.
 
     Attributes:
@@ -197,7 +197,7 @@ class IconDreamGlobalConfig(BaseModel):
     paths: Paths
 
 
-class IconDreamEuConfig(BaseModel):
+class IconDreamEuConfig(PathValidation, BaseModel):
     """Configuration schema for the ICON-DREAM EU weather data source.
 
     Attributes:
@@ -209,15 +209,15 @@ class IconDreamEuConfig(BaseModel):
     paths: Paths
 
 
-class BarraConfig(PathValidation, BaseModel):
-    """Configuration schema for the BARRA reanalysis weather data source.
+class Barra2Config(PathValidation, BaseModel):
+    """Configuration schema for the BARRA2 reanalysis weather data source.
 
     Attributes:
         source (Literal): Name of the data source.
         paths (Paths): Paths pydantic model for paths.
     """
 
-    source: Literal["barra"] = "barra"
+    source: Literal["barra2"] = "barra2"
     paths: Paths
 
 
@@ -232,5 +232,5 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "era5": Era5Config,
     "icon_dream_global": IconDreamGlobalConfig,
     "icon_dream_eu": IconDreamEuConfig,
-    "barra": BarraConfig,
+    "barra2": Barra2Config,
 }

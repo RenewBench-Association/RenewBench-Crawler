@@ -4,9 +4,9 @@ Constants for BARRA2 reanalysis variables and region configurations.
 
 Model keys
 ----------
-- R2:       BARRA2-R2 (11 km, 1 hr)
-- C2:       BARRA2-C2 (4 km, 1 hr)
-- C2_20min: BARRA2-C2 (4 km, 20 min)
+- R2:       BARRA-R2 (11 km, 1 hr)
+- C2:       BARRA-C2 (4 km, 1 hr)
+- C2_20min: BARRA-C2 (4 km, 20 min)
 """
 
 # All available single-level (2D surface) BARRA2 variables
@@ -221,48 +221,8 @@ R2_DEFAULT_PRESSURE_LEVELS = ["1000", "950"]
 # Default: 1000, 975, 950 hPa (lowest 3 pressure levels, ~110m, ~300m, ~560m altitude)
 C2_DEFAULT_PRESSURE_LEVELS = ["1000", "975", "950"]
 
-# Model configs and mapping of model names to dataset info
-MODEL_CONFIG = {
-    "R2": {
-        "label": "BARRA-R2",
-        "description": "Moderate-scale deterministic reanalysis",
-        "resolution": "11 km (0.11°)",
-        "grid": "AUS-11",
-        "domain": "Australia + surrounding (88.48-207.39°E, -57.97-12.98°N)",
-        "temporal_res": "1hr",
-        "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html",
-        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/fx/catalog.html",
-        "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1",
-        "invariant_path": "fx",
-    },
-    "C2": {
-        "label": "BARRA-C2",
-        "description": "Convective-scale reanalysis (1hr)",
-        "resolution": "4 km (0.04°)",
-        "grid": "AUST-04",
-        "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
-        "temporal_res": "1hr",
-        "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html",
-        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
-        "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
-        "invariant_path": "fx",
-    },
-    "C2_20min": {
-        "label": "BARRA-C2",
-        "description": "Convective-scale reanalysis (20min)",
-        "resolution": "4 km (0.04°)",
-        "grid": "AUST-04",
-        "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
-        "temporal_res": "20min",
-        "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/20min/catalog.html",
-        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
-        "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
-        "invariant_path": "fx",
-    },
-}
-
-# Mapping of variable descriptions to BARRA short codes
-VARIABLE_TO_BARRA_PARAM = {
+# Mapping of variable descriptions to BARRA2 short codes
+VARIABLE_TO_BARRA2_PARAM = {
     # Temperature
     "1.5m_temperature": "tas",
     "1.5m_temperature_mean": "tasmean",
@@ -398,4 +358,44 @@ VARIABLE_TO_BARRA_PARAM = {
     # Invariant fields
     "orography": "orog",
     "land_sea_mask": "sftlf",
+}
+
+# Model configs and mapping of model names to dataset info
+MODEL_CONFIG = {
+    "R2": {
+        "label": "BARRA-R2",
+        "description": "Moderate-scale deterministic reanalysis",
+        "resolution": "11 km (0.11°)",
+        "grid": "AUS-11",
+        "domain": "Australia + surrounding (88.48-207.39°E, -57.97-12.98°N)",
+        "temporal_res": "1hr",
+        "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html",
+        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/fx/catalog.html",
+        "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1",
+        "invariant_path": "fx",
+    },
+    "C2": {
+        "label": "BARRA-C2",
+        "description": "Convective-scale reanalysis (1hr)",
+        "resolution": "4 km (0.04°)",
+        "grid": "AUST-04",
+        "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
+        "temporal_res": "1hr",
+        "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html",
+        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
+        "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
+        "invariant_path": "fx",
+    },
+    "C2_20min": {
+        "label": "BARRA-C2",
+        "description": "Convective-scale reanalysis (20min)",
+        "resolution": "4 km (0.04°)",
+        "grid": "AUST-04",
+        "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
+        "temporal_res": "20min",
+        "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/20min/catalog.html",
+        "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
+        "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
+        "invariant_path": "fx",
+    },
 }

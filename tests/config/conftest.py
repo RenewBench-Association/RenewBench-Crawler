@@ -39,8 +39,8 @@ def source_configs(tmp_path: Path) -> dict:
         "icon_dream_eu": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_eu"))},
         },
-        "barra": {
-            "paths": {"dst_dir_raw": str(Path(tmp_path, "barra"))},
+        "barra2": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "barra2"))},
         },
     }
 

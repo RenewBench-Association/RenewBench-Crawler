@@ -108,7 +108,7 @@ RenewBench-Crawler package.
 | Global | 0.25° / ~31km; 1 hour | ERA5   | [Copernicus / ECMWF](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1) | [Data download guide](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5) | API token | [Installation guide](https://cds.climate.copernicus.eu/how-to-api) |
 | Global | ~13km; 1 hour | ICON DREAM Global   | [DWD](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly/) | [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) | open | - |
 | Europe | ~6.5km; 1 hour |ICON DREAM Europe  | [DWD](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-EU/hourly/) | [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) | open | - |
-| Australia and  surrounding | 0.11° / ~11km; 1 hour | BARRA2 R2 | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html) | [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) | open | - |
+| Australia and surroundings | 0.11° / ~11km; 1 hour | BARRA2 R2 | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html) | [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) | open | - |
 | Australia | 0.04° / ~4km; 1 hour | BARRA2 C2 | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html) | [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) | open | - |
 | Australia | 0.04° / ~4km; 20 min | BARRA2 C2 | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/20min/catalog.html) | [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) | open | - |
 
@@ -118,6 +118,7 @@ RenewBench-Crawler package.
 <summary><b>ERA5 (World)</b></summary>
 
 **Access**
+
 - Platform: [Copernicus Climate Data Store / ECMWF](https://cds.climate.copernicus.eu/)
 - Dataset example: [ERA5 reanalysis data catalogue](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1)
 - Docs: [How to download ERA5](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5)
@@ -196,6 +197,14 @@ RenewBench-Crawler package.
 <details>
 <summary><b>BARRA2 (Australia)</b></summary>
 
+**Access**
+- Platform: [NCI THREDDS server](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/)
+- Docs / reference: [BOM BARRA2 guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53)
+- Requirements: open HTTP access (no authentication)
+
+
+**Download & data structure**
+
 BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology (BOM), downscaling ERA5 over Australia and surrounding regions. Three model configurations are supported:
 
 | Model key  | Grid label | Nominal resolution | Temporal resolution | Coverage start |
@@ -204,12 +213,7 @@ BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology
 | `C2`       | AUST-04    | ~4 km              | 1 hour              | 1991           |
 | `C2_20min` | AUST-04    | ~4 km              | 20 min              | 1991           |
 
-**Access**
-- Platform: [NCI THREDDS server](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/)
-- Docs / reference: [BOM BARRA2 guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53)
-- Requirements: open HTTP access (no authentication)
 
-**Download & data structure**
 - Spatial coverage:
   - R2: Australia and surrounding region (~11 km, `AUS-11` grid)
   - C2 / C2_20min: Australia only (~4 km, `AUST-04` grid)
@@ -219,8 +223,8 @@ BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology
   - Invariant (time-independent fields: orography, land-sea mask)
 - Raw output files (as implemented here):
   - Format: NetCDF (`*.nc`), fetched via HTTP from NCI THREDDS fileServer
-  - Temporal files: `barra_<MODEL>_<TEMPORAL_RES>_<YYYYMM>_<BARRA_CODE>.nc`
-  - Invariant files: `barra_<MODEL>_fx_<BARRA_CODE>.nc` (downloaded once, stored in `invariant/` subfolder)
+  - Temporal files: `barra2_<MODEL>_<TEMPORAL_RES>_<YYYYMM>_<BARRA2_CODE>.nc`
+  - Invariant files: `barra2_<MODEL>_fx_<BARRA2_CODE>.nc` (downloaded once, stored in `invariant/` subfolder)
   - One file per year–month and variable; invariants are model-wide constants
 - Key dimensions & variables (conceptual):
   - Dimensions: `time`, `lat`, `lon`, optional `lev` (pressure level)

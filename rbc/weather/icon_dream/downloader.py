@@ -181,7 +181,8 @@ class IconDreamDownloader:
 
         logger.info(f"All {len(self.variables)} requested variables are available.")
 
-    def _get_dwd_param(self, variable: str) -> str:
+    @staticmethod
+    def _get_dwd_param(variable: str) -> str:
         """Convert variable name to DWD parameter code.
 
         Args:
@@ -209,10 +210,10 @@ class IconDreamDownloader:
                         success_code = self._download_variables(
                             year=year, month=month, variable=var
                         )
-
-                        self.checkpoint[task] = success_code
-                        with open(self.checkpoint_path, "wb") as f:
-                            pickle.dump(self.checkpoint, f)
+                        if not self.dry_run:
+                            self.checkpoint[task] = success_code
+                            with open(self.checkpoint_path, "wb") as f:
+                                pickle.dump(self.checkpoint, f)
                     else:
                         logger.info(
                             f"{year}-{month} ({var}): Data previously downloaded."
@@ -266,7 +267,6 @@ class IconDreamDownloader:
             logger.info(f"{year}-{month} ({variable}): File size: {size_gb:.2f} GB")
 
             # Download with progress tracking using tqdm
-            chunk_size = 8192  # 8KB chunks
             progress_bar = tqdm(
                 total=total_size,
                 unit="B",
@@ -276,7 +276,7 @@ class IconDreamDownloader:
             )
 
             with open(output_file, "wb") as f:
-                for chunk in response.iter_content(chunk_size=chunk_size):
+                for chunk in response.iter_content(chunk_size=8192):  # 8KB chunks
                     if chunk:
                         f.write(chunk)
                         progress_bar.update(len(chunk))
@@ -411,53 +411,57 @@ class IconDreamDownloader:
         region_key = _normalize_region(region)
         regions = ["global", "eu"] if region_key == "all" else [region_key]
 
-        for idx, region_name in enumerate(regions):
+        for region_name in regions:
             region_config = _get_region_config(region_name)
-            if idx:
-                print("\n")
-            print("\n" + "=" * 80)
-            print(f"AVAILABLE {region_config['label']} VARIABLES")
-            print("=" * 80)
+            single_level_lines = "\n".join(
+                (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
+                for name, code in sorted(VARIABLE_TO_DWD_PARAM.items())
+                if code in ALL_SINGLE_LEVEL_VARIABLES
+            )
+            model_level_lines = "\n".join(
+                (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
+                for name, code in sorted(VARIABLE_TO_DWD_PARAM.items())
+                if code in ALL_MODEL_LEVEL_VARIABLES
+            )
 
-            print("\n--- SINGLE-LEVEL (2D) VARIABLES ---")
-            print(f"Dataset: {region_config['dataset']}")
-            print(f"Resolution: {region_config['resolution']}")
-            print("Temporal: Hourly data")
-            print("Time period: 2010-01 to present")
-            print(f"Total: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n")
-            for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
-                if code not in ALL_SINGLE_LEVEL_VARIABLES:
-                    continue
-                marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
-                print(f"  • {name}{marker}")
+            logger.info(
+                "\n"
+                + "=" * 80
+                + f"\nAVAILABLE {region_config['label']} VARIABLES"
+                + "\n"
+                + "=" * 80
+                + "\n\n--- SINGLE-LEVEL (2D) VARIABLES ---"
+                + f"\nDataset: {region_config['dataset']}"
+                + f"\nResolution: {region_config['resolution']}"
+                + "\nTemporal: Hourly data"
+                + "\nTime period: 2010-01 to present"
+                + f"\nTotal: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n"
+                + single_level_lines
+                + "\n\n--- MODEL-LEVEL (3D) VARIABLES ---"
+                + f"\nDataset: {region_config['dataset']}"
+                + f"\nResolution: {region_config['resolution']}"
+                + "\nTemporal: Hourly data"
+                + "\nTime period: 2010-01 to present"
+                + f"\nTotal: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n"
+                + model_level_lines
+                + "\n"
+            )
 
-            print("\n--- MODEL-LEVEL (3D) VARIABLES ---")
-            print(f"Dataset: {region_config['dataset']}")
-            print(f"Resolution: {region_config['resolution']}")
-            print("Temporal: Hourly data")
-            print("Time period: 2010-01 to present")
-            print(f"Total: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n")
-            for name, code in sorted(VARIABLE_TO_DWD_PARAM.items()):
-                if code not in ALL_MODEL_LEVEL_VARIABLES:
-                    continue
-                marker = " [DEFAULT]" if name in DEFAULT_VARIABLES else ""
-                print(f"  • {name}{marker}")
-
-        print("\n" + "=" * 80)
-        print("USAGE EXAMPLES:")
-        print("=" * 80)
-        print("\n1. Download data with metadata (default):")
-        print(
-            "   python scripts/weather/icon_dream_download.py --region global -y 2020 -m 01 -v 2m_temperature surface_pressure\n"
+        logger.info(
+            "\n"
+            + "=" * 80
+            + "\nUSAGE EXAMPLES:"
+            + "\n"
+            + "=" * 80
+            + "\n\n1. Download data with metadata (default):"
+            + "\n   python scripts/weather/icon_dream_download.py --region global -y 2020 -m 01 -v 2m_temperature surface_pressure"
+            + "\n\n2. Download EU data without metadata:"
+            + "\n   python scripts/weather/icon_dream_download.py --region eu -y 2020 -m 01 -v temperature --no-metadata"
+            + "\n\n3. Download metadata for both regions:"
+            + "\n   python scripts/weather/icon_dream_download.py"
+            + "\n\n4. Download data for both regions:"
+            + "\n   python scripts/weather/icon_dream_download.py --region all -y 2020 -m 01 -v temperature"
+            + "\n"
+            + "=" * 80
+            + "\n"
         )
-        print("2. Download EU data without metadata:")
-        print(
-            "   python scripts/weather/icon_dream_download.py --region eu -y 2020 -m 01 -v temperature --no-metadata\n"
-        )
-        print("3. Download metadata for both regions:")
-        print("   python scripts/weather/icon_dream_download.py\n")
-        print("4. Download data for both regions:")
-        print(
-            "   python scripts/weather/icon_dream_download.py --region all -y 2020 -m 01 -v temperature\n"
-        )
-        print("=" * 80 + "\n")

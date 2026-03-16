@@ -1,5 +1,5 @@
-"""BARRA reanalysis weather data downloader module."""
+"""BARRA2 reanalysis weather data downloader module."""
 
-from rbc.weather.barra.downloader import BarraDownloader
+from rbc.weather.barra.downloader import Barra2Downloader
 
-__all__ = ["BarraDownloader"]
+__all__ = ["Barra2Downloader"]
