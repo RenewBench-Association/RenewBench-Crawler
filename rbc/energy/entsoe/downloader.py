@@ -24,7 +24,7 @@ from rbc.energy.utils import (
     write_df_to_csv,
 )
 
-RELEVANT_RECORD_KEYS = {
+EXPECTED_COLS_MAPPING = {
     "timestamp": "timestamp",
     "time_series.mkt_psrtype.power_system_resources.name": "Unit_Name",
     "time_series.mkt_psrtype.power_system_resources.m_rid.value": "Unit_Code",
@@ -60,7 +60,7 @@ class EntsoeDownloader(EnergyDownloader):
             years (list[int]): List of years to get data for.
             bidding_zones (list[str]): List of bidding zones to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
 
         Raises:
             InvalidError: If bidding zone is unsupported or token is invalid.
@@ -113,11 +113,11 @@ class EntsoeDownloader(EnergyDownloader):
 
         Raises:
             ConnectionError: If Entso-E TP is unavailable or the API did not
-            return the requested data (this will cause a retry on the next resume).
+                return the requested data (this will cause a retry on the next resume).
             MissingDataError: If no data is available for the given task (this will cause
-            the task to be skipped in future).
-            DataStructureError: If data structure has changed and relevant columns
-            are missing (this will cause the entire run to be killed).
+                the task to be skipped in future).
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing (this will cause the entire run to be killed).
         """
         task.validate_required_fields("bidding_zone")
         dt = pd.Period(task.date, freq="D")
@@ -146,8 +146,8 @@ class EntsoeDownloader(EnergyDownloader):
 
         try:
             # Columns names are made to match those on the Entso-E Transparency Platform
-            df = df.loc[:, list(RELEVANT_RECORD_KEYS.keys())].rename(
-                columns=RELEVANT_RECORD_KEYS
+            df = df.loc[:, list(EXPECTED_COLS_MAPPING.keys())].rename(
+                columns=EXPECTED_COLS_MAPPING
             )
         except KeyError as e:
             raise DataStructureError(
@@ -171,9 +171,6 @@ class EntsoeDownloader(EnergyDownloader):
         Args:
             task (DownloadTask): The metadata for the task that was downloaded.
             df (pd.DataFrame): Downloaded dataframe for the task.
-
-        Raises:
-            DataStructureError: If columns are missing temporal resolution values
         """
         df_full = df.dropna(subset=["Temporal_Resolution"])
         if len(df_full) != len(df):

@@ -3,7 +3,6 @@
 
 import pickle
 from pathlib import Path
-from typing import Generator
 from unittest.mock import patch
 
 import pandas as pd
@@ -22,19 +21,6 @@ from rbc.energy.utils import (
 # ----------------------------------
 # Fixtures
 # ----------------------------------
-@pytest.fixture
-def api_config() -> Generator:
-    """Fixture that patches the entsoe-apy package configuration.
-
-    Yields:
-       patched successful api configuration.
-    """
-    with patch("rbc.energy.entsoe.downloader.set_config"):
-        with patch("rbc.energy.entsoe.downloader.get_config") as mock_get:
-            mock_get.return_value.security_token = "fake_token"
-            yield
-
-
 @pytest.fixture
 def init_args(tmp_path: Path) -> dict:
     """Creates a basic setup with a temporary directory.
@@ -55,18 +41,18 @@ def init_args(tmp_path: Path) -> dict:
 
 
 @pytest.fixture
-def downloader(api_config: Generator, init_args: dict) -> EntsoeDownloader:
+def downloader(init_args: dict) -> EntsoeDownloader:
     """Returns an instantiated EntsoeDownloader.
 
     Args:
-        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
 
     Returns:
-        dl (EntsoeDownloader): Instance of EntsoeDownloader class.
+        EntsoeDownloader: Instance of EntsoeDownloader class.
     """
-    dl = EntsoeDownloader(**init_args)
-    return dl
+    with patch("rbc.energy.entsoe.downloader.set_config"):
+        with patch("rbc.energy.entsoe.downloader.get_config"):
+            return EntsoeDownloader(**init_args)
 
 
 @pytest.fixture
@@ -89,15 +75,12 @@ def task(init_args: dict) -> DownloadTask:
 # Tests - Initialization
 # ----------------------------------
 @pytest.mark.parametrize("bz, valid", [("10YES-REE------0", True), (" ", False)])
-def test_downloader_initialization(
-    api_config: Generator, init_args: dict, bz: str, valid: bool
-) -> None:
+def test_downloader_initialization(init_args: dict, bz: str, valid: bool) -> None:
     """Happy path for class initialization.
 
     Check that the EntsoeDownloader sets up paths and checkpoint correctly.
 
     Args:
-        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
         bz (str): The bidding zone to use.
         valid (bool): Whether the bidding zone is valid (True) or not (False).
@@ -109,7 +92,9 @@ def test_downloader_initialization(
         with pytest.raises(InvalidError, match="not supported"):
             EntsoeDownloader(**args)
     else:
-        downloader = EntsoeDownloader(**args)
+        with patch("rbc.energy.entsoe.downloader.set_config"):
+            with patch("rbc.energy.entsoe.downloader.get_config"):
+                downloader = EntsoeDownloader(**args)
 
         assert downloader.bidding_zones == args["bidding_zones"]
         assert downloader.years == args["years"]
@@ -120,11 +105,10 @@ def test_downloader_initialization(
         assert downloader.checkpoint == {}
 
 
-def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
+def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
     Args:
-        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
     """
     args = init_args.copy()
@@ -145,13 +129,16 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
 
     args["resume"] = True
 
-    downloader = EntsoeDownloader(**args)
-    with patch.object(downloader, "_download_task_data") as mock_dump:
-        mock_dump.return_value = 1
-        downloader.download_data()
+    with patch("rbc.energy.entsoe.downloader.set_config"):
+        with patch("rbc.energy.entsoe.downloader.get_config"):
+            downloader = EntsoeDownloader(**args)
 
-        assert mock_dump.call_count == 0
-        assert downloader.checkpoint == checkpoint
+            with patch.object(downloader, "_download_task_data") as mock_dump:
+                mock_dump.return_value = 1
+                downloader.download_data()
+
+                assert mock_dump.call_count == 0
+                assert downloader.checkpoint == checkpoint
 
 
 # ----------------------------------
@@ -273,7 +260,7 @@ def test_get_task_data_no_generation_data(
             downloader._get_task_data(task)
 
 
-def test_get_task_data_structure_change(
+def test_get_task_data_structure_changed(
     downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the expected columns are missing.

@@ -70,7 +70,7 @@ def task(init_args: dict) -> DownloadTask:
     return DownloadTask(date=f"{year}-01-01")
 
 
-def mock_eia_json(
+def get_mock_eia_json(
     date: str | None = None, data: list | None = None, total: int | None = None
 ) -> dict:
     """Helper to generate an argument-dependant EIA response body.
@@ -85,7 +85,17 @@ def mock_eia_json(
     """
     if date is not None:
         if data is None:
-            data = [{"period": f"{date}T00", "respondent": "A", "value": "10"}]
+            data = [
+                {
+                    "period": f"{date}T00",
+                    "respondent": "A",
+                    "respondent-name": "Company A",
+                    "fueltype": "NG",
+                    "type-name": "Natural Gas",
+                    "value": "10",
+                    "value-units": "megawatthours",
+                }
+            ]
     else:
         data = []
 
@@ -194,7 +204,7 @@ def test_get_task_data(downloader: EiaDownloader, task: DownloadTask) -> None:
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_response = MagicMock(status_code=200)
-    mock_response.json.return_value = mock_eia_json(task.date)
+    mock_response.json.return_value = get_mock_eia_json(task.date)
 
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
@@ -301,7 +311,7 @@ def test_get_task_data_incomplete_download(
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_response = MagicMock(status_code=200)
-    mock_response.json.return_value = mock_eia_json(total=1)
+    mock_response.json.return_value = get_mock_eia_json(total=1)
 
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
@@ -320,7 +330,7 @@ def test_get_task_data_no_generation_data(
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_response = MagicMock(status_code=200)
-    mock_response.json.return_value = mock_eia_json()
+    mock_response.json.return_value = get_mock_eia_json()
 
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
@@ -328,4 +338,25 @@ def test_get_task_data_no_generation_data(
         with pytest.raises(
             MissingDataError, match="No energy generation data available"
         ):
+            downloader._get_task_data(task)
+
+
+def test_get_task_data_structure_changed(
+    downloader: EiaDownloader, task: DownloadTask
+) -> None:
+    """Failure path for "_get_task_data" method when dataframe doesn't have all columns.
+
+    Args:
+        downloader (EiaDownloader): Instance of EiaDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
+    """
+    mock_response = MagicMock(status_code=200)
+    mock_response.json.return_value = get_mock_eia_json(
+        date="2020-01-01", data=[{"period": f"{task.date}T00"}]
+    )
+
+    with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
+        mock_get.return_value = mock_response
+
+        with pytest.raises(DataStructureError, match="Missing columns"):
             downloader._get_task_data(task)

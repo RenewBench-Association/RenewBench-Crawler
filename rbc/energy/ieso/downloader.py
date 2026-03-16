@@ -32,8 +32,6 @@ class IesoDownloader(EnergyDownloader):
     """IESO data downloader.
 
     Attributes:
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (dict): Dict of 0 and 1 values for resuming.
         _download_lock (threading.Lock): Lock for downloading yearly data once.
     """
 
@@ -96,7 +94,8 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             MissingDataError: If an earlier year was provided than data exists for or if the
                 dataframe is empty.
-            DataStructureError: If downloaded data does not have the required columns.
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing (this will cause the entire run to be killed).
         """
         dt = pd.Period(task.date, freq="M")
         year = dt.year
@@ -117,10 +116,11 @@ class IesoDownloader(EnergyDownloader):
                 f"No energy generation data available for {year}-{month}. Skipping..."
             )
 
-        if not all(col in df.columns for col in EXPECTED_COLS):
+        missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
+        if missing_cols:
             raise DataStructureError(
                 f"IESO file structure change detected for '{task.identifier}'! "
-                f"Missing columns: {[c for c in EXPECTED_COLS if c not in df.columns]}"
+                f"Missing columns: {missing_cols}"
             )
 
         return df

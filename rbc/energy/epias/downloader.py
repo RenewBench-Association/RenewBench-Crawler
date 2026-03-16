@@ -14,19 +14,41 @@ from loguru import logger
 
 from rbc.energy.utils import (
     WORKERS,
+    DataStructureError,
     DownloadTask,
     EnergyDownloader,
     InvalidError,
     MissingDataError,
 )
 
+EXPECTED_COLS = [
+    "date",
+    "hour",
+    "total",
+    "powerPlantName",
+    "naturalGas",
+    "dammedHydro",
+    "lignite",
+    "river",
+    "importCoal",
+    "wind",
+    "sun",
+    "fueloil",
+    "geothermal",
+    "asphaltiteCoal",
+    "blackCoal",
+    "biomass",
+    "naphta",
+    "lng",
+    "importExport",
+    "wasteheat",
+]
+
 
 class EpiasDownloader(EnergyDownloader):
     """EPIAS data downloader.
 
     Attributes:
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (dict): Dict of 0 and 1 values for resuming.
         eptr (EPTR2): EPTR2 object for EPIAS data access.
     """
 
@@ -81,6 +103,8 @@ class EpiasDownloader(EnergyDownloader):
 
         Raises:
             MissingDataError: If no power plant or generation data is available.
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing (this will cause the entire run to be killed).
         """
         # get power-plants   # ['id', 'name', 'eic', 'shortName']
         start = task.date
@@ -101,5 +125,12 @@ class EpiasDownloader(EnergyDownloader):
         df_gen = pd.concat(gen_data)
         if df_gen.empty:
             raise MissingDataError("No energy generation data available! Skipping...")
+
+        missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
+        if missing_cols:
+            raise DataStructureError(
+                f"EPIAS structure change detected for '{task.identifier}'! "
+                f"Missing columns: {missing_cols}"
+            )
 
         return df_gen

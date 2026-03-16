@@ -445,8 +445,8 @@ def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> N
     Args:
         df (pd.DataFrame): Pandas dataframe to be stored in csv file.
         file_path (Path): Path to the csv file.
-        index (bool, optional): Whether to include the df index in the
-            csv (True) or not (False). Defaults to False.
+        index (bool, optional): Whether to include the df index in the csv (True) or not
+            (False). Defaults to False.
     """
     if file_path.suffix != ".csv":
         file_path = file_path.with_suffix(".csv")
@@ -469,7 +469,7 @@ def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
 
     Raises:
         InvalidError: If the file doesn't have one of the expected suffixes, if the file
-        doesn't exist, if invalid arguments (args) were provided for loading with pandas.
+            doesn't exist, if invalid arguments (args) were provided for loading with pandas.
         RETRY_ERRORS: If the file is a URL that is inaccessible for some reason.
     """
     try:

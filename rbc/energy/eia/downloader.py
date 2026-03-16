@@ -26,14 +26,22 @@ from rbc.energy.utils import (
 URL_ROOT = "https://api.eia.gov/v2/"
 URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
 
+EXPECTED_COLS = [
+    "period",
+    "respondent",
+    "respondent-name",
+    "fueltype",
+    "type-name",
+    "value",
+    "value-units",
+]
+
 
 class EiaDownloader(EnergyDownloader):
     """EIA data downloader.
 
     Attributes:
         token (str): The personal EIA API token.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (dict): Dict of 0 and 1 values for resuming.
     """
 
     def __init__(
@@ -102,7 +110,8 @@ class EiaDownloader(EnergyDownloader):
                 not all available data was downloaded.
             HTTPError: If request response is not 200.
             RateLimitError: If API rate limit has been exceeded.
-            DataStructureError: If response parsing failed due to a change in EIA structure.
+            DataStructureError: If the EIA structure changed causing response parsing fail or
+                relevant columns to be missed (this will cause the entire run to be killed).
             MissingDataError: If the loaded dataframe is empty.
         """
         dt = pd.Period(task.date, freq="D")
@@ -160,7 +169,7 @@ class EiaDownloader(EnergyDownloader):
 
             except (requests.exceptions.JSONDecodeError, KeyError, ValueError) as e:
                 raise DataStructureError(
-                    f"EIA API structure change detected for '{task.identifier}'!"
+                    f"EIA structure change detected for '{task.identifier}'!"
                     f"Failed parsing of data from {URL} with parameters {params}: "
                     f"{type(e).__name__}!"
                 )
@@ -185,6 +194,13 @@ class EiaDownloader(EnergyDownloader):
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
             raise MissingDataError("No energy generation data available! Skipping...")
+
+        missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
+        if missing_cols:
+            raise DataStructureError(
+                f"EIA structure change detected for '{task.identifier}'! "
+                f"Missing columns: {missing_cols}"
+            )
 
         df_gen = df_gen[df_gen["period"] != end]  # remove included hour from next day
         df_gen = df_gen.sort_values(["period", "respondent"], ignore_index=True)

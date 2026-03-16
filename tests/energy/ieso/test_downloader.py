@@ -63,20 +63,6 @@ def task(init_args: dict) -> DownloadTask:
     return DownloadTask(date=f"{year}-01")
 
 
-def get_task_year_month(task: DownloadTask) -> tuple[int, int]:
-    """Return (year, month) from a monthly DownloadTask.
-
-    Args:
-        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
-
-    Returns:
-        tuple[int, int]: Tuple containing (year, month).
-    """
-    assert task.date is not None
-    year, month = task.date.split("-")
-    return int(year), int(month)
-
-
 def get_mock_df(specific_task: DownloadTask) -> pd.DataFrame:
     """Gets a mock dataframe for a specific task.
 
@@ -98,6 +84,20 @@ def get_mock_df(specific_task: DownloadTask) -> pd.DataFrame:
         },
         index=[0],
     )
+
+
+def get_task_year_month(task: DownloadTask) -> tuple[int, int]:
+    """Return (year, month) from a monthly DownloadTask.
+
+    Args:
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
+
+    Returns:
+        tuple[int, int]: Tuple containing (year, month).
+    """
+    assert task.date is not None
+    year, month = task.date.split("-")
+    return int(year), int(month)
 
 
 # ----------------------------------

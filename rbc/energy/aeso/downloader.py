@@ -150,8 +150,8 @@ class AesoDownloader(EnergyDownloader):
         Raises:
             MissingDataError: If a month date was requested for which no data exists or if the
                 returned dataframe is empty.
-            DataStructureError: If downloaded data does not have the required columns or
-                unparsable dates.
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing or data is unparsable (this will cause the entire run to be killed).
         """
         task.validate_required_fields("temporal_resolution")
 
