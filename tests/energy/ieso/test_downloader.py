@@ -11,7 +11,7 @@ from requests import exceptions
 
 from rbc.energy.ieso import IesoDownloader
 from rbc.energy.ieso.downloader import EXPECTED_COLS, URL_NEW_BASE, URL_OLD_BASE
-from rbc.energy.utils import DataStructureError, DownloadKey, MissingDataError
+from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
 
 # ----------------------------------
@@ -50,24 +50,24 @@ def downloader(init_args: dict) -> IesoDownloader:
 
 
 @pytest.fixture
-def task(init_args: dict) -> DownloadKey:
+def task(init_args: dict) -> DownloadTask:
     """Gets a task (month) as YYYY-MM from the given year.
 
     Args:
         init_args (dict): Arguments used to initialize an IesoDownloader instance.
 
     Returns:
-        DownloadKey: The metadata of a downloading task, here: date (YYYY-MM)
+        DownloadTask: The metadata of a downloading task, here: date (YYYY-MM)
     """
     year = init_args["years"][0]
-    return DownloadKey(date=f"{year}-01")
+    return DownloadTask(date=f"{year}-01")
 
 
-def get_task_year_month(task: DownloadKey) -> tuple[int, int]:
-    """Return (year, month) from a monthly DownloadKey.
+def get_task_year_month(task: DownloadTask) -> tuple[int, int]:
+    """Return (year, month) from a monthly DownloadTask.
 
     Args:
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
     Returns:
         tuple[int, int]: Tuple containing (year, month).
@@ -77,11 +77,11 @@ def get_task_year_month(task: DownloadKey) -> tuple[int, int]:
     return int(year), int(month)
 
 
-def get_mock_df(specific_task: DownloadKey) -> pd.DataFrame:
+def get_mock_df(specific_task: DownloadTask) -> pd.DataFrame:
     """Gets a mock dataframe for a specific task.
 
     Args:
-        specific_task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        specific_task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
     Returns:
         pandas.DataFrame: Mock dataframe.
@@ -144,7 +144,7 @@ def test_download_data_resume(init_args: dict) -> None:
 
     # save a fake checkpoint file
     checkpoint = {
-        IesoDownloader._turn_task_into_checkpoint_key(DownloadKey(date=d)): 1
+        DownloadTask(date=d).identifier: 1
         for d in pd.date_range(start=f"{y}-01", end=f"{y}-12", freq="MS")
         .strftime("%Y-%m")
         .tolist()
@@ -170,12 +170,12 @@ def test_download_data_resume(init_args: dict) -> None:
 # ----------------------------------
 # Tests - Data crawling logic
 # ----------------------------------
-def test_download_task_data(downloader: IesoDownloader, task: DownloadKey) -> None:
+def test_download_task_data(downloader: IesoDownloader, task: DownloadTask) -> None:
     """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     mock_df = pd.DataFrame({"Hour 1": [16.2]})
 
@@ -183,7 +183,7 @@ def test_download_task_data(downloader: IesoDownloader, task: DownloadKey) -> No
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = Path(downloader.output_path, "1h", f"{task.date}.csv")
+        expected_file = downloader._build_task_path(task)
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
@@ -193,18 +193,18 @@ def test_download_task_data(downloader: IesoDownloader, task: DownloadKey) -> No
 @pytest.mark.parametrize(
     "task, expect_old, expect_new",
     [
-        (DownloadKey(date="2019-04"), 1, 0),  # last month routed to old source
-        (DownloadKey(date="2019-05"), 0, 1),  # first month routed to new source
+        (DownloadTask(date="2019-04"), 1, 0),  # last month routed to old source
+        (DownloadTask(date="2019-05"), 0, 1),  # first month routed to new source
     ],
 )
 def test_get_task_data(
-    downloader: IesoDownloader, task: DownloadKey, expect_old: int, expect_new: int
+    downloader: IesoDownloader, task: DownloadTask, expect_old: int, expect_new: int
 ) -> None:
     """Happy path for "_get_task_data" method.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
         expect_old (int): Expected call count for _get_from_old_source.
         expect_new (int): Expected call count for _get_from_new_source.
     """
@@ -226,13 +226,13 @@ def test_get_task_data(
     assert mock_new.call_count == expect_new
 
 
-def test_get_task_data_year_before_2010(downloader: IesoDownloader) -> None:
+def test_get_task_data_no_data_before_2010(downloader: IesoDownloader) -> None:
     """Failure path for "_get_task_data" method when dataframe is empty.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
     """
-    task = DownloadKey(date="2009-01")
+    task = DownloadTask(date="2009-01")
     mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
@@ -241,29 +241,33 @@ def test_get_task_data_year_before_2010(downloader: IesoDownloader) -> None:
                 downloader._get_task_data(task)
 
 
-def test_get_task_data_df_empty(downloader: IesoDownloader, task: DownloadKey) -> None:
-    """Failure path for "_get_task_data" method when dataframe is empty.
+def test_get_task_data_no_generation_data(
+    downloader: IesoDownloader, task: DownloadTask
+) -> None:
+    """Failure path for "_get_task_data" method when no generation data is available.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
         with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
-            with pytest.raises(MissingDataError, match="No generation data available"):
+            with pytest.raises(
+                MissingDataError, match="No energy generation data available"
+            ):
                 downloader._get_task_data(task)
 
 
 def test_get_task_data_structure_changed(
-    downloader: IesoDownloader, task: DownloadKey
+    downloader: IesoDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when dataframe doesn't have all columns.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     mock_df = get_mock_df(task).drop(columns="Generator")
 
@@ -276,12 +280,12 @@ def test_get_task_data_structure_changed(
 # ----------------------------------
 # Tests - Data crawling helper methods
 # ----------------------------------
-def test_get_from_new_source(downloader: IesoDownloader, task: DownloadKey) -> None:
+def test_get_from_new_source(downloader: IesoDownloader, task: DownloadTask) -> None:
     """Happy path for "_get_from_new_source" method, ensuring correct URL and no 'Forecast'.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     year, month = get_task_year_month(task)
     mock_df = pd.DataFrame(
@@ -305,13 +309,13 @@ def test_get_from_new_source(downloader: IesoDownloader, task: DownloadKey) -> N
 
 
 def test_get_from_new_source_missing_measurement(
-    downloader: IesoDownloader, task: DownloadKey
+    downloader: IesoDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_from_new_source" method when the 'Measurement' column is missing.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     year, month = get_task_year_month(task)
     mock_df = get_mock_df(task).drop(columns="Measurement")
@@ -324,18 +328,18 @@ def test_get_from_new_source_missing_measurement(
 @pytest.mark.parametrize(
     "task, suffix",
     [
-        (DownloadKey(date="2018-01"), "2018.xlsx"),
-        (DownloadKey(date="2019-01"), "2019-Jan-April.xlsx"),  # edge case
+        (DownloadTask(date="2018-01"), "2018.xlsx"),
+        (DownloadTask(date="2019-01"), "2019-Jan-April.xlsx"),  # edge case
     ],
 )
 def test_get_from_old_source(
-    downloader: IesoDownloader, task: DownloadKey, suffix: str
+    downloader: IesoDownloader, task: DownloadTask, suffix: str
 ) -> None:
     """Happy path for "_get_from_old_source" method, ensuring correct URL and month filter.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
         suffix (str): Expected suffix of URL.
     """
     year, month = get_task_year_month(task)
@@ -361,12 +365,12 @@ def test_get_from_old_source(
         assert df["Delivery Date"].dt.month.iloc[0] == month
 
 
-def test_lru_cache_works(downloader: IesoDownloader, task: DownloadKey) -> None:
+def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None:
     """Happy path for @lru_cache decorator of _load_yearly_excel method.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     year, month = get_task_year_month(task)
     mock_df = pd.DataFrame(
@@ -387,13 +391,13 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadKey) -> None:
 
 
 def test_get_from_old_source_structure_changed(
-    downloader: IesoDownloader, task: DownloadKey
+    downloader: IesoDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_from_new_source" method when the URL is unavailable.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     year, month = get_task_year_month(task)
 
@@ -404,12 +408,12 @@ def test_get_from_old_source_structure_changed(
             downloader._get_from_old_source(year=year, month=month)
 
 
-def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadKey) -> None:
+def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> None:
     """Happy path for "_load_yearly_excel" method, with concatenation and capacity finding.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     mock_df_out = pd.DataFrame(
         {"DATE": [f"{task.date}-01"], "HOUR": [1], "GEN_A": [10]}
@@ -440,13 +444,13 @@ def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadKey) -> Non
 
 
 def test_load_yearly_excel_missing_capacity(
-    downloader: IesoDownloader, task: DownloadKey
+    downloader: IesoDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_load_yearly_excel" method when no suitable capacity sheets exist.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     mock_df_out = pd.DataFrame(
         {"DATE": [f"{task.date}-01"], "HOUR": [1], "GEN_A": [10]}
@@ -459,12 +463,12 @@ def test_load_yearly_excel_missing_capacity(
             downloader._load_yearly_excel(url="http://fake.xlsx")
 
 
-def test_standardize_old_data(downloader: IesoDownloader, task: DownloadKey) -> None:
+def test_standardize_old_data(downloader: IesoDownloader, task: DownloadTask) -> None:
     """Happy path for "_standardize_old_data" method, ensuring transformations work.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
     mock_df = pd.DataFrame(
         {

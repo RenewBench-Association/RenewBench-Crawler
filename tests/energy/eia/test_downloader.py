@@ -13,7 +13,7 @@ from rbc.energy.eia import EiaDownloader
 from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     DataStructureError,
-    DownloadKey,
+    DownloadTask,
     InvalidError,
     MissingDataError,
     RateLimitError,
@@ -57,17 +57,17 @@ def downloader(init_args: dict) -> EiaDownloader:
 
 
 @pytest.fixture
-def task(init_args: dict) -> DownloadKey:
+def task(init_args: dict) -> DownloadTask:
     """Gets a task (date) as YYYY-MM-DD from the given year.
 
     Args:
         init_args (dict): Arguments used to initialize an EiaDownloader instance.
 
     Returns:
-        DownloadKey: The metadata of a downloading task, here: date (YYYY-MM-DD)
+        DownloadTask: The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     year = init_args["years"][0]
-    return DownloadKey(date=f"{year}-01-01")
+    return DownloadTask(date=f"{year}-01-01")
 
 
 def mock_eia_json(
@@ -140,7 +140,7 @@ def test_download_data_resume(init_args: dict) -> None:
     # save a fake checkpoint file
     y = args["years"][0]
     checkpoint = {
-        EiaDownloader._turn_task_into_checkpoint_key(DownloadKey(date=d)): 1
+        DownloadTask(date=d).identifier: 1
         for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31")
         .strftime("%Y-%m-%d")
         .tolist()
@@ -166,12 +166,12 @@ def test_download_data_resume(init_args: dict) -> None:
 # ----------------------------------
 # Tests - Data crawling logic
 # ----------------------------------
-def test_download_task_data(downloader: EiaDownloader, task: DownloadKey) -> None:
+def test_download_task_data(downloader: EiaDownloader, task: DownloadTask) -> None:
     """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_df = pd.DataFrame({"total": [16.2]})
 
@@ -179,19 +179,19 @@ def test_download_task_data(downloader: EiaDownloader, task: DownloadKey) -> Non
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = Path(downloader.output_path, "1h", f"{task.date}.csv")
+        expected_file = downloader._build_task_path(task)
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
         assert saved_df.iloc[0]["total"] == 16.2
 
 
-def test_get_task_data(downloader: EiaDownloader, task: DownloadKey) -> None:
+def test_get_task_data(downloader: EiaDownloader, task: DownloadTask) -> None:
     """Happy path for "_get_task_data" method.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_response = MagicMock(status_code=200)
     mock_response.json.return_value = mock_eia_json(task.date)
@@ -208,13 +208,13 @@ def test_get_task_data(downloader: EiaDownloader, task: DownloadKey) -> None:
 
 
 def test_get_task_data_request_failed(
-    downloader: EiaDownloader, task: DownloadKey
+    downloader: EiaDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the request fails directly.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.side_effect = exceptions.ConnectionError
@@ -229,13 +229,13 @@ def test_get_task_data_request_failed(
 
 
 def test_get_task_data_fail_return_code(
-    downloader: EiaDownloader, task: DownloadKey
+    downloader: EiaDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the return code is unsuccessful.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = MagicMock(status_code=500)
@@ -245,7 +245,7 @@ def test_get_task_data_fail_return_code(
 
 
 def test_get_task_data_rate_limit_fail(
-    downloader: EiaDownloader, task: DownloadKey
+    downloader: EiaDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the rate limit is reached (code 429).
 
@@ -254,7 +254,7 @@ def test_get_task_data_rate_limit_fail(
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get, patch(
         "rbc.energy.eia.downloader.time.sleep"
@@ -272,13 +272,13 @@ def test_get_task_data_rate_limit_fail(
 
 @pytest.mark.parametrize("return_val", [{}, {"response": {}}])
 def test_get_task_data_failed_response_parsing(
-    downloader: EiaDownloader, task: DownloadKey, return_val: dict
+    downloader: EiaDownloader, task: DownloadTask, return_val: dict
 ) -> None:
     """Failure path for "_get_task_data" method when the parsed response is incomplete.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
         return_val (dict): Incomplete return values from parsing.
     """
     mock_response = MagicMock(status_code=200)
@@ -292,13 +292,13 @@ def test_get_task_data_failed_response_parsing(
 
 
 def test_get_task_data_incomplete_download(
-    downloader: EiaDownloader, task: DownloadKey
+    downloader: EiaDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the download isn't complete.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_response = MagicMock(status_code=200)
     mock_response.json.return_value = mock_eia_json(total=1)
@@ -310,14 +310,14 @@ def test_get_task_data_incomplete_download(
             downloader._get_task_data(task)
 
 
-def test_get_task_data_empty_response(
-    downloader: EiaDownloader, task: DownloadKey
+def test_get_task_data_no_generation_data(
+    downloader: EiaDownloader, task: DownloadTask
 ) -> None:
-    """Failure path for "_get_task_data" method when the API returns no data.
+    """Failure path for "_get_task_data" method when no generation data is available.
 
     Args:
         downloader (EiaDownloader): Instance of EiaDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_response = MagicMock(status_code=200)
     mock_response.json.return_value = mock_eia_json()
@@ -325,5 +325,7 @@ def test_get_task_data_empty_response(
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
 
-        with pytest.raises(MissingDataError, match="No generation data available"):
+        with pytest.raises(
+            MissingDataError, match="No energy generation data available"
+        ):
             downloader._get_task_data(task)

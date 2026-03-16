@@ -66,11 +66,8 @@ class InvalidError(Exception):
 
 
 @dataclass(frozen=True)
-class DownloadKey:
-    """Dataclass for defining downloading metadata for a task or checkpoint grouping.
-
-    A key with a `date` represents one concrete download task.
-    A key without a `date` can be used to define a checkpoint/output grouping.
+class DownloadTask:
+    """Dataclass for defining downloading metadata for a task.
 
     This defines a task's relevant attributes, which in turn is used to build a consistent
     path structure:
@@ -82,7 +79,7 @@ class DownloadKey:
         bidding_zone (str | None): Optional bidding zone of data. Defaults to None.
     """
 
-    date: str | None = None
+    date: str
     temporal_resolution: str = "1h"
     bidding_zone: str | None = None
 
@@ -91,12 +88,12 @@ class DownloadKey:
     _TRES_PATTERN = re.compile(r"^\d+(?:h|min|d)$")
 
     def __post_init__(self) -> None:
-        """Validates the date format if a date is provided.
+        """Validates the date and temporal resolution formats.
 
         Raises:
             ValueError: If provided date or temporal resolution are in the wrong format.
         """
-        if self.date is not None and not self._DATE_PATTERN.match(self.date):
+        if not self._DATE_PATTERN.match(self.date):
             raise ValueError(f"Invalid date / date format: '{self.date}'")
 
         if not self._TRES_PATTERN.match(self.temporal_resolution):
@@ -104,14 +101,30 @@ class DownloadKey:
                 f"Invalid temporal resolution: '{self.temporal_resolution}'"
             )
 
-    def update(self, **changes) -> "DownloadKey":
+    @property
+    def identifier(self) -> str:
+        """A task's unique string representation for checkpointing and logging.
+
+        Returns:
+            str: Unique string 'date=YYYY-MM(-DD)|temporal_resolution=1h(|bidding_zone=<bz>)'
+        """
+        parts = [
+            f"date={self.date}",
+            f"temporal_resolution={self.temporal_resolution}",
+        ]
+        if self.bidding_zone:
+            parts.append(f"bidding_zone={self.bidding_zone}")
+
+        return "|".join(parts)
+
+    def update(self, **changes) -> "DownloadTask":
         """Update a key with provided changes.
 
         Args:
             changes: Dictionary of changes to make to the DownloadKey instance.
 
         Returns:
-            DownloadKey: Updated download task instance.
+            DownloadTask: Updated download task instance.
         """
         return replace(self, **changes)
 
@@ -136,12 +149,14 @@ class EnergyDownloader(ABC):
     """Abstract base class for parallelized daily energy downloader classes.
 
     Attributes:
+        RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
         output_path (Path): Path to the output directory.
         years (list[int]): List of years to get data for.
         resume (bool, optional): Whether to resume from a previous download (True) or
-        start from scratch (False). Defaults to True.
+            start from scratch (False). Defaults to True.
         _lock (threading.Lock): Threading lock to ensure thread-safe checkpoint updates.
-        RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
+        checkpoint_path (Path): Path to the checkpoint file for resuming.
+        checkpoint (dict): Dict of 0 and 1 values for resuming.
     """
 
     RETRY_ERRORS = RETRY_ERRORS
@@ -153,40 +168,40 @@ class EnergyDownloader(ABC):
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
         """
         self.output_path = output_path
         self.years = years
         self.resume = resume
         self._lock = threading.Lock()
 
-    def _threading_wrapper(
-        self, task: DownloadKey, checkpoint: dict[str, int], checkpoint_path: Path
-    ) -> None:
+        self.checkpoint_path = Path(self.output_path, "status.pickle")
+        self.checkpoint = self._load_checkpoint()
+
+    def _threading_wrapper(self, task: DownloadTask) -> None:
         """Thread-safe wrapper for one download task (download and checkpoint reading/saving).
 
         Args:
-            task (DownloadKey): The metadata for a task to download data for.
-            checkpoint (dict): Dict of 0 and 1 values for resuming.
-            checkpoint_path (Path): Path to the checkpoint file for resuming.
+            task (DownloadTask): The metadata for a task to download data for.
         """
-        ckpt_key = self._turn_task_into_checkpoint_key(task)
         with self._lock:
-            if checkpoint.get(ckpt_key) == 1:
-                logger.info(f"{task}: Data already downloaded. Skipping.")
+            if self.checkpoint.get(task.identifier) == 1:
+                logger.info(
+                    f"Task '{task.identifier}': Data already downloaded. Skipping."
+                )
                 return
 
         try:
             status = self._download_task_data(task=task)
         except Exception as e:
-            logger.error(f"Unexpected error in thread for {task}: {e}")
+            logger.error(f"Unexpected error in thread for {task.identifier}: {e}")
             status = 0
 
         with self._lock:
-            checkpoint[ckpt_key] = status
-            self._save_checkpoint(checkpoint, checkpoint_path)
+            self.checkpoint[task.identifier] = status
+            self._save_checkpoint()
 
-    def _download_task_data(self, task: DownloadKey) -> int:
+    def _download_task_data(self, task: DownloadTask) -> int:
         """Parse data for a specific task and dump to CSV.
 
         Child classes must raise / propagate errors the following errors to be handled here:
@@ -195,7 +210,7 @@ class EnergyDownloader(ABC):
         - self.RETRY_ERRORS: when accessing generally fails.
 
         Args:
-            task (DownloadKey): The metadata for a task to download data for.
+            task (DownloadTask): The metadata for a task to download data for.
 
         Returns:
             int: Status of the download (1 if successful, 0 if unsuccessful).
@@ -211,7 +226,7 @@ class EnergyDownloader(ABC):
                 os._exit(1)
 
             except MissingDataError as e:  # handle missing data for task
-                logger.error(f"Missing data for {task}: {e}")
+                logger.error(f"Missing data for task '{task.identifier}': {e}")
 
                 task.validate_required_fields("date")
                 if pd.Timestamp(task.date).year == pd.Timestamp.now().year:
@@ -226,106 +241,68 @@ class EnergyDownloader(ABC):
                     # 1. permanent missing data
                     if code == 404:
                         logger.warning(
-                            f"Data for task {task} not found (404). Skipping."
+                            f"Data for task '{task.identifier}' not found (404). Skipping."
                         )
                         return 1
                     # 2. permanent client errors (400-499, except rate limits 429)
                     if 400 <= code < 500 and code != 429:
-                        logger.error(f"Permanent error {code} for {task}. Skipping.")
+                        logger.error(
+                            f"Permanent error {code} for task '{task.identifier}'. Skipping."
+                        )
                         return 1
 
                 # 3. everything else (500s, Timeouts, 429s) -> Retry
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY)
                 else:
-                    logger.critical(f"Failed {task} after {MAX_RETRIES} attempts: {e}")
+                    logger.critical(
+                        f"Failed task '{task.identifier}' after {MAX_RETRIES} attempts: {e}"
+                    )
                     return 0
 
         return 1  # pragma: no cover
 
     @abstractmethod
-    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:
         """Method to get the task's data (child classes MUST implement/overwrite this!).
 
         Args:
-            task (DownloadKey): The metadata for a task to download data for.
+            task (DownloadTask): The metadata for a task to download data for.
 
         Returns:
             DataFrame: The task's downloaded data (child classes MUST implement this!).
         """
 
-    def _save_task_data(self, task: DownloadKey, df: pd.DataFrame) -> None:
+    def _save_task_data(self, task: DownloadTask, df: pd.DataFrame) -> None:
         """Save downloaded task data to disk.
 
         Functionality is separated here to allow child classes to overwrite (i.e. Entso-e).
 
         Args:
-            task (DownloadKey): The metadata for the task that was downloaded.
+            task (DownloadTask): The metadata for the task that was downloaded.
             df (pd.DataFrame): Downloaded dataframe for the task.
         """
         file_path = self._build_task_path(task)
         write_df_to_csv(df=df, file_path=file_path)
 
     # ------------------------------------------------------------------
-    # Path definition and checkpoint helpers (using DownloadKey)
+    # Path definition and checkpoint helpers (using DownloadTask)
     # ------------------------------------------------------------------
-    @staticmethod
-    def _turn_task_into_checkpoint_key(task: DownloadKey) -> str:
-        """Convert a task to a string key for checkpointing.
-
-        Args:
-            task (DownloadKey): The metadata for a task to download data for.
-
-        Returns:
-            str: String to use as key in checkpointing dict.
-        """
-        parts = [
-            f"date={task.date}" if task.date else None,
-            f"temporal_res={task.temporal_resolution}"
-            if task.temporal_resolution
-            else None,
-            f"bidding_zone={task.bidding_zone}" if task.bidding_zone else None,
-        ]
-        return "|".join(p for p in parts if p is not None)
-
-    def _build_checkpoint_path(self, task: DownloadKey) -> Path:
-        """Return checkpoint path for a task grouping.
-
-        By default, checkpoints are stored per temporal resolution and optional zone.
-        The structure for the path is:
-        <output_path>/<temporal_resolution>/<optional...>/<optional bz>/status.pickle
-
-        Args:
-            task (DownloadKey): The metadata for a task grouping without a 'date'.
-
-        Returns:
-            Path: Path to the checkpoint file.
-        """
-        parts: list[str | Path] = [self.output_path, task.temporal_resolution]
-
-        if task.bidding_zone:
-            parts.append(task.bidding_zone)
-
-        return Path(*parts, "status.pickle")
-
-    def _load_checkpoint(self, checkpoint_path: Path) -> dict[str, int]:
+    def _load_checkpoint(self) -> dict[str, int]:
         """Load checkpoint from checkpoint path depending on resume logic.
-
-        Args:
-            checkpoint_path (Path): Path to checkpoint file.
 
         Returns:
             dict: Loaded checkpoint.
         """
-        if self.resume and checkpoint_path.is_file():
-            logger.info(f"Loading checkpoint from '{checkpoint_path}'")
+        if self.resume and self.checkpoint_path.is_file():
+            logger.info(f"Loading checkpoint from '{self.checkpoint_path}'")
 
             try:
-                with open(checkpoint_path, "rb") as f:
+                with open(self.checkpoint_path, "rb") as f:
                     return pickle.load(f)
             except (EOFError, pickle.UnpicklingError):
                 logger.warning(
-                    f"Checkpoint '{checkpoint_path}' is corrupted. Starting fresh."
+                    f"Checkpoint '{self.checkpoint_path}' is corrupted. Starting fresh."
                 )
                 return {}
         else:
@@ -334,33 +311,26 @@ class EnergyDownloader(ABC):
             )
             return {}
 
-    @staticmethod
-    def _save_checkpoint(checkpoint: dict[str, int], checkpoint_path: Path) -> None:
-        """Save checkpoint safely (ensure abrupt terminations don't corrupt the file).
-
-        Args:
-            checkpoint (dict): Checkpoint to be saved.
-            checkpoint_path (Path): Path to checkpoint file.
-        """
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = checkpoint_path.with_suffix(".tmp")
+    def _save_checkpoint(self) -> None:
+        """Save checkpoint safely (ensure abrupt terminations don't corrupt the file)."""
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.checkpoint_path.with_suffix(".tmp")
         with open(temp_path, "wb") as f:
-            pickle.dump(checkpoint, f)
-        os.replace(temp_path, checkpoint_path)
+            pickle.dump(self.checkpoint, f)
+        os.replace(temp_path, self.checkpoint_path)
 
-    def _build_task_path(self, task: DownloadKey) -> Path:
+    def _build_task_path(self, task: DownloadTask) -> Path:
         """Build the CSV file path to which the downloaded task data will be saved.
 
         Designed structure:
         <output_path>/<temporal_resolution>/<optional ...>/<optional bz>/<date>.csv
 
         Args:
-            task (DownloadKey): The metadata for a task to download data for.
+            task (DownloadTask): The metadata for a task to download data for.
 
         Returns:
             Path: Path to the csv file.
         """
-        task.validate_required_fields("date")
         parts: list[str | Path] = [self.output_path, task.temporal_resolution]
 
         if task.bidding_zone:

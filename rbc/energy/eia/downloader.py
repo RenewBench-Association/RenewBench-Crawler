@@ -16,7 +16,7 @@ from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     WORKERS,
     DataStructureError,
-    DownloadKey,
+    DownloadTask,
     EnergyDownloader,
     InvalidError,
     MissingDataError,
@@ -57,8 +57,6 @@ class EiaDownloader(EnergyDownloader):
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self.token = token
-        self.checkpoint_path = Path(self.output_path, "status.pickle")
-        self.checkpoint = self._load_checkpoint(self.checkpoint_path)
 
         logger.info(f"EIA Downloader initialized for:\n- years:\t\t{years}")
 
@@ -74,18 +72,15 @@ class EiaDownloader(EnergyDownloader):
 
     def download_data(self):
         """Parse data for all given years from EIA site and save to CSV."""
-        tasks = [DownloadKey(date=d) for d in self._get_date_list()]
+        tasks = [DownloadTask(date=d) for d in self._get_date_list()]
 
-        logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
+        logger.info(
+            f"Downloading tasks: {tasks[0].identifier} --- {tasks[-1].identifier}"
+        )
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            executor.map(
-                lambda t: self._threading_wrapper(
-                    t, self.checkpoint, self.checkpoint_path
-                ),
-                tasks,
-            )
+            executor.map(self._threading_wrapper, tasks)
 
-    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:  # type: ignore[override]
         """Get EIA generation data per plant for one specific date.
 
         The parsing cap lies at 5000 rows per API call. The amount of hourly data
@@ -95,7 +90,7 @@ class EiaDownloader(EnergyDownloader):
         instead of per month/year.
 
         Args:
-            task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
 
         Returns:
             pd.DataFrame: Dataframe for specific date with the columns
@@ -110,8 +105,6 @@ class EiaDownloader(EnergyDownloader):
             DataStructureError: If response parsing failed due to a change in EIA structure.
             MissingDataError: If the loaded dataframe is empty.
         """
-        task.validate_required_fields("date")
-
         dt = pd.Period(task.date, freq="D")
         start = dt.strftime("%Y-%m-%dT00")
         end = pd.Period((dt + pd.Timedelta(days=1)), freq="D").strftime("%Y-%m-%dT00")
@@ -167,7 +160,7 @@ class EiaDownloader(EnergyDownloader):
 
             except (requests.exceptions.JSONDecodeError, KeyError, ValueError) as e:
                 raise DataStructureError(
-                    f"EIA API structure change detected for task: {task}."
+                    f"EIA API structure change detected for '{task.identifier}'!"
                     f"Failed parsing of data from {URL} with parameters {params}: "
                     f"{type(e).__name__}!"
                 )
@@ -191,7 +184,7 @@ class EiaDownloader(EnergyDownloader):
 
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
-            raise MissingDataError(f"No generation data available for {task}!")
+            raise MissingDataError("No energy generation data available! Skipping...")
 
         df_gen = df_gen[df_gen["period"] != end]  # remove included hour from next day
         df_gen = df_gen.sort_values(["period", "respondent"], ignore_index=True)

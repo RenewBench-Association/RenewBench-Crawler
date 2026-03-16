@@ -14,7 +14,7 @@ from loguru import logger
 
 from rbc.energy.utils import (
     WORKERS,
-    DownloadKey,
+    DownloadTask,
     EnergyDownloader,
     InvalidError,
     MissingDataError,
@@ -52,8 +52,6 @@ class EpiasDownloader(EnergyDownloader):
             InvalidError: If login credentials are incorrect.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
-        self.checkpoint_path = Path(self.output_path, "status.pickle")
-        self.checkpoint = self._load_checkpoint(self.checkpoint_path)
 
         logger.info(f"EPIAS Downloader initialized for:\n- years:\t\t{years}")
 
@@ -64,22 +62,19 @@ class EpiasDownloader(EnergyDownloader):
 
     def download_data(self):
         """Parse data for all given years from EPIAS Platform and save to CSV."""
-        tasks = [DownloadKey(date=d) for d in self._get_date_list()]
+        tasks = [DownloadTask(date=d) for d in self._get_date_list()]
 
-        logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
+        logger.info(
+            f"Downloading tasks: {tasks[0].identifier} --- {tasks[-1].identifier}"
+        )
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            executor.map(
-                lambda t: self._threading_wrapper(
-                    t, self.checkpoint, self.checkpoint_path
-                ),
-                tasks,
-            )
+            executor.map(self._threading_wrapper, tasks)
 
-    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:  # type: ignore[override]
         """Get EPIAS generation data per plant for one specific date.
 
         Args:
-            task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
 
         Returns:
             pd.DataFrame: Dataframe for specific date.
@@ -87,14 +82,12 @@ class EpiasDownloader(EnergyDownloader):
         Raises:
             MissingDataError: If no power plant or generation data is available.
         """
-        task.validate_required_fields("date")
-
         # get power-plants   # ['id', 'name', 'eic', 'shortName']
         start = task.date
         end = (pd.Timestamp(start) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         df_pp = self.eptr.call("pp-list-for-date-range", start_date=start, end_date=end)
         if df_pp.empty:
-            raise MissingDataError(f"No power plant data available for {task}!")
+            raise MissingDataError("No power plant data available! Skipping...")
 
         # get generation data in batches
         num_batches = math.ceil(len(df_pp) / 1000)  # max allowed batch size = 1000
@@ -107,6 +100,6 @@ class EpiasDownloader(EnergyDownloader):
 
         df_gen = pd.concat(gen_data)
         if df_gen.empty:
-            raise MissingDataError(f"No generation data available for {task}!")
+            raise MissingDataError("No energy generation data available! Skipping...")
 
         return df_gen

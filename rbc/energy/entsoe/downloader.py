@@ -17,7 +17,7 @@ from loguru import logger
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
-    DownloadKey,
+    DownloadTask,
     EnergyDownloader,
     InvalidError,
     MissingDataError,
@@ -87,27 +87,23 @@ class EntsoeDownloader(EnergyDownloader):
     def download_data(self) -> None:
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""
         all_dates = self._get_date_list()
+        tasks = [
+            DownloadTask(date=d, bidding_zone=bz)
+            for bz in self.bidding_zones
+            for d in all_dates
+        ]
 
-        for bz in self.bidding_zones:
-            checkpoint_path = self._build_checkpoint_path(
-                task=DownloadKey(bidding_zone=bz)
-            )
-            checkpoint = self._load_checkpoint(checkpoint_path)
+        logger.info(
+            f"Downloading tasks: {tasks[0].identifier} --- {tasks[-1].identifier}"
+        )
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+            executor.map(self._threading_wrapper, tasks)
 
-            tasks = [DownloadKey(date=d, bidding_zone=bz) for d in all_dates]
-
-            logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
-            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-                executor.map(
-                    lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
-                    tasks,
-                )
-
-    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:  # type: ignore[override]
         """Get Entso-e generation data per plant for one specific date and bidding zone.
 
         Args:
-            task (DownloadKey): The metadata of a downloading task,
+            task (DownloadTask): The metadata of a downloading task,
                 here: date (YYYY-MM-DD), bidding_zone
 
         Returns:
@@ -123,7 +119,7 @@ class EntsoeDownloader(EnergyDownloader):
             DataStructureError: If data structure has changed and relevant columns
             are missing (this will cause the entire run to be killed).
         """
-        task.validate_required_fields("date", "bidding_zone")
+        task.validate_required_fields("bidding_zone")
         dt = pd.Period(task.date, freq="D")
 
         try:
@@ -136,17 +132,13 @@ class EntsoeDownloader(EnergyDownloader):
             ).query_api()
 
         except ServiceUnavailableError:
-            raise ConnectionError(
-                "Entso-E Transparency Platform is currently unavailable!"
-            )
+            raise ConnectionError("Entso-E Transparency Platform is unavailable!")
 
-        if type(result) is not list:
-            raise ConnectionError(f"API call did not return requested data for {task}!")
+        if not isinstance(result, list):
+            raise ConnectionError("API call did not return requested data!")
 
         if not result:
-            raise MissingDataError(
-                f"No data available for {task}! Setting download status to 1."
-            )
+            raise MissingDataError("No energy generation data available! Skipping...")
 
         records = extract_records(result)  # turns into list of dicts
         records = add_timestamps(records)  # adds key 'timestamp' to each dict
@@ -159,7 +151,7 @@ class EntsoeDownloader(EnergyDownloader):
             )
         except KeyError as e:
             raise DataStructureError(
-                f"Entsoe-E structure change detected for {task}! "
+                f"Entsoe-E structure change detected for '{task.identifier}'! "
                 f"Relevant columns are missing: {e}"
             )
 
@@ -170,14 +162,14 @@ class EntsoeDownloader(EnergyDownloader):
         df = df.sort_values(by=["timestamp", "Unit_Name"], ascending=[True, True])
         return df
 
-    def _save_task_data(self, task: DownloadKey, df: pd.DataFrame) -> None:
+    def _save_task_data(self, task: DownloadTask, df: pd.DataFrame) -> None:
         """Save ENTSO-E downloaded task data to disk, splitting by temporal resolution.
 
         The API does not allow temporal resolution arguments, but ENTSO-E data has varying
         resolutions. The df is grouped by t_res and subsets are written to the correct folder.
 
         Args:
-            task (DownloadKey): The metadata for the task that was downloaded.
+            task (DownloadTask): The metadata for the task that was downloaded.
             df (pd.DataFrame): Downloaded dataframe for the task.
 
         Raises:

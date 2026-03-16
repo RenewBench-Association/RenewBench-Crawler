@@ -18,7 +18,7 @@ from loguru import logger
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
-    DownloadKey,
+    DownloadTask,
     EnergyDownloader,
     InvalidError,
     MissingDataError,
@@ -115,23 +115,19 @@ class AesoDownloader(EnergyDownloader):
     def download_data(self) -> None:
         """Parse data for all given years from AESO site and save to CSV."""
         all_months = self._get_month_list()
+        tasks = [
+            DownloadTask(date=d, temporal_resolution=t_res)
+            for t_res in self.temporal_resolutions
+            for d in all_months
+        ]
 
-        for t_res in self.temporal_resolutions:
-            checkpoint_path = self._build_checkpoint_path(
-                DownloadKey(temporal_resolution=t_res)
-            )
-            checkpoint = self._load_checkpoint(checkpoint_path)
+        logger.info(
+            f"Downloading tasks: {tasks[0].identifier} --- {tasks[-1].identifier}"
+        )
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+            executor.map(self._threading_wrapper, tasks)
 
-            tasks = [DownloadKey(date=d, temporal_resolution=t_res) for d in all_months]
-
-            logger.info(f"Downloading data for tasks:\n{tasks[0]} to {tasks[-1]}")
-            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-                executor.map(
-                    lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
-                    tasks,
-                )
-
-    def _get_task_data(self, task: DownloadKey) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:  # type: ignore[override]
         """Get AESO generation data per plant for one specific month.
 
         AESO provides 5-min (2015 - 2023) and hourly (2015 - now) data on their site.
@@ -142,7 +138,7 @@ class AesoDownloader(EnergyDownloader):
         - "CSD Generation (hourly) - YYYY-MM.zip" from 2025-07 onward.
 
         Args:
-            task (DownloadKey): The metadata of a downloading task,
+            task (DownloadTask): The metadata of a downloading task,
                 here: date (YYYY-MM), temporal_resolution
 
         Returns:
@@ -157,24 +153,26 @@ class AesoDownloader(EnergyDownloader):
             DataStructureError: If downloaded data does not have the required columns or
                 unparsable dates.
         """
-        task.validate_required_fields("date", "temporal_resolution")
+        task.validate_required_fields("temporal_resolution")
 
         # find remote item that contains relevant data
         try:
             item = self._source_lookup[task.temporal_resolution][task.date]
         except KeyError:
-            raise MissingDataError("No AESO data available!")
+            raise MissingDataError(
+                "No AESO data that matches requested task! Skipping..."
+            )
 
         # load remote data into dataframe (using id and name because dict can't be cached!)
         df = self._load_zip(item_id=item["id"], item_name=item["name"])
 
         if df.empty:
-            raise MissingDataError("No generation data exists!")
+            raise MissingDataError("No energy generation data available! Skipping...")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:
             raise DataStructureError(
-                f"AESO file structure change detected for task: {task}! "
+                f"AESO file structure change detected for '{task.identifier}'! "
                 f"Missing columns: {missing_cols}"
             )
 
@@ -184,14 +182,16 @@ class AesoDownloader(EnergyDownloader):
         )  # AESO uses MPT, not MST
         if date_col.isna().any():
             raise DataStructureError(
-                f"AESO file structure change detected for task: {task}! "
+                f"AESO file structure change detected for '{task.identifier}'! "
                 f"'Date (MPT)' contains unparsable values."
             )
 
         df = df.loc[date_col.dt.to_period("M") == pd.Period(task.date, freq="M")].copy()
 
         if df.empty:
-            raise MissingDataError("No generation data left after month filter!")
+            raise MissingDataError(
+                "No energy generation data after month filter! Skipping..."
+            )
 
         df = df.sort_values(
             by=["Date (MST)", "Date (MPT)", "Asset Name"], ignore_index=True
@@ -278,8 +278,8 @@ class AesoDownloader(EnergyDownloader):
 
                         else:
                             raise DataStructureError(
-                                f"AESO file structure change detected in file '{item.name}': "
-                                f"naming convention changed, date search returns {item_dates}"
+                                f"AESO file structure change detected in file '{item.name}'! "
+                                f"Naming convention changed, date search returns {item_dates}"
                             )
 
                 offset += len(items.entries)

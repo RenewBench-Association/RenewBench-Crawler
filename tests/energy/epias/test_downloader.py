@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from rbc.energy.epias import EpiasDownloader
-from rbc.energy.utils import DownloadKey, InvalidError, MissingDataError
+from rbc.energy.utils import DownloadTask, InvalidError, MissingDataError
 
 
 # ----------------------------------
@@ -49,17 +49,17 @@ def downloader(init_args: dict) -> EpiasDownloader:
 
 
 @pytest.fixture
-def task(init_args: dict) -> DownloadKey:
+def task(init_args: dict) -> DownloadTask:
     """Gets a task (date) as YYYY-MM-DD from the given year.
 
     Args:
         init_args (dict): Arguments used to initialize an EpiasDownloader instance.
 
     Returns:
-        DownloadKey: The metadata of a downloading task, here: date (YYYY-MM-DD)
+        DownloadTask: The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     year = init_args["years"][0]
-    return DownloadKey(date=f"{year}-01-01")
+    return DownloadTask(date=f"{year}-01-01")
 
 
 # ----------------------------------
@@ -112,7 +112,7 @@ def test_download_data_resume(init_args: dict) -> None:
     # save a fake checkpoint file
     y = args["years"][0]
     checkpoint = {
-        EpiasDownloader._turn_task_into_checkpoint_key(DownloadKey(date=d)): 1
+        DownloadTask(date=d).identifier: 1
         for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31")
         .strftime("%Y-%m-%d")
         .tolist()
@@ -137,12 +137,12 @@ def test_download_data_resume(init_args: dict) -> None:
 # ----------------------------------
 # Tests - Data crawling logic
 # ----------------------------------
-def test_download_task_data(downloader: EpiasDownloader, task: DownloadKey) -> None:
+def test_download_task_data(downloader: EpiasDownloader, task: DownloadTask) -> None:
     """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_df = pd.DataFrame({"total": [16.2]})
 
@@ -150,19 +150,19 @@ def test_download_task_data(downloader: EpiasDownloader, task: DownloadKey) -> N
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = Path(downloader.output_path, "1h", f"{task.date}.csv")
+        expected_file = downloader._build_task_path(task)
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
         assert saved_df.iloc[0]["total"] == 16.2
 
 
-def test_get_task_data(downloader: EpiasDownloader, task: DownloadKey) -> None:
+def test_get_task_data(downloader: EpiasDownloader, task: DownloadTask) -> None:
     """Happy path for "_get_task_data" method.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_pp_data = pd.DataFrame(
         {
@@ -194,13 +194,13 @@ def test_get_task_data(downloader: EpiasDownloader, task: DownloadKey) -> None:
 
 
 def test_get_task_data_no_pp_data(
-    downloader: EpiasDownloader, task: DownloadKey
+    downloader: EpiasDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when no power plant data is available.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_pp_data = pd.DataFrame({})
     mock_gen_data = pd.DataFrame({})
@@ -218,14 +218,14 @@ def test_get_task_data_no_pp_data(
         downloader._get_task_data(task)
 
 
-def test_get_task_data_no_gen_data(
-    downloader: EpiasDownloader, task: DownloadKey
+def test_get_task_data_no_generation_data(
+    downloader: EpiasDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when no generation data is available.
 
     Args:
         downloader (EpiasDownloader): Instance of EpiasDownloader class.
-        task (DownloadKey): The metadata of a downloading task, here: date (YYYY-MM-DD)
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
     mock_pp_data = pd.DataFrame({"id": ["2336"]})
     mock_gen_data = pd.DataFrame({})
@@ -239,5 +239,5 @@ def test_get_task_data_no_gen_data(
 
     downloader.eptr.call.side_effect = call_side_effect
 
-    with pytest.raises(MissingDataError, match="No generation data"):
+    with pytest.raises(MissingDataError, match="No energy generation data available"):
         downloader._get_task_data(task)
