@@ -293,3 +293,107 @@ def test_get_task_data_structure_change(
 
         with pytest.raises(DataStructureError, match="structure change detected"):
             downloader._get_task_data(task)
+
+
+# ----------------------------------
+# Tests - Data crawling helper methods
+# ----------------------------------
+def test_save_task_data_single_tres(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Happy path for _save_task_data with one temporal res and missing data rows are removed.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
+    df = pd.DataFrame(
+        {
+            "Generation_MW": [10.0, 20.0],
+            "Temporal_Resolution": ["PT60M", None],
+        }
+    )
+    downloader._save_task_data(task, df)
+
+    expected_file = downloader._build_task_path(task.update(temporal_resolution="1h"))
+    assert expected_file.is_file()
+
+    saved_df = pd.read_csv(expected_file)
+    assert len(saved_df) == 1  # row with missing temporal resolution value removed
+    assert saved_df.iloc[0]["Generation_MW"] == 10.0
+
+
+def test_save_task_data_two_tres(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Happy path for _save_task_data with two temporal resolutions.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
+    df = pd.DataFrame(
+        {
+            "Generation_MW": [10.0, 20.0],
+            "Temporal_Resolution": ["PT60M", "PT20M"],
+        }
+    )
+    downloader._save_task_data(task, df)
+
+    file_1h = downloader._build_task_path(task.update(temporal_resolution="1h"))
+    file_20min = downloader._build_task_path(task.update(temporal_resolution="20min"))
+
+    assert file_1h.is_file()
+    assert file_20min.is_file()
+
+    df_1h = pd.read_csv(file_1h)
+    df_20min = pd.read_csv(file_20min)
+
+    assert len(df_1h) == 1
+    assert len(df_20min) == 1
+    assert df_1h.iloc[0]["Generation_MW"] == 10.0
+    assert df_20min.iloc[0]["Generation_MW"] == 20.0
+
+
+def test_save_task_data_invalid_tres(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Failure path for _save_task_data when provided temporal resolution isn't supported."""
+    df = pd.DataFrame(
+        {
+            "timestamp": [f"{task.date}T00:00:00+00:00"],
+            "Generation_MW": [16.2],
+            "Temporal_Resolution": ["INVALID"],
+        }
+    )
+    with pytest.raises(DataStructureError, match="Unknown ENTSO-E temporal resolution"):
+        downloader._save_task_data(task, df)
+
+
+@pytest.mark.parametrize(
+    "tres, tres_normalized",
+    [
+        ("PT60M", "1h"),
+        ("PT20M", "20min"),
+        ("PT5M", "5min"),
+    ],
+)
+def test_normalize_temporal_resolution(tres: str, tres_normalized: str) -> None:
+    """Happy path for _normalize_temporal_resolution.
+
+    Args:
+        tres (str): Raw temporal resolution string.
+        tres_normalized (str): Expected temporal resolution string.
+    """
+    assert EntsoeDownloader._normalize_temporal_resolution(tres) == tres_normalized
+
+
+@pytest.mark.parametrize("invalid_tres", ["PT1H", "invalid", "", "60M"])
+def test_normalize_temporal_resolution_invalid(invalid_tres: str) -> None:
+    """Failure path for _normalize_temporal_resolution with unsupported format.
+
+    Args:
+        invalid_tres (str): Invalid raw temporal resolution string.
+    """
+    with pytest.raises(DataStructureError, match="Unknown ENTSO-E temporal resolution"):
+        EntsoeDownloader._normalize_temporal_resolution(invalid_tres)
