@@ -26,7 +26,7 @@ In general, your source will always need a config file and loading logic:
 
 > Example: [_entsoe.yaml_ file](../configs/energy/entsoe.yaml)
 
-2. **Config loader** ([rbc/config/schema.py](rbc/config/schema.py)):
+2. **Config loader** ([rbc/config/schema.py](../rbc/config/schema.py)):
 
     Amend the `rbc/config/schema.py` to
     - include a `class <Source>Config` with the attributes required by the
@@ -54,7 +54,7 @@ The following files will be required to set up the downloading logic for your cr
 
 > Example: [_entsoe_ folder](../rbc/energy/entsoe)
 
-2. **Script** ([scripts/\<type\>/\<source\>_...py](scripts)):
+2. **Script** ([scripts/\<type\>/\<source\>_...py](../scripts)):
 
     Create a script for each of your source's functionalities from step 3, i.e.
     - a `<type>/<source>_download.py` to run the `downloader.py`.

@@ -35,8 +35,9 @@ RenewBench-Crawler package.
 
 **Download & data structure**
 - Spatial resolution: per generation unit (plant) in each bidding zone
-- Temporal resolution: hourly / 15‑min (stored as `Temporal_Resolution`)
-- Available data timespan: depends on bidding zone; typically mid‑2000s / 2010s to now
+- Temporal resolution: hourly / (sometimes) higher
+- Available data timespan: bidding zone dependant (typically mid‑2010s to now - see
+  [`ACTIVE_ZONES_METADATA` mapping](../rbc/energy/entsoe/mappings.py#L6))
 - Files saved as **raw**: 1 `.csv` per day and bidding zone
 - Columns saved as **raw**:
 
@@ -240,6 +241,24 @@ RenewBench-Crawler package.
   `additional_3` – additional remarks field
 
 </details>
+
+
+### Saving Structure
+
+The downloaded, raw energy data is saved into the following structure per data source
+`<source>`. Values in `()` are optional, i.e. only `entsoe` has a `<bidding_zone>`
+hierarchy level.
+
+```text
+raw/energy
+└── <source>
+    ├── status.pickle
+    ├── logs
+    │   └── <YYYY-MM-DD_HHMMSS>.log
+    └── <temporal_resolution (default: "1h")>
+        └── (<bidding_zone>)
+            └── <YYYY-MM(-DD)>.csv
+```
 
 ## Weather
 
