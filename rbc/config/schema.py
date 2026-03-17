@@ -244,8 +244,8 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
     "epias": EpiasConfig,
     "ieso": IesoConfig,
-    "era5": Era5Config,
-    "icon_dream_global": IconDreamGlobalConfig,
-    "icon_dream_eu": IconDreamEuConfig,
     "barra2": Barra2Config,
+    "era5": Era5Config,
+    "icon_dream_eu": IconDreamEuConfig,
+    "icon_dream_global": IconDreamGlobalConfig,
 }
