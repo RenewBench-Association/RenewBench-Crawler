@@ -226,7 +226,7 @@ class EnergyDownloader(ABC):
                 os._exit(1)
 
             except MissingDataError as e:  # handle missing data for task
-                logger.error(f"Missing data for task '{task.identifier}': {e}")
+                logger.error(f"Missing data for '{task.identifier}': {e}")
 
                 task.validate_required_fields("date")
                 if pd.Timestamp(task.date).year == pd.Timestamp.now().year:
@@ -241,13 +241,13 @@ class EnergyDownloader(ABC):
                     # 1. permanent missing data
                     if code == 404:
                         logger.warning(
-                            f"Data for task '{task.identifier}' not found (404). Skipping."
+                            f"Data for '{task.identifier}' not found (404). Skipping."
                         )
                         return 1
                     # 2. permanent client errors (400-499, except rate limits 429)
                     if 400 <= code < 500 and code != 429:
                         logger.error(
-                            f"Permanent error {code} for task '{task.identifier}'. Skipping."
+                            f"Permanent error {code} for '{task.identifier}'. Skipping."
                         )
                         return 1
 
@@ -256,7 +256,7 @@ class EnergyDownloader(ABC):
                     time.sleep(RETRY_DELAY)
                 else:
                     logger.critical(
-                        f"Failed task '{task.identifier}' after {MAX_RETRIES} attempts: {e}"
+                        f"Failed '{task.identifier}' after {MAX_RETRIES} attempts: {e}"
                     )
                     return 0
 

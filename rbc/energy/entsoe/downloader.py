@@ -11,9 +11,10 @@ import pandas as pd
 from entsoe.config import get_config, set_config
 from entsoe.Generation import ActualGenerationPerGenerationUnit
 from entsoe.query.decorators import ServiceUnavailableError
-from entsoe.utils import add_timestamps, extract_records, mappings
+from entsoe.utils import add_timestamps, extract_records
 from loguru import logger
 
+from rbc.energy.entsoe.mappings import ACTIVE_ZONES, ACTIVE_ZONES_METADATA
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
@@ -49,7 +50,7 @@ class EntsoeDownloader(EnergyDownloader):
         token: str,
         output_path: Path,
         years: list[int],
-        bidding_zones: list[str] = mappings.keys(),
+        bidding_zones: list[str] = ACTIVE_ZONES,
         resume: bool = True,
     ) -> None:
         """Initializes the instance.
@@ -69,7 +70,7 @@ class EntsoeDownloader(EnergyDownloader):
         self.bidding_zones = list(bidding_zones)
 
         for bz in self.bidding_zones:
-            if bz not in list(mappings.keys()):
+            if bz not in ACTIVE_ZONES:
                 raise InvalidError(f"Bidding zone '{bz}' is not supported.")
 
         logger.info(
@@ -121,6 +122,12 @@ class EntsoeDownloader(EnergyDownloader):
         """
         task.validate_required_fields("bidding_zone")
         dt = pd.Period(task.date, freq="D")
+
+        bz_start = int(ACTIVE_ZONES_METADATA[str(task.bidding_zone)]["start"])
+        if dt.year < bz_start:
+            raise MissingDataError(
+                f"No data for year {dt.year} (it's before start {bz_start}). Skipping..."
+            )
 
         try:
             result = ActualGenerationPerGenerationUnit(
