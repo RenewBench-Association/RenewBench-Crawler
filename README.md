@@ -49,6 +49,7 @@ The RenewBench-Crawler repository is structured as follows:
 │   │   ├── ieso/                 # IESO (Canada, Ontario)
 │   │   └── taipower/             # Taipower (Taiwan)
 │   └── weather/                # Weather data crawlers
+│       ├── barra/                # BARRA2 (Australia)
 │       ├── era5/                 # ERA5 (Global)
 │       └── icon_dream/           # ICON-DREAM (Global/Europe)
 │
