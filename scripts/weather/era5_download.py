@@ -106,11 +106,13 @@ def parse_arguments() -> argparse.Namespace:
         "Useful for debugging request parameters.",
     )
     parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume download from a previous checkpoint. "
-        "Skips already downloaded year/month/level_type combinations.",
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Do not resume download from a previous checkpoint.",
     )
+    parser.set_defaults(resume=True)
+
     parser.add_argument(
         "-o",
         "--cfg_options",

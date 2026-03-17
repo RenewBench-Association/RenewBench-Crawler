@@ -47,6 +47,7 @@ The RenewBench-Crawler repository is structured as follows:
 │   │   ├── epias/                # EPIAS (Turkey)
 │   │   └── taipower/             # Taipower (Taiwan)
 │   └── weather/                # Weather data crawlers
+│       ├── barra/                # BARRA2 (Australia)
 │       ├── era5/                 # ERA5 (Global)
 │       └── icon_dream/           # ICON-DREAM (Global/Europe)
 │

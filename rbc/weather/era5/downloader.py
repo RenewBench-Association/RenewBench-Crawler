@@ -39,20 +39,20 @@ class Era5Downloader:
     """ERA5 reanalysis data downloader.
 
     Attributes:
-        years (list[int]): List of years to get data for.
-        months (list[str]): List of months to get data for.
-        variables (list[str]): List of ERA5 variables to download.
         area (list[float] | None): Bounding box [North, West, South, East] in degrees. None for world (all).
-        pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
-        model_levels (list[str] | None): List of model levels to download (for 3D variables).
-        output_path (Path): Path to the output directory.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
         checkpoint (np.ndarray): Array of 0 and 1 values for tracking download status.
+        checkpoint_path (Path): Path to the checkpoint file for resuming.
         client (cdsapi.Client): CDS API client for retrieving data.
         dry_run (bool): If True, print requests without submitting them.
-        file_format (str): Output file format ("grib" or "netcdf").
         file_extension (str): File extension based on file_format.
+        file_format (str): Output file format ("grib" or "netcdf").
+        model_levels (list[str] | None): List of model levels to download (for 3D variables).
+        months (list[str]): List of months to get data for.
+        output_path (Path): Path to the output directory.
+        pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
         resolution (str): Grid resolution (e.g., "0.25/0.25").
+        variables (list[str]): List of ERA5 variables to download.
+        years (list[int]): List of years to get data for.
     """
 
     def __init__(
@@ -483,70 +483,57 @@ class Era5Downloader:
     @staticmethod
     def print_available_variables() -> None:
         """Print all available ERA5 variables organized by dataset type."""
-        print("\n" + "=" * 80)
-        print("AVAILABLE ERA5 VARIABLES")
-        print("=" * 80)
-
-        print("\n--- SINGLE-LEVEL (2D) VARIABLES ---")
-        print("Dataset: reanalysis-era5-single-levels")
-        print(f"Total: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n")
-        for var in sorted(ALL_SINGLE_LEVEL_VARIABLES):
-            marker = " [DEFAULT]" if var in DEFAULT_VARIABLES else ""
-            print(f"  • {var}{marker}")
-
-        print("\n--- PRESSURE-LEVEL (3D) VARIABLES ---")
-        print("Dataset: reanalysis-era5-pressure-levels")
-        print(f"Available levels (hPa): {', '.join(ALL_PRESSURE_LEVELS)}")
-        print(f"Default levels: {', '.join(DEFAULT_PRESSURE_LEVELS)}")
-        print(f"Total: {len(ALL_PRESSURE_LEVEL_VARIABLES)} variables\n")
-        for var in sorted(ALL_PRESSURE_LEVEL_VARIABLES):
-            marker = (
-                " [DEFAULT]"
-                if var
-                in [
-                    "temperature",
-                    "u_component_of_wind",
-                    "v_component_of_wind",
-                    "relative_humidity",
-                    "geopotential",
-                ]
-                else ""
-            )
-            print(f"  • {var}{marker}")
-
-        print("\n--- MODEL-LEVEL (3D) VARIABLES ---")
-        print("Dataset: reanalysis-era5-complete")
-        print("Available levels: 1-137 (137 levels)")
-        print(f"Default levels: {', '.join(DEFAULT_MODEL_LEVELS)}")
-        print(f"Total: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n")
-        for var in sorted(ALL_MODEL_LEVEL_VARIABLES):
-            marker = (
-                " [DEFAULT]"
-                if var
-                in [
-                    "temperature",
-                    "u_component_of_wind",
-                    "v_component_of_wind",
-                    "relative_humidity",
-                    "geopotential",
-                ]
-                else ""
-            )
-            print(f"  • {var}{marker}")
-
-        print("\n" + "=" * 80)
-        print("USAGE EXAMPLES:")
-        print("=" * 80)
-        print("\n1. Single-level variables only:")
-        print(
-            "   python scripts/weather/era5_download.py -y 2020 -m 01 -v 2m_temperature surface_pressure\n"
+        single_level_lines = "\n".join(
+            f"  - {var}{' [DEFAULT]' if var in DEFAULT_VARIABLES else ''}"
+            for var in sorted(ALL_SINGLE_LEVEL_VARIABLES)
         )
-        print("2. Pressure-level variables with default levels:")
-        print(
-            "   python scripts/weather/era5_download.py -y 2020 -m 01 -v temperature u_component_of_wind -pl\n"
+        pressure_level_lines = "\n".join(
+            f"  - {var}{' [DEFAULT]' if var in DEFAULT_VARIABLES else ''}"
+            for var in sorted(ALL_PRESSURE_LEVEL_VARIABLES)
         )
-        print("3. Model-level variables with custom levels:")
-        print(
-            "   python scripts/weather/era5_download.py -y 2020 -m 01 -v temperature -ml 135 136 137\n"
+        model_level_lines = "\n".join(
+            f"  - {var}{' [DEFAULT]' if var in DEFAULT_VARIABLES else ''}"
+            for var in sorted(ALL_MODEL_LEVEL_VARIABLES)
         )
-        print("=" * 80 + "\n")
+
+        logger.info(
+            "\n"
+            + "=" * 80
+            + "\nAVAILABLE ERA5 VARIABLES"
+            + "\n"
+            + "=" * 80
+            + "\n\n--- SINGLE-LEVEL (2D) VARIABLES ---"
+            + "\nDataset: reanalysis-era5-single-levels"
+            + f"\nTotal: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n"
+            + single_level_lines
+            + "\n\n--- PRESSURE-LEVEL (3D) VARIABLES ---"
+            + "\nDataset: reanalysis-era5-pressure-levels"
+            + f"\nAvailable levels (hPa): {', '.join(ALL_PRESSURE_LEVELS)}"
+            + f"\nDefault levels: {', '.join(DEFAULT_PRESSURE_LEVELS)}"
+            + f"\nTotal: {len(ALL_PRESSURE_LEVEL_VARIABLES)} variables\n"
+            + pressure_level_lines
+            + "\n\n--- MODEL-LEVEL (3D) VARIABLES ---"
+            + "\nDataset: reanalysis-era5-complete"
+            + "\nAvailable levels: 1-137 (137 levels)"
+            + f"\nDefault levels: {', '.join(DEFAULT_MODEL_LEVELS)}"
+            + f"\nTotal: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n"
+            + model_level_lines
+            + "\n"
+        )
+
+        logger.info(
+            "\n"
+            + "=" * 80
+            + "\nUSAGE EXAMPLES:"
+            + "\n"
+            + "=" * 80
+            + "\n\n1. Single-level variables only:"
+            + "\n   python scripts/weather/era5_download.py -y 2020 -m 01 -v 2m_temperature surface_pressure"
+            + "\n\n2. Pressure-level variables with default levels:"
+            + "\n   python scripts/weather/era5_download.py -y 2020 -m 01 -v temperature u_component_of_wind -pl"
+            + "\n\n3. Model-level variables with custom levels:"
+            + "\n   python scripts/weather/era5_download.py -y 2020 -m 01 -v temperature -ml 135 136 137"
+            + "\n"
+            + "=" * 80
+            + "\n"
+        )
