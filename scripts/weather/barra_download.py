@@ -30,12 +30,12 @@ def parse_arguments() -> Namespace:
     )
 
     parser.add_argument(
-        "-r",
-        "--region",
+        "-M",
+        "--model",
         choices=["R2", "r2", "C2", "c2", "C2_20min", "c2_20min", "all"],
         default=None,
-        metavar="REGION",
-        help="BARRA2 region/model. "
+        metavar="MODEL",
+        help="BARRA2 model/region. "
         "R2: 11 km deterministic (1hr), C2: 4 km convective-scale (1hr), "
         "C2_20min: 4 km convective-scale (20min). "
         "For --list-variables, default is all models. For download, default is R2.",
@@ -121,11 +121,11 @@ def main() -> None:
 
     # Handle --list-variables flag
     if args.list_variables:
-        Barra2Downloader.print_available_variables(model=args.region or "all")
+        Barra2Downloader.print_available_variables(model=args.model or "all")
         return
 
-    selected_region = args.region or "R2"
-    if selected_region.lower() == "all":
+    selected_model = args.model or "R2"
+    if selected_model.lower() == "all":
         raise ValueError(
             "'all' is only valid with --list-variables, not for downloads."
         )
@@ -137,7 +137,7 @@ def main() -> None:
 
     downloader = Barra2Downloader(
         output_path=cfg.paths.dst_dir_raw,
-        model=selected_region,
+        model=selected_model,
         years=args.years,
         months=args.months,
         variables=args.variables,

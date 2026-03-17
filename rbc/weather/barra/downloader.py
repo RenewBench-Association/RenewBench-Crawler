@@ -267,7 +267,7 @@ class Barra2Downloader:
             raise ValueError(
                 f"Invalid variables: {', '.join(invalid_vars)}.\n"
                 f"Run 'python scripts/weather/barra_download.py "
-                f"--list-variables --region {self.model}' to see available variables."
+                f"--list-variables --model {self.model}' to see available variables."
             )
 
         # Check that the BARRA2 codes are available for this model
@@ -284,7 +284,7 @@ class Barra2Downloader:
                 f"{', '.join(unavailable_vars)} "
                 f"(BARRA2 codes: {', '.join(barra2_codes)}).\n"
                 f"Run 'python scripts/weather/barra_download.py "
-                f"--list-variables --region {self.model}' to see available variables."
+                f"--list-variables --model {self.model}' to see available variables."
             )
         logger.info(f"All {len(self.variables)} requested variables are available.")
 
@@ -595,13 +595,13 @@ class Barra2Downloader:
             + "\n"
             + "=" * 80
             + "\n\n1. Download default variables for R2 model:"
-            + "\n   python scripts/weather/barra_download.py --region R2 -y 2020 2021"
+            + "\n   python scripts/weather/barra_download.py --model R2 -y 2020 2021"
             + "\n\n2. Download specific variables for C2:"
             + "\n   python scripts/weather/barra_download.py "
-            + "-r C2 -y 2022 -v 1.5m_temperature 10m_u_component_of_wind 10m_v_component_of_wind CAPE"
+            + "-M C2 -y 2022 -v 1.5m_temperature 10m_u_component_of_wind 10m_v_component_of_wind CAPE"
             + "\n\n3. Dry run to see what would be downloaded:"
             + "\n   python scripts/weather/barra_download.py "
-            + "--region R2 -y 2020 --months 01 02 --dry-run"
+            + "--model R2 -y 2020 --months 01 02 --dry-run"
             + "\n"
             + "=" * 80
             + "\n"

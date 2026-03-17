@@ -21,19 +21,38 @@ from rbc.weather.icon_dream.mappings import (
 )
 
 
-def _normalize_region(region: str) -> str:
-    region_key = region.strip().lower()
-    if region_key == "europe":
+def _normalize_model(model: str) -> str:
+    """Normalize model name to internal ICON-DREAM model key.
+
+    Args:
+        model (str): Model name string (case-insensitive).
+
+    Returns:
+        str: Normalized model name ("global" or "eu").
+    """
+    model_key = model.strip().lower()
+    if model_key == "europe":
         return "eu"
-    return region_key
+    return model_key
 
 
-def _get_region_config(region: str) -> dict:
-    if region not in MODEL_CONFIG:
+def _get_model_config(model: str) -> dict:
+    """Return the configuration mapping for a normalized ICON-DREAM model.
+
+    Args:
+        model (str): Normalized model key.
+
+    Returns:
+        dict: Model-specific downloader configuration.
+
+    Raises:
+        ValueError: If the model is not defined in the model configuration.
+    """
+    if model not in MODEL_CONFIG:
         raise ValueError(
-            f"Unknown region '{region}'. Choose from: {', '.join(MODEL_CONFIG)}"
+            f"Unknown model '{model}'. Choose from: {', '.join(MODEL_CONFIG)}"
         )
-    return MODEL_CONFIG[region]
+    return MODEL_CONFIG[model]
 
 
 class IconDreamDownloader:
@@ -42,17 +61,17 @@ class IconDreamDownloader:
     Downloads hourly ICON-DREAM weather data from DWD open data portal.
 
     Attributes:
-        region (str): Region identifier ("global" or "eu").
-        years (list[int]): List of years to download data for.
-        months (list[str]): List of months to download data for (01-12).
-        variables (list[str]): List of variables to download.
-        output_path (Path): Path to the output directory.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (np.ndarray): Array tracking download status (0=not done, 1=done).
-        dry_run (bool): If True, print requests without downloading.
-        resume (bool): If True, resume from previous checkpoint.
         available_variables (set[str]): Set of available variables from DWD.
-        available_dates (dict): Dict of variables to available year-months.
+        checkpoint (np.ndarray): Array tracking download status (0=not done, 1=done).
+        checkpoint_path (Path): Path to the checkpoint file for resuming.
+        dry_run (bool): If True, print requests without downloading.
+        months (list[str]): List of months to download data for (01-12).
+        output_path (Path): Path to the output directory.
+        model (str): Model identifier ("global" or "eu").
+        resume (bool): If True, resume from previous checkpoint.
+        variables (list[str]): List of variables to download.
+        years (list[int]): List of years to download data for.
+
     """
 
     def __init__(
@@ -61,7 +80,7 @@ class IconDreamDownloader:
         years: list[int],
         months: Optional[list[str]] = None,
         variables: Optional[list[str]] = None,
-        region: str = "global",
+        model: str = "global",
         dry_run: bool = False,
         resume: bool = True,
     ) -> None:
@@ -72,15 +91,15 @@ class IconDreamDownloader:
             years (list[int]): List of years to download.
             months (list[str], optional): List of months (01-12). Defaults to all months.
             variables (list[str], optional): List of variables. Defaults to common variables.
-            region (str, optional): Region ("global" or "eu"). Defaults to "global".
+            model (str, optional): Model ("global" or "eu"). Defaults to "global".
             dry_run (bool, optional): If True, print requests without downloading. Defaults to False.
             resume (bool, optional): If True, resume from checkpoint. Defaults to False.
 
         Raises:
             ValueError: If invalid parameters are provided.
         """
-        self.region = _normalize_region(region)
-        self.region_config = _get_region_config(self.region)
+        self.model = _normalize_model(model)
+        self.model_config = _get_model_config(self.model)
         self.years = years
         self.months = (
             months if months is not None else [f"{i:02d}" for i in range(1, 13)]
@@ -98,7 +117,7 @@ class IconDreamDownloader:
         dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
         logger.info(
             f"ICON-DREAM Downloader initialized for:{dry_run_str}"
-            f"\n- region:\t\t{self.region}"
+            f"\n- model:\t\t{self.model}"
             f"\n- years:\t\t{years}"
             f"\n- months:\t\t{self.months}"
             f"\n- variables:\t\t{self.variables}"
@@ -129,7 +148,7 @@ class IconDreamDownloader:
         """
         try:
             # List directory to find available variables
-            response = requests.get(self.region_config["base_url"], timeout=30)
+            response = requests.get(self.model_config["base_url"], timeout=30)
             response.raise_for_status()
 
             # Extract variable folder names from HTML directory listing
@@ -236,8 +255,8 @@ class IconDreamDownloader:
         dwd_code = self._get_dwd_param(variable)
 
         # Build filename and URL
-        filename = f"{self.region_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
-        url = f"{self.region_config['base_url']}/{dwd_code}/{filename}"
+        filename = f"{self.model_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
+        url = f"{self.model_config['base_url']}/{dwd_code}/{filename}"
         output_file = Path(self.output_path, filename)
 
         # Check if file already exists
@@ -303,7 +322,7 @@ class IconDreamDownloader:
         """Download ICON-DREAM grid metadata files.
 
         Downloads the grid definition and connectivity information for the
-        selected ICON-DREAM region.
+        selected ICON-DREAM model.
 
         Args:
             dry_run (bool, optional): If True, print download info without downloading.
@@ -315,9 +334,9 @@ class IconDreamDownloader:
         metadata_dir = Path(self.output_path, "metadata")
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
-        metadata_files = self.region_config["metadata_files"]
+        metadata_files = self.model_config["metadata_files"]
 
-        logger.info(f"Downloading {self.region_config['label']} metadata files...")
+        logger.info(f"Downloading {self.model_config['label']} metadata files...")
         logger.info(f"Metadata destination: {metadata_dir}")
 
         for filename, (url, description) in metadata_files.items():
@@ -402,17 +421,17 @@ class IconDreamDownloader:
         logger.info("Metadata download completed!")
 
     @staticmethod
-    def print_available_variables(region: str = "global") -> None:
-        """Print all available ICON-DREAM variables for a region.
+    def print_available_variables(model: str = "global") -> None:
+        """Print all available ICON-DREAM variables for a model.
 
         Args:
-            region (str): Region identifier ("global", "eu", or "all").
+            model (str): Model identifier ("global", "eu", or "all").
         """
-        region_key = _normalize_region(region)
-        regions = ["global", "eu"] if region_key == "all" else [region_key]
+        model_key = _normalize_model(model)
+        models = ["global", "eu"] if model_key == "all" else [model_key]
 
-        for region_name in regions:
-            region_config = _get_region_config(region_name)
+        for model_name in models:
+            model_config = _get_model_config(model_name)
             single_level_lines = "\n".join(
                 (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
                 for name, code in sorted(VARIABLE_TO_DWD_PARAM.items())
@@ -427,19 +446,19 @@ class IconDreamDownloader:
             logger.info(
                 "\n"
                 + "=" * 80
-                + f"\nAVAILABLE {region_config['label']} VARIABLES"
+                + f"\nAVAILABLE {model_config['label']} VARIABLES"
                 + "\n"
                 + "=" * 80
                 + "\n\n--- SINGLE-LEVEL (2D) VARIABLES ---"
-                + f"\nDataset: {region_config['dataset']}"
-                + f"\nResolution: {region_config['resolution']}"
+                + f"\nDataset: {model_config['dataset']}"
+                + f"\nResolution: {model_config['resolution']}"
                 + "\nTemporal: Hourly data"
                 + "\nTime period: 2010-01 to present"
                 + f"\nTotal: {len(ALL_SINGLE_LEVEL_VARIABLES)} variables\n"
                 + single_level_lines
                 + "\n\n--- MODEL-LEVEL (3D) VARIABLES ---"
-                + f"\nDataset: {region_config['dataset']}"
-                + f"\nResolution: {region_config['resolution']}"
+                + f"\nDataset: {model_config['dataset']}"
+                + f"\nResolution: {model_config['resolution']}"
                 + "\nTemporal: Hourly data"
                 + "\nTime period: 2010-01 to present"
                 + f"\nTotal: {len(ALL_MODEL_LEVEL_VARIABLES)} variables\n"
@@ -454,13 +473,13 @@ class IconDreamDownloader:
             + "\n"
             + "=" * 80
             + "\n\n1. Download data with metadata (default):"
-            + "\n   python scripts/weather/icon_dream_download.py --region global -y 2020 -m 01 -v 2m_temperature surface_pressure"
+            + "\n   python scripts/weather/icon_dream_download.py --model global -y 2020 -m 01 -v 2m_temperature surface_pressure"
             + "\n\n2. Download EU data without metadata:"
-            + "\n   python scripts/weather/icon_dream_download.py --region eu -y 2020 -m 01 -v temperature --no-metadata"
-            + "\n\n3. Download metadata for both regions:"
+            + "\n   python scripts/weather/icon_dream_download.py --model eu -y 2020 -m 01 -v temperature --no-metadata"
+            + "\n\n3. Download metadata for both models:"
             + "\n   python scripts/weather/icon_dream_download.py"
-            + "\n\n4. Download data for both regions:"
-            + "\n   python scripts/weather/icon_dream_download.py --region all -y 2020 -m 01 -v temperature"
+            + "\n\n4. Download data for both models:"
+            + "\n   python scripts/weather/icon_dream_download.py --model all -y 2020 -m 01 -v temperature"
             + "\n"
             + "=" * 80
             + "\n"

@@ -39,20 +39,20 @@ class Era5Downloader:
     """ERA5 reanalysis data downloader.
 
     Attributes:
-        years (list[int]): List of years to get data for.
-        months (list[str]): List of months to get data for.
-        variables (list[str]): List of ERA5 variables to download.
         area (list[float] | None): Bounding box [North, West, South, East] in degrees. None for world (all).
-        pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
-        model_levels (list[str] | None): List of model levels to download (for 3D variables).
-        output_path (Path): Path to the output directory.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
         checkpoint (np.ndarray): Array of 0 and 1 values for tracking download status.
+        checkpoint_path (Path): Path to the checkpoint file for resuming.
         client (cdsapi.Client): CDS API client for retrieving data.
         dry_run (bool): If True, print requests without submitting them.
-        file_format (str): Output file format ("grib" or "netcdf").
         file_extension (str): File extension based on file_format.
+        file_format (str): Output file format ("grib" or "netcdf").
+        model_levels (list[str] | None): List of model levels to download (for 3D variables).
+        months (list[str]): List of months to get data for.
+        output_path (Path): Path to the output directory.
+        pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
         resolution (str): Grid resolution (e.g., "0.25/0.25").
+        variables (list[str]): List of ERA5 variables to download.
+        years (list[int]): List of years to get data for.
     """
 
     def __init__(

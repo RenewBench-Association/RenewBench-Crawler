@@ -31,13 +31,13 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "-r",
-        "--region",
+        "-M",
+        "--model",
         choices=["global", "eu", "europe", "all"],
         default="all",
-        metavar="REGION",
-        help="Region to download. 'global': 13 km resolution, global coverage. "
-        "'eu'/'europe': 6.5 km resolution, Europe only. 'all': both regions. "
+        metavar="MODEL",
+        help="Model to download. 'global': 13 km resolution, global coverage. "
+        "'eu'/'europe': 6.5 km resolution, Europe only. 'all': both models. "
         "Default: all",
     )
 
@@ -105,29 +105,29 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def get_downloader(
-    region_name: str,
+    model_name: str,
     args: argparse.Namespace,
     overrides: dict | None,
     downloaders: dict[str, IconDreamDownloader],
 ) -> IconDreamDownloader:
-    """Get or create an IconDreamDownloader for the specified region.
+    """Get or create an IconDreamDownloader for the specified model.
 
     Returns a cached downloader if available, otherwise creates a new one.
-    Loads configuration from YAML config files based on region.
+    Loads configuration from YAML config files based on model.
 
     Args:
-        region_name (str): Region identifier ("global" or "eu").
+        model_name (str): Model identifier ("global" or "eu").
         args (argparse.Namespace): Parsed command line arguments.
         overrides (dict | None): Configuration overrides from command line.
-        downloaders (dict[str, IconDreamDownloader]): Cache of downloaders by region.
+        downloaders (dict[str, IconDreamDownloader]): Cache of downloaders by model.
 
     Returns:
-        IconDreamDownloader: Initialized downloader for the specified region.
+        IconDreamDownloader: Initialized downloader for the specified model.
     """
-    if region_name in downloaders:
-        return downloaders[region_name]
+    if model_name in downloaders:
+        return downloaders[model_name]
 
-    source = "icon_dream_global" if region_name == "global" else "icon_dream_eu"
+    source = "icon_dream_global" if model_name == "global" else "icon_dream_eu"
     logger.info(f"Loading '{source}' YAML config...")
     cfg = load_config(source, overrides=overrides)
     setup_logging(output_dir=cfg.paths.dst_dir_raw)
@@ -139,27 +139,27 @@ def get_downloader(
         years=args.years,
         months=args.months or None,
         variables=args.variables,
-        region=region_name,
+        model=model_name,
         dry_run=args.dry_run,
         resume=args.resume,
     )
 
     logger.info(f"Config loaded for {source}: {cfg}")
-    downloaders[region_name] = downloader
+    downloaders[model_name] = downloader
     return downloader
 
 
 def main() -> None:
     """Coordinate ICON-DREAM data download."""
     args = parse_arguments()
-    region = args.region
+    model = args.model
 
     if args.list_variables:
-        IconDreamDownloader.print_available_variables(region=region)
+        IconDreamDownloader.print_available_variables(model=model)
         return
 
     # Load configuration
-    regions = ["global", "eu"] if region == "all" else [region]
+    models = ["global", "eu"] if model == "all" else [model]
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
     downloaders: dict[str, IconDreamDownloader] = {}
 
@@ -167,16 +167,16 @@ def main() -> None:
     explicit_data_flags = {"-y", "--years", "-m", "--months", "-v", "--variables"}
     has_explicit_data_args = any(arg in explicit_data_flags for arg in sys.argv[1:])
 
-    for region_name in regions:
-        regional_downloader = get_downloader(region_name, args, overrides, downloaders)
+    for model_name in models:
+        model_downloader = get_downloader(model_name, args, overrides, downloaders)
 
         # Download metadata (unless explicitly disabled)
         if not args.no_metadata:
-            regional_downloader.download_metadata(dry_run=args.dry_run)
+            model_downloader.download_metadata(dry_run=args.dry_run)
 
         # Download data (with default arguments if none specified)
         if has_explicit_data_args:
-            regional_downloader.download_data()
+            model_downloader.download_data()
 
 
 if __name__ == "__main__":
