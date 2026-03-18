@@ -232,13 +232,13 @@ def test_get_task_data_no_data_for_old_year(downloader: IesoDownloader) -> None:
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
     """
-    task = DownloadTask(date="2009-01")
+    old_year_task = DownloadTask(date="2009-01")
     mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
         with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
             with pytest.raises(MissingDataError, match="No data for year"):
-                downloader._get_task_data(task)
+                downloader._get_task_data(old_year_task)
 
 
 def test_get_task_data_no_generation_data(

@@ -226,10 +226,10 @@ def test_get_task_data_no_data_for_old_year(
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    invalid_task = task.update(date="1900-01-01")
+    old_year_task = task.update(date="1900-01-01")
 
     with pytest.raises(MissingDataError, match="No data for year"):
-        downloader._get_task_data(invalid_task)
+        downloader._get_task_data(old_year_task)
 
 
 def test_get_task_data_service_unavailable(
