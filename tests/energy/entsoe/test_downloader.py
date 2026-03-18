@@ -105,6 +105,19 @@ def test_downloader_initialization(init_args: dict, bz: str, valid: bool) -> Non
         assert downloader.checkpoint == {}
 
 
+def test_downloader_initialization_invalid_config(init_args: dict) -> None:
+    """Failure path for class initialization with invalid API configuration.
+
+    Args:
+        init_args (dict): Arguments used to initialize an AesoDownloader instance.
+    """
+    with patch("rbc.energy.entsoe.downloader.set_config"):
+        with patch("rbc.energy.entsoe.downloader.get_config") as mock_config:
+            mock_config.return_value.security_token = None
+            with pytest.raises(InvalidError, match="failed to successfully configure"):
+                EntsoeDownloader(**init_args)
+
+
 def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
@@ -204,7 +217,22 @@ def test_get_task_data(downloader: EntsoeDownloader, task: DownloadTask) -> None
     assert mock_extract.call_count == 1
 
 
-def test_get_task_data_timed_service_unavailable(
+def test_get_task_data_no_data_for_old_year(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Failure path for "_get_task_data" method when the bz has no data for the task's year.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
+    invalid_task = task.update(date="1900-01-01")
+
+    with pytest.raises(MissingDataError, match="No data for year"):
+        downloader._get_task_data(invalid_task)
+
+
+def test_get_task_data_service_unavailable(
     downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the service is unavailable.

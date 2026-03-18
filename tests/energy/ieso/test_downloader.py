@@ -226,8 +226,8 @@ def test_get_task_data(
     assert mock_new.call_count == expect_new
 
 
-def test_get_task_data_no_data_before_2010(downloader: IesoDownloader) -> None:
-    """Failure path for "_get_task_data" method when dataframe is empty.
+def test_get_task_data_no_data_for_old_year(downloader: IesoDownloader) -> None:
+    """Failure path for "_get_task_data" method when a task with year before 2010 is provided.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
