@@ -13,7 +13,12 @@ from requests import exceptions
 
 from rbc.energy.aeso import AesoDownloader
 from rbc.energy.aeso.downloader import EXPECTED_COLS
-from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
+from rbc.energy.utils import (
+    DataStructureError,
+    DownloadTask,
+    InvalidError,
+    MissingDataError,
+)
 
 
 # ----------------------------------
@@ -134,6 +139,19 @@ def test_downloader_initialization(
     assert downloader.checkpoint_path == Path(init_args["output_path"], "status.pickle")
     assert downloader.checkpoint == {}
     assert downloader._source_lookup == mock_lookup
+
+
+def test_downloader_initialization_invalid_tres(init_args: dict) -> None:
+    """Failure path for class initialization with invalid temporal resolution.
+
+    Args:
+        init_args (dict): Arguments used to initialize an AesoDownloader instance.
+    """
+    args = init_args.copy()
+    args["temporal_resolutions"] = ["invalid"]
+
+    with pytest.raises(InvalidError, match="Invalid temporal resolution"):
+        AesoDownloader(**args)
 
 
 def test_downloader_initialization_invalid_request(init_args: dict) -> None:
@@ -431,7 +449,7 @@ def get_item(name: str, item_id: str = "fake_id") -> MagicMock:
 
 
 def test_build_source_lookup(downloader: AesoDownloader) -> None:
-    """Happy path for _build_source_lookup with single-date filenames.
+    """Happy path for _build_source_lookup with one- and two-date filenames.
 
     Args:
         downloader (AesoDownloader): Instance of AesoDownloader class.
@@ -439,7 +457,7 @@ def test_build_source_lookup(downloader: AesoDownloader) -> None:
     page_1h = MagicMock()
     page_1h.entries = [
         get_item("(hourly) - 2020-01.zip", "1h_01"),
-        get_item("(hourly) - 2020-02.zip", "1h_02"),
+        get_item("(hourly) - 2020-06 - 2020-12.zip", "1h_06"),
     ]
     page_1h.total_count = len(page_1h.entries)
 
@@ -451,9 +469,15 @@ def test_build_source_lookup(downloader: AesoDownloader) -> None:
         mock_items.side_effect = [page_1h, page_5min]
         lookup = downloader._build_source_lookup()
 
+    # check single file items
     assert lookup["1h"]["2020-01"] == {"id": "1h_01", "name": "(hourly) - 2020-01.zip"}
-    assert lookup["1h"]["2020-02"] == {"id": "1h_02", "name": "(hourly) - 2020-02.zip"}
     assert lookup["5min"]["2020-01"] == {"id": "5m_01", "name": "(5-min) - 2020-01.zip"}
+    # check two-file item (range between items)
+    for i in range(6, 12):
+        assert lookup["1h"][f"2020-{i:02d}"] == {
+            "id": "1h_06",
+            "name": "(hourly) - 2020-06 - 2020-12.zip",
+        }
 
 
 @pytest.mark.parametrize(
