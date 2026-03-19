@@ -51,7 +51,7 @@ def downloader(basic_args: dict) -> IconDreamDownloader:
         mock_get.return_value = mock_response
 
         with patch("rbc.weather.icon_dream.downloader.requests.head"):
-            dl = IconDreamDownloader(region="global", **basic_args)
+            dl = IconDreamDownloader(model="global", **basic_args)
     return dl
 
 
@@ -71,7 +71,7 @@ def test_downloader_initialization(basic_args: dict) -> None:
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
 
-        downloader = IconDreamDownloader(region="global", **basic_args)
+        downloader = IconDreamDownloader(model="global", **basic_args)
 
         assert downloader.years == basic_args["years"]
         assert downloader.months == basic_args["months"]
@@ -98,7 +98,7 @@ def test_downloader_initialization_default_months(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
         )
@@ -122,7 +122,7 @@ def test_downloader_initialization_custom_variables(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -132,8 +132,8 @@ def test_downloader_initialization_custom_variables(tmp_path: Path) -> None:
         assert downloader.variables == ["temperature", "u_component_of_wind"]
 
 
-def test_normalize_region_europe(tmp_path: Path) -> None:
-    """Test that 'europe' region is normalized to 'eu'.
+def test_normalize_model_europe(tmp_path: Path) -> None:
+    """Test that 'europe' model is normalized to 'eu'.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
@@ -144,25 +144,25 @@ def test_normalize_region_europe(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="europe",
+            model="europe",
             output_path=tmp_path,
             years=[2020],
             variables=["temperature"],
         )
 
         # Should normalize to 'eu'
-        assert downloader.region == "eu"
+        assert downloader.model == "eu"
 
 
-def test_invalid_region_error(tmp_path: Path) -> None:
-    """Test that invalid region raises ValueError.
+def test_invalid_model_error(tmp_path: Path) -> None:
+    """Test that invalid model raises ValueError.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
     """
-    with pytest.raises(ValueError, match="Unknown region"):
+    with pytest.raises(ValueError, match="Unknown model"):
         IconDreamDownloader(
-            region="invalid_region",
+            model="invalid_model",
             output_path=tmp_path,
             years=[2020],
             variables=["temperature"],
@@ -185,7 +185,7 @@ def test_checkpoint_initialization_shape(basic_args: dict) -> None:
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
 
-        downloader = IconDreamDownloader(region="global", **basic_args)
+        downloader = IconDreamDownloader(model="global", **basic_args)
 
         # Should be a dict, initialized as empty (lazy population)
         assert isinstance(downloader.checkpoint, dict)
@@ -213,7 +213,7 @@ def test_checkpoint_resume(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -245,7 +245,7 @@ def test_checkpoint_no_resume_fresh_start(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -287,7 +287,7 @@ def test_discover_available_variables_fallback(tmp_path: Path) -> None:
         mock_get.side_effect = Exception("Network error")
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             variables=["temperature"],
@@ -311,7 +311,7 @@ def test_variable_discovery_no_variables_found(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             variables=["temperature"],
@@ -348,7 +348,7 @@ def test_validate_variables_invalid(tmp_path: Path) -> None:
             mock_get.return_value = mock_response
 
             IconDreamDownloader(
-                region="global",
+                model="global",
                 output_path=tmp_path,
                 years=[2020],
                 variables=["INVALID_VAR"],
@@ -377,7 +377,7 @@ def test_validate_variables_invalid_variable(tmp_path: Path) -> None:
 
         with pytest.raises(ValueError, match="Variables not available on DWD server"):
             IconDreamDownloader(
-                region="global",
+                model="global",
                 output_path=tmp_path,
                 years=[2020],
                 variables=[
@@ -400,7 +400,7 @@ def test_get_default_variables(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
         )
@@ -422,7 +422,7 @@ def test_get_dwd_param_fallback(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             variables=["temperature"],
@@ -542,7 +542,7 @@ def test_download_variables_request_exception(tmp_path: Path) -> None:
         ]
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -574,7 +574,7 @@ def test_download_variables_general_exception(tmp_path: Path) -> None:
         mock_get.side_effect = [discovery_response, Exception("Unexpected error")]
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -645,7 +645,7 @@ def test_download_data_multiple_variables(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -675,7 +675,7 @@ def test_multi_year_download(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020, 2021],
             months=["01", "02"],
@@ -704,7 +704,7 @@ def test_multi_month_download(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01", "02", "03"],
@@ -750,7 +750,7 @@ def test_download_metadata_creates_directory(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -794,7 +794,7 @@ def test_download_metadata_success(tmp_path: Path) -> None:
         ]
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -838,7 +838,7 @@ def test_download_metadata_file_exists(tmp_path: Path) -> None:
             mock_head.return_value = head_response
 
             downloader = IconDreamDownloader(
-                region="global",
+                model="global",
                 output_path=tmp_path,
                 years=[2020],
                 months=["01"],
@@ -875,7 +875,7 @@ def test_download_metadata_head_failure_keeps_file(tmp_path: Path) -> None:
             mock_head.side_effect = requests.exceptions.RequestException("HEAD failed")
 
             downloader = IconDreamDownloader(
-                region="global",
+                model="global",
                 output_path=tmp_path,
                 years=[2020],
                 months=["01"],
@@ -906,7 +906,7 @@ def test_download_metadata_inherits_dry_run(tmp_path: Path) -> None:
         mock_get.return_value = mock_response
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             variables=["temperature"],
@@ -957,7 +957,7 @@ def test_download_metadata_size_mismatch_redownload(tmp_path: Path) -> None:
             ]
 
             downloader = IconDreamDownloader(
-                region="global",
+                model="global",
                 output_path=tmp_path,
                 years=[2020],
                 months=["01"],
@@ -990,7 +990,7 @@ def test_download_metadata_download_exception(tmp_path: Path) -> None:
         ]
 
         downloader = IconDreamDownloader(
-            region="global",
+            model="global",
             output_path=tmp_path,
             years=[2020],
             months=["01"],
@@ -1010,17 +1010,17 @@ def test_print_available_variables() -> None:
 
     Check that print_available_variables executes without errors.
     """
-    with patch("builtins.print"):
+    with patch("rbc.weather.icon_dream.downloader.logger.info"):
         IconDreamDownloader.print_available_variables()
         # Should not raise any exception
 
 
-def test_print_available_variables_all_regions() -> None:
-    """Test print_available_variables with 'all' regions.
+def test_print_available_variables_all_models() -> None:
+    """Test print_available_variables with 'all' models.
 
-    Check that print_available_variables prints variables for all regions.
+    Check that print_available_variables prints variables for all models.
     """
-    with patch("builtins.print") as mock_print:
-        IconDreamDownloader.print_available_variables(region="all")
-        # Should print for both global and eu
-        assert mock_print.call_count > 10  # Multiple print calls for both regions
+    with patch("rbc.weather.icon_dream.downloader.logger.info") as mock_log:
+        IconDreamDownloader.print_available_variables(model="all")
+        # Should log one block for global, one for eu, and one usage block
+        assert mock_log.call_count == 3

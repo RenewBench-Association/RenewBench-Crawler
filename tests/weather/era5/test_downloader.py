@@ -397,18 +397,17 @@ def test_download_data_dry_run(downloader: Era5Downloader) -> None:
 # ----------------------------------
 # Tests - Utility methods
 # ----------------------------------
-def test_print_available_variables(capsys) -> None:
-    """Test printing of available variables.
+def test_print_available_variables() -> None:
+    """Test logging of available variables output."""
+    with patch("rbc.weather.era5.downloader.logger.info") as mock_log:
+        Era5Downloader.print_available_variables()
 
-    Args:
-        capsys: Capture system output.
-    """
-    Era5Downloader.print_available_variables()
+    assert mock_log.call_count == 2
+    logged_output = "\n".join(str(call.args[0]) for call in mock_log.call_args_list)
 
-    captured = capsys.readouterr()
-    assert "AVAILABLE ERA5 VARIABLES" in captured.out
-    assert "SINGLE-LEVEL (2D) VARIABLES" in captured.out
-    assert "PRESSURE-LEVEL (3D) VARIABLES" in captured.out
-    assert "MODEL-LEVEL (3D) VARIABLES" in captured.out
-    assert "2m_temperature" in captured.out
-    assert "temperature" in captured.out
+    assert "AVAILABLE ERA5 VARIABLES" in logged_output
+    assert "SINGLE-LEVEL (2D) VARIABLES" in logged_output
+    assert "PRESSURE-LEVEL (3D) VARIABLES" in logged_output
+    assert "MODEL-LEVEL (3D) VARIABLES" in logged_output
+    assert "2m_temperature" in logged_output
+    assert "temperature" in logged_output
