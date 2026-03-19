@@ -42,7 +42,7 @@ class Era5Downloader:
         years (list[int]): List of years to get data for.
         months (list[str]): List of months to get data for.
         variables (list[str]): List of ERA5 variables to download.
-        area (list[float] | None): Bounding box [North, West, South, East] in degrees. None for world (all).
+        area (list[float] | None): Bounding box [North, West, South, East] in degrees. None for global (all).
         pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
         model_levels (list[str] | None): List of model levels to download (for 3D variables).
         output_path (Path): Path to the output directory.
@@ -78,7 +78,7 @@ class Era5Downloader:
             years (list[int]): List of years to get data for.
             months (list[str], optional): List of months (01-12). Defaults to all months.
             variables (list[str], optional): List of ERA5 variables. Defaults to common variables.
-            area (list[float], optional): Bounding box [N, W, S, E]. Defaults to world (None).
+            area (list[float], optional): Bounding box [N, W, S, E]. Defaults to global (None).
             resolution (str, optional): Grid resolution. Defaults to "0.25/0.25".
             pressure_levels (list[str], optional): Pressure levels (hPa). Defaults to default levels if None.
             model_levels (list[str], optional): Model levels (1-137). Defaults to default levels if None.
@@ -126,7 +126,7 @@ class Era5Downloader:
         # Create output directory if it doesn't exist
         self.output_path.mkdir(parents=True, exist_ok=True)
 
-        area_str = f"{self.area}" if self.area is not None else "World (all)"
+        area_str = f"{self.area}" if self.area is not None else "Global (all)"
         level_info = []
         if self.pressure_levels is not None:
             level_info.append(f"Pressure levels: {len(self.pressure_levels)} levels")

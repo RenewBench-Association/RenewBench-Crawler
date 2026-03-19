@@ -66,7 +66,7 @@ def parse_arguments() -> argparse.Namespace:
         type=float,
         default=None,
         metavar=("NORTH", "WEST", "SOUTH", "EAST"),
-        help="Bounding box in degrees [North, West, South, East]. Default: World (all)",
+        help="Bounding box in degrees [North, West, South, East]. Default: Global (all)",
     )
     parser.add_argument(
         "-pl",
