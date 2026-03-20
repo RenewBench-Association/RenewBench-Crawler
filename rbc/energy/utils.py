@@ -93,19 +93,19 @@ class DownloadTask:
         Raises:
             ValueError: If provided date or temporal resolution are in the wrong format.
         """
+        # check that date matches pattern and is a valid calendar date
         if not self._DATE_PATTERN.match(self.date):
             raise ValueError(f"Invalid date / date format: '{self.date}'")
-
-        if not self._TRES_PATTERN.match(self.temporal_resolution):
-            raise ValueError(
-                f"Invalid temporal resolution: '{self.temporal_resolution}'"
-            )
-
-        # check that date is actually a valid calendar date
         try:
             pd.to_datetime(self.date)
         except (ValueError, TypeError):
             raise ValueError(f"Invalid calendar date: '{self.date}'")
+
+        # check that temporal resolution matches pattern
+        if not self._TRES_PATTERN.match(self.temporal_resolution):
+            raise ValueError(
+                f"Invalid temporal resolution: '{self.temporal_resolution}'"
+            )
 
     @property
     def identifier(self) -> str:

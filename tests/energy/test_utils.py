@@ -389,14 +389,14 @@ def test_downloadtask_initialise(tres: str | None, bz: str | None) -> None:
         assert task.identifier == f"date={date}|temporal_resolution={exp_tres}"
 
 
-@pytest.mark.parametrize("invalid_date", ["20200101", "invalid", ""])
+@pytest.mark.parametrize("invalid_date", ["20200101", "invalid", "", "2020-02-31"])
 def test_downloadtask_initialise_with_invalid_date(invalid_date: str) -> None:
     """Failure path for initialising a DownloadTask instance.
 
     Args:
         invalid_date (str): Invalid date.
     """
-    with pytest.raises(ValueError, match="Invalid date / date format"):
+    with pytest.raises(ValueError, match=r"Invalid.*date"):
         DownloadTask(date=invalid_date)
 
 
