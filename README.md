@@ -42,9 +42,11 @@ The RenewBench-Crawler repository is structured as follows:
 │   │   ├── loader.py             # Load and validate configs
 │   │   └── schema.py             # Pydantic config models and registry
 │   ├── energy/                 # Energy data crawlers
+│   │   ├── aeso/                 # AESO (Canada, Alberta)
 │   │   ├── eia/                  # EIA (US)
 │   │   ├── entsoe/               # ENTSO-e (EU)
 │   │   ├── epias/                # EPIAS (Turkey)
+│   │   ├── ieso/                 # IESO (Canada, Ontario)
 │   │   └── taipower/             # Taipower (Taiwan)
 │   └── weather/                # Weather data crawlers
 │       ├── barra/                # BARRA2 (Australia)

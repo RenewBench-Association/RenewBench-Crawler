@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""EPIAS DATA DOWNLOAD SCRIPT.
+"""AESO DATA DOWNLOAD SCRIPT.
 
-Download data from EPIAS Transparency Platform for Turkey.
+Download data from AESO box cloud storage site for Alberta, Canada.
 """
 
 from argparse import ArgumentParser, Namespace
@@ -10,10 +10,10 @@ from datetime import datetime
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
-from rbc.energy.epias import EpiasDownloader
+from rbc.energy.aeso import AesoDownloader
 from rbc.utils import setup_logging
 
-SOURCE = "epias"
+SOURCE = "aeso"
 
 
 def parse_arguments() -> Namespace:
@@ -22,15 +22,23 @@ def parse_arguments() -> Namespace:
     Returns:
         argparse.Namespace: Namespace parsed command line arguments.
     """
-    parser = ArgumentParser(prog="EPIAS data download")
+    parser = ArgumentParser(prog="AESO data download")
     parser.add_argument(
         "-y",
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2013, datetime.now().year + 1)),  # available years
+        default=list(range(2015, datetime.now().year + 1)),  # 5min: 2015-2023
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2013, datetime.now().year + 1))}",
+        f"Default: {list(range(2015, datetime.now().year + 1))}",
+    )
+    parser.add_argument(
+        "-tr",
+        "--temporal_resolutions",
+        nargs="+",
+        type=str,
+        default=["1h", "5min"],  # these are the available resolutions
+        help=f"Temporal resolutions to download. Example: --temporal_resolutions 1h 5min. Default: {['1h', '5min']}",
     )
     parser.add_argument(
         "--no-resume",
@@ -44,14 +52,13 @@ def parse_arguments() -> Namespace:
         "--cfg_options",
         action="append",
         help="Override YAML config values (supports nested keys). "
-        "Example: -o paths.dst_dir_raw=/your/path/ -o "
-        "access.username=YOUR-SECRET-USERNAME",
+        "Example: -o paths.dst_dir_raw=/your/path/ -o access.api_key=YOUR-SECRET-KEY",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Coordinating EPIAS data download."""
+    """Coordinating AESO data download."""
     args = parse_arguments()
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
@@ -60,11 +67,11 @@ def main() -> None:
     logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
     logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
-    downloader = EpiasDownloader(
-        username=cfg.access.username,
-        password=cfg.access.password,
+    downloader = AesoDownloader(
+        token=cfg.access.api_key,
         output_path=cfg.paths.dst_dir_raw,
         years=args.years,
+        temporal_resolutions=args.temporal_resolutions,
         resume=args.resume,
     )
     downloader.download_data()

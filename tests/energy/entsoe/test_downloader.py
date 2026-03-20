@@ -3,7 +3,6 @@
 
 import pickle
 from pathlib import Path
-from typing import Generator
 from unittest.mock import patch
 
 import pandas as pd
@@ -11,25 +10,17 @@ import pytest
 from entsoe.query.decorators import ServiceUnavailableError
 
 from rbc.energy.entsoe import EntsoeDownloader
-from rbc.energy.utils import DataStructureError
+from rbc.energy.utils import (
+    DataStructureError,
+    DownloadTask,
+    InvalidError,
+    MissingDataError,
+)
 
 
 # ----------------------------------
 # Fixtures
 # ----------------------------------
-@pytest.fixture
-def api_config() -> Generator:
-    """Fixture that patches the entsoe-apy package configuration.
-
-    Yields:
-       patched successful api configuration.
-    """
-    with patch("rbc.energy.entsoe.downloader.set_config"):
-        with patch("rbc.energy.entsoe.downloader.get_config") as mock_get:
-            mock_get.return_value.security_token = "fake_token"
-            yield
-
-
 @pytest.fixture
 def init_args(tmp_path: Path) -> dict:
     """Creates a basic setup with a temporary directory.
@@ -50,52 +41,46 @@ def init_args(tmp_path: Path) -> dict:
 
 
 @pytest.fixture
-def downloader(api_config: Generator, init_args: dict) -> EntsoeDownloader:
+def downloader(init_args: dict) -> EntsoeDownloader:
     """Returns an instantiated EntsoeDownloader.
 
     Args:
-        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
 
     Returns:
-        dl (EntsoeDownloader): Instance of EntsoeDownloader class.
+        EntsoeDownloader: Instance of EntsoeDownloader class.
     """
-    dl = EntsoeDownloader(**init_args)
-    return dl
+    with patch("rbc.energy.entsoe.downloader.set_config"):
+        with patch("rbc.energy.entsoe.downloader.get_config"):
+            return EntsoeDownloader(**init_args)
 
 
 @pytest.fixture
-def download_args(init_args: dict) -> tuple[tuple, dict, Path]:
-    """Gets a set of download arguments from the initialisation arguments.
+def task(init_args: dict) -> DownloadTask:
+    """Gets a task as 'date=YYYY-MM-DD,bidding_zone=<ZONE>' from the init arguments.
 
     Args:
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
 
     Returns:
-        tuple[tuple, dict, Path]: Tuple of ((bidding zone, date), checkpoint,
-        checkpoint_path) for downloading.
+        DownloadTask: The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task = (init_args["bidding_zones"][0], f"{init_args['years'][0]}-01-01")
-    checkpoint: dict = {}
-    checkpoint_path = Path(
-        init_args["output_path"], init_args["bidding_zones"][0], "status.pickle"
+    return DownloadTask(
+        date=f"{init_args['years'][0]}-01-01",
+        bidding_zone=init_args["bidding_zones"][0],
     )
-    return task, checkpoint, checkpoint_path
 
 
 # ----------------------------------
 # Tests - Initialization
 # ----------------------------------
 @pytest.mark.parametrize("bz, valid", [("10YES-REE------0", True), (" ", False)])
-def test_downloader_initialization(
-    api_config: Generator, init_args: dict, bz: str, valid: bool
-) -> None:
+def test_downloader_initialization(init_args: dict, bz: str, valid: bool) -> None:
     """Happy path for class initialization.
 
     Check that the EntsoeDownloader sets up paths and checkpoint correctly.
 
     Args:
-        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
         bz (str): The bidding zone to use.
         valid (bool): Whether the bidding zone is valid (True) or not (False).
@@ -104,21 +89,39 @@ def test_downloader_initialization(
     args["bidding_zones"] = [bz]
 
     if not valid:
-        with pytest.raises(ValueError, match="not supported"):
+        with pytest.raises(InvalidError, match="not supported"):
             EntsoeDownloader(**args)
     else:
-        downloader = EntsoeDownloader(**args)
+        with patch("rbc.energy.entsoe.downloader.set_config"):
+            with patch("rbc.energy.entsoe.downloader.get_config"):
+                downloader = EntsoeDownloader(**args)
 
         assert downloader.bidding_zones == args["bidding_zones"]
         assert downloader.years == args["years"]
         assert downloader.output_path == args["output_path"]
+        assert downloader.checkpoint_path == Path(
+            init_args["output_path"], "status.pickle"
+        )
+        assert downloader.checkpoint == {}
 
 
-def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
+def test_downloader_initialization_invalid_config(init_args: dict) -> None:
+    """Failure path for class initialization with invalid API configuration.
+
+    Args:
+        init_args (dict): Arguments used to initialize an AesoDownloader instance.
+    """
+    with patch("rbc.energy.entsoe.downloader.set_config"):
+        with patch("rbc.energy.entsoe.downloader.get_config") as mock_config:
+            mock_config.return_value.security_token = None
+            with pytest.raises(InvalidError, match="failed to successfully configure"):
+                EntsoeDownloader(**init_args)
+
+
+def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
     Args:
-        api_config (Generator): Fixture that patches the ENTSO-E global configuration.
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
     """
     args = init_args.copy()
@@ -127,60 +130,61 @@ def test_download_data_resume(api_config: Generator, init_args: dict) -> None:
     bz = args["bidding_zones"][0]
     y = args["years"][0]
     checkpoint = {
-        (bz, d): 1
-        for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31")
-        .strftime("%Y-%m-%d")
-        .tolist()
+        DownloadTask(date=d, bidding_zone=bz).identifier: 1
+        for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31").strftime(
+            "%Y-%m-%d"
+        )
     }
-
-    bz_path = Path(args["output_path"], bz)
-    bz_path.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = Path(bz_path, "status.pickle")
+    checkpoint_path = Path(args["output_path"], "status.pickle")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
     args["resume"] = True
-    downloader = EntsoeDownloader(**args)
 
-    with patch.object(downloader, "_download_task_data") as mock_dump:
-        downloader.download_data()
+    with patch("rbc.energy.entsoe.downloader.set_config"):
+        with patch("rbc.energy.entsoe.downloader.get_config"):
+            downloader = EntsoeDownloader(**args)
 
-        assert mock_dump.call_count == 0
+            with patch.object(downloader, "_download_task_data") as mock_dump:
+                mock_dump.return_value = 1
+                downloader.download_data()
+
+                assert mock_dump.call_count == 0
+                assert downloader.checkpoint == checkpoint
 
 
 # ----------------------------------
 # Tests - Data crawling logic
 # ----------------------------------
-def test_download_day_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
+def test_download_day_data(downloader: EntsoeDownloader, task: DownloadTask) -> None:
     """Happy path for "_download_task_data" method when resuming from checkpoint.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task, checkpoint, checkpoint_path = download_args
-    mock_df = pd.DataFrame({"Generation_MW": [16.2]})
+    mock_df = pd.DataFrame({"Generation_MW": [16.2], "Temporal_Resolution": ["PT60M"]})
 
     with patch.object(downloader, "_get_task_data", return_value=mock_df):
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = Path(downloader.output_path, task[0], task[1] + ".csv")
+        expected_file = downloader._build_task_path(task)
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
         assert saved_df.iloc[0]["Generation_MW"] == 16.2
 
 
-def test_get_task_data(downloader: EntsoeDownloader, download_args: tuple) -> None:
+def test_get_task_data(downloader: EntsoeDownloader, task: DownloadTask) -> None:
     """Happy path for "_get_task_data" method.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task, checkpoint, checkpoint_path = download_args
-    timestamp = f"{task[1]}T00:00:00+00:00"
+    timestamp = f"{task.date}T00:00:00+00:00"
     return_value = [
         {
             "timestamp": timestamp,
@@ -213,17 +217,30 @@ def test_get_task_data(downloader: EntsoeDownloader, download_args: tuple) -> No
     assert mock_extract.call_count == 1
 
 
-def test_get_task_data_timed_service_unavailable(
-    downloader: EntsoeDownloader, download_args: tuple
+def test_get_task_data_no_data_for_old_year(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Failure path for "_get_task_data" method when the bz has no data for the task's year.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
+    old_year_task = task.update(date="1900-01-01")
+
+    with pytest.raises(MissingDataError, match="No data for year"):
+        downloader._get_task_data(old_year_task)
+
+
+def test_get_task_data_service_unavailable(
+    downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the service is unavailable.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task, _, _ = download_args
-
     with patch(
         "rbc.energy.entsoe.downloader.ActualGenerationPerGenerationUnit"
     ) as mock_api:
@@ -233,17 +250,15 @@ def test_get_task_data_timed_service_unavailable(
             downloader._get_task_data(task)
 
 
-def test_get_task_data_requested_data_not_returned(
-    downloader: EntsoeDownloader, download_args: tuple
+def test_get_task_data_requested_no_requested_data_returned(
+    downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the requested data is not returned.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task, _, _ = download_args
-
     with patch(
         "rbc.energy.entsoe.downloader.ActualGenerationPerGenerationUnit"
     ) as mock_api:
@@ -253,37 +268,35 @@ def test_get_task_data_requested_data_not_returned(
             downloader._get_task_data(task)
 
 
-def test_get_task_data_no_data_available(
-    downloader: EntsoeDownloader, download_args: tuple
+def test_get_task_data_no_generation_data(
+    downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
-    """Failure path for "_get_task_data" method when the requested data is empty.
+    """Failure path for "_get_task_data" method when no generation data is available.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task, _, _ = download_args
-
     with patch(
         "rbc.energy.entsoe.downloader.ActualGenerationPerGenerationUnit"
     ) as mock_api:
         mock_api.return_value.query_api.return_value = []
 
-        with pytest.raises(ValueError, match="No data available"):
+        with pytest.raises(
+            MissingDataError, match="No energy generation data available"
+        ):
             downloader._get_task_data(task)
 
 
-def test_get_task_data_structure_change(
-    downloader: EntsoeDownloader, download_args: tuple
+def test_get_task_data_structure_changed(
+    downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
     """Failure path for "_get_task_data" method when the expected columns are missing.
 
     Args:
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
-        download_args (tuple): Tuple of download arguments for running _get_task_data.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    task, _, _ = download_args
-
     with patch(
         "rbc.energy.entsoe.downloader.ActualGenerationPerGenerationUnit"
     ) as mock_api, patch(
@@ -295,3 +308,107 @@ def test_get_task_data_structure_change(
 
         with pytest.raises(DataStructureError, match="structure change detected"):
             downloader._get_task_data(task)
+
+
+# ----------------------------------
+# Tests - Data crawling helper methods
+# ----------------------------------
+def test_save_task_data_single_tres(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Happy path for _save_task_data with one temporal res and missing data rows are removed.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
+    df = pd.DataFrame(
+        {
+            "Generation_MW": [10.0, 20.0],
+            "Temporal_Resolution": ["PT60M", None],
+        }
+    )
+    downloader._save_task_data(task, df)
+
+    expected_file = downloader._build_task_path(task.update(temporal_resolution="1h"))
+    assert expected_file.is_file()
+
+    saved_df = pd.read_csv(expected_file)
+    assert len(saved_df) == 1  # row with missing temporal resolution value removed
+    assert saved_df.iloc[0]["Generation_MW"] == 10.0
+
+
+def test_save_task_data_two_tres(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Happy path for _save_task_data with two temporal resolutions.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
+    df = pd.DataFrame(
+        {
+            "Generation_MW": [10.0, 20.0],
+            "Temporal_Resolution": ["PT60M", "PT20M"],
+        }
+    )
+    downloader._save_task_data(task, df)
+
+    file_1h = downloader._build_task_path(task.update(temporal_resolution="1h"))
+    file_20min = downloader._build_task_path(task.update(temporal_resolution="20min"))
+
+    assert file_1h.is_file()
+    assert file_20min.is_file()
+
+    df_1h = pd.read_csv(file_1h)
+    df_20min = pd.read_csv(file_20min)
+
+    assert len(df_1h) == 1
+    assert len(df_20min) == 1
+    assert df_1h.iloc[0]["Generation_MW"] == 10.0
+    assert df_20min.iloc[0]["Generation_MW"] == 20.0
+
+
+def test_save_task_data_invalid_tres(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Failure path for _save_task_data when provided temporal resolution isn't supported."""
+    df = pd.DataFrame(
+        {
+            "timestamp": [f"{task.date}T00:00:00+00:00"],
+            "Generation_MW": [16.2],
+            "Temporal_Resolution": ["INVALID"],
+        }
+    )
+    with pytest.raises(DataStructureError, match="Unknown ENTSO-E temporal resolution"):
+        downloader._save_task_data(task, df)
+
+
+@pytest.mark.parametrize(
+    "tres, tres_normalized",
+    [
+        ("PT60M", "1h"),
+        ("PT20M", "20min"),
+        ("PT5M", "5min"),
+    ],
+)
+def test_normalize_temporal_resolution(tres: str, tres_normalized: str) -> None:
+    """Happy path for _normalize_temporal_resolution.
+
+    Args:
+        tres (str): Raw temporal resolution string.
+        tres_normalized (str): Expected temporal resolution string.
+    """
+    assert EntsoeDownloader._normalize_temporal_resolution(tres) == tres_normalized
+
+
+@pytest.mark.parametrize("invalid_tres", ["PT1H", "invalid", "", "60M"])
+def test_normalize_temporal_resolution_invalid(invalid_tres: str) -> None:
+    """Failure path for _normalize_temporal_resolution with unsupported format.
+
+    Args:
+        invalid_tres (str): Invalid raw temporal resolution string.
+    """
+    with pytest.raises(DataStructureError, match="Unknown ENTSO-E temporal resolution"):
+        EntsoeDownloader._normalize_temporal_resolution(invalid_tres)

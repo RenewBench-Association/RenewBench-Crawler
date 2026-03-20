@@ -4,20 +4,20 @@
 Download data from ENTSO-E Transparency Platform for European bidding zones.
 """
 
-import argparse
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
+from datetime import datetime
 
-from entsoe.utils import mappings
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
 from rbc.energy.entsoe import EntsoeDownloader
+from rbc.energy.entsoe.mappings import ACTIVE_ZONES, MIN_YEAR
 from rbc.utils import setup_logging
 
 SOURCE = "entsoe"
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> Namespace:
     """Parse command line arguments.
 
     Returns:
@@ -29,21 +29,22 @@ def parse_arguments() -> argparse.Namespace:
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2010, 2026)),
+        default=list(range(MIN_YEAR, datetime.now().year + 1)),
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2010, 2026))}",
+        f"Default: {list(range(MIN_YEAR, datetime.now().year + 1))}",
     )
     parser.add_argument(
         "-bz",
         "--bidding_zones",
         nargs="+",
         type=str,
-        choices=list(mappings.keys()),
-        default=list(mappings.keys()),
+        choices=ACTIVE_ZONES,
+        default=ACTIVE_ZONES,
         metavar="BIDDING_ZONES",
-        help="Bidding zones to download. "
+        help="Bidding zone EIC codes to download. "
         "Example: -b '10YES-REE------0' '10YFR-RTE------C'. "
-        "Default: All (see entsoe.utils.mappings)",
+        "Default: All zones that had/have generation data per unit "
+        "(see rbc.energy.entsoe.mappings.py)",
     )
     parser.add_argument(
         "--no-resume",
