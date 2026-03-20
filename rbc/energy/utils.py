@@ -341,39 +341,6 @@ class EnergyDownloader(ABC):
     # --------------------------------------------
     # General helper methods
     # --------------------------------------------
-    # @staticmethod
-    # def _check_connection(requests_func: Callable[[], requests.Response]) -> None:
-    #     """Generic wrapper to check the API/URL connection status using requests.
-    #
-    #     Args:
-    #         requests_func (Callable): Function to check the requests call response.
-    #
-    #     Raises:
-    #         HTTPError: If access to remote site failed.
-    #         ConnectionError: If remote site is unreachable.
-    #     """
-    #     try:
-    #         response = requests_func()
-    #         response.raise_for_status()
-    #
-    #     except requests.exceptions.HTTPError:  # catch 4xx/5xx status codes
-    #         if response.content:
-    #             reason = response.json().get("error", {}).get("code", "Unknown Error")
-    #             error_msg = f"status {response.status_code} ({reason})"
-    #         elif response.reason:
-    #             error_msg = f"status {response.status_code} ({response.reason})"
-    #         else:
-    #             error_msg = f"status {response.status_code} (Empty Response)"
-    #
-    #         logger.error(f"API/URL request failed with {error_msg}")
-    #         raise requests.exceptions.HTTPError(
-    #             f"API/URL access failed with {error_msg}"
-    #         )
-    #
-    #     except requests.exceptions.RequestException as e:  # catch connection/timeout/..
-    #         logger.error("Initialization connectivity check failed!")
-    #         raise ConnectionError(f"API/URL unreachable: {e}") from e
-
     @staticmethod
     def _get_status_code(e: Exception) -> int | None:
         """Extracts HTTP status code from various library exceptions.
