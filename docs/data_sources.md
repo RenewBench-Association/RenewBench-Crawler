@@ -397,7 +397,7 @@ BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology
 </details>
 
 # Excluded Data Sources
-This section lists energy and meteorological sources that are currently ineligible for integration or fall outside the functional scope of the RenewBench-Crawler package.  
+This section lists energy and meteorological sources that are currently ineligible for integration or fall outside the functional scope of the RenewBench-Crawler package.
 
 ## Energy
 
