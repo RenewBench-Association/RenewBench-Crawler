@@ -348,7 +348,7 @@ def parse_arguments() -> Namespace:
         "--only-print-mapping",
         action="store_true",
         help="Don't get the data, only print the ACTIVE_ZONES_MAPPING dict from existing "
-        "JSON results to copy-past into 'rbc/energy/entsoe.mapping.py'.",
+        "JSON results to copy-paste into 'rbc/energy/entsoe.mapping.py'.",
     )
     return parser.parse_args()
 

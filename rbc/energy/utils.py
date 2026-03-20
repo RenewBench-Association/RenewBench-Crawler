@@ -101,6 +101,12 @@ class DownloadTask:
                 f"Invalid temporal resolution: '{self.temporal_resolution}'"
             )
 
+    # Validate that the date is actually a valid calendar date
+    try:
+        pd.to_datetime(self.date)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid calendar date: '{self.date}'")
+
     @property
     def identifier(self) -> str:
         """A task's unique string representation for checkpointing and logging.

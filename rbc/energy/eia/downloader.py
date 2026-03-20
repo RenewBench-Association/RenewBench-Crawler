@@ -169,7 +169,7 @@ class EiaDownloader(EnergyDownloader):
 
             except (requests.exceptions.JSONDecodeError, KeyError, ValueError) as e:
                 raise DataStructureError(
-                    f"EIA structure change detected for '{task.identifier}'!"
+                    f"EIA structure change detected for '{task.identifier}'! "
                     f"Failed parsing of data from {URL} with parameters {params}: "
                     f"{type(e).__name__}!"
                 )
