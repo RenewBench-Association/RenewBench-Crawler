@@ -15,7 +15,9 @@ from loguru import logger
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
+    DownloadTask,
     EnergyDownloader,
+    MissingDataError,
     load_df_from_file,
 )
 
@@ -30,8 +32,6 @@ class IesoDownloader(EnergyDownloader):
     """IESO data downloader.
 
     Attributes:
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
-        checkpoint (dict): Dict of 0 and 1 values for resuming.
         _download_lock (threading.Lock): Lock for downloading yearly data once.
     """
 
@@ -47,14 +47,12 @@ class IesoDownloader(EnergyDownloader):
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
 
         Raises:
             ConnectionError: If the base URLs aren't reachable.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
-        self.checkpoint_path = Path(self.output_path, "status.pickle")
-        self.checkpoint = self._load_checkpoint(self.checkpoint_path)
         self._download_lock = threading.Lock()
 
         logger.info(f"IESO Downloader initialized for:\n- years:\t\t{years}")
@@ -69,18 +67,15 @@ class IesoDownloader(EnergyDownloader):
 
     def download_data(self) -> None:
         """Parse data for all given years from IESO site and save to CSV."""
-        all_months = self._get_month_list()
+        tasks = [DownloadTask(date=d) for d in self._get_month_list()]
 
-        logger.info(f"Downloading data for: {all_months[0]} to {all_months[-1]}")
+        logger.info(
+            f"Downloading tasks: {tasks[0].identifier} --- {tasks[-1].identifier}"
+        )
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            executor.map(
-                lambda t: self._threading_wrapper(
-                    t, self.checkpoint, self.checkpoint_path
-                ),
-                all_months,
-            )
+            executor.map(self._threading_wrapper, tasks)
 
-    def _get_task_data(self, task: str) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:  # type: ignore[override]
         """Get IESO generation data per plant for one specific month.
 
         IESO's data storing structure and method was changed in April 2019 from
@@ -89,7 +84,7 @@ class IesoDownloader(EnergyDownloader):
         in the newer data and stored per month as well.
 
         Args:
-            task (str): Month to get data for.
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for specific date with the columns
@@ -97,15 +92,19 @@ class IesoDownloader(EnergyDownloader):
             'Hour 1', 'Hour 2', 'Hour 3', ..., 'Hour 23', 'Hour 24']
 
         Raises:
-            ValueError: If an earlier year was provided than data exists for or if the
-            dataframe is empty.
-            DataStructureError: If downloaded data does not have the required columns.
+            MissingDataError: If an earlier year was provided than data exists for or if the
+                dataframe is empty.
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing (this will cause the entire run to be killed).
         """
-        year = int(task[:4])
-        month = int(task[5:7])
+        dt = pd.Period(task.date, freq="M")
+        year = dt.year
+        month = dt.month
 
         if year < 2010:
-            raise ValueError(f"No data for year {year}, as it's before 2010")
+            raise MissingDataError(
+                f"No data for year {year} (it's before 2010). Skipping..."
+            )
 
         if year < 2019 or (year == 2019 and month <= 4):
             df = self._get_from_old_source(year, month)
@@ -113,12 +112,15 @@ class IesoDownloader(EnergyDownloader):
             df = self._get_from_new_source(year, month)
 
         if df.empty:
-            raise ValueError(f"No generation data available for {year}-{month}")
+            raise MissingDataError(
+                f"No energy generation data available for {year}-{month}. Skipping..."
+            )
 
-        if not all(col in df.columns for col in EXPECTED_COLS):
+        missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
+        if missing_cols:
             raise DataStructureError(
-                f"IESO file structure change detected for task: '{task}'! "
-                f"Missing columns: {[c for c in EXPECTED_COLS if c not in df.columns]}"
+                f"IESO file structure change detected for '{task.identifier}'! "
+                f"Missing columns: {missing_cols}"
             )
 
         return df
@@ -145,7 +147,7 @@ class IesoDownloader(EnergyDownloader):
             df = df[df["Measurement"] != "Forecast"]
         except KeyError:
             raise DataStructureError(
-                f"IESO file structure change detected in new csv: '{url}'! "
+                f"IESO file structure change detected in new csv '{url}'! "
                 f"'Measurement' column is missing!"
             )
         return df
@@ -176,7 +178,7 @@ class IesoDownloader(EnergyDownloader):
             )
         except AttributeError as e:
             raise DataStructureError(
-                f"IESO file structure change detected in old excel: '{url}'! "
+                f"IESO file structure change detected in old excel '{url}'! "
                 f"'Delivery Date' is no longer datetimelike: {e}"
             )
 
@@ -216,7 +218,7 @@ class IesoDownloader(EnergyDownloader):
 
         if df_cap is None:
             raise DataStructureError(
-                f"IESO file structure change detected in old excel: '{url}'! "
+                f"IESO file structure change detected in old excel '{url}'! "
                 f"No valid capacity sheets found!"
             )
 
@@ -227,6 +229,9 @@ class IesoDownloader(EnergyDownloader):
         df = df.sort_values(by=["Delivery Date", "Generator", "Measurement"])
         return df
 
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
     @staticmethod
     def standardize_old_data(df: pd.DataFrame, measurement_type: str) -> pd.DataFrame:
         """Standardize old (pre-2019) dataframes to match the newer CSV format.

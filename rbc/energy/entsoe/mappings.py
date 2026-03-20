@@ -1,0 +1,82 @@
+"""ENTSOE-E MAPPINGS.
+
+Mappings of relevant ENTSO-E bidding zones (EIC codes) that return generation data per unit.
+"""
+
+ACTIVE_ZONES_METADATA: dict[str, dict[str, int | str]] = {
+    "10Y1001A1001A016": {
+        "name": "NIE / SEM(SONI)",
+        "alias": "Northern Ireland / SEM(SONI)",
+        "start": 2015,
+        "end": 2025,
+    },
+    "10Y1001A1001A39I": {"name": "EE", "alias": "Estonia", "start": 2015},
+    "10Y1001A1001A796": {"name": "DK", "alias": "Denmark", "start": 2015},
+    "10Y1001A1001A990": {"name": "MD", "alias": "Moldova", "start": 2020},
+    "10Y1001A1001B012": {"name": "GE", "alias": "Georgia", "start": 2021},
+    "10Y1001C--00100H": {"name": "XK", "alias": "Kosovo", "start": 2021},
+    "10YAL-KESH-----5": {"name": "AL", "alias": "Albania", "start": 2024},
+    "10YAT-APG------L": {"name": "AT", "alias": "Austria", "start": 2015},
+    "10YBA-JPCC-----D": {
+        "name": "BA",
+        "alias": "Bosnia and Herzegovina",
+        "start": 2017,
+    },
+    "10YBE----------2": {"name": "BE", "alias": "Belgium", "start": 2015},
+    "10YCA-BULGARIA-R": {"name": "BG", "alias": "Bulgaria", "start": 2015},
+    "10YCH-SWISSGRIDZ": {"name": "CH", "alias": "Switzerland", "start": 2015},
+    "10YCS-CG-TSO---S": {"name": "ME", "alias": "Montenegro", "start": 2015},
+    "10YCS-SERBIATSOV": {"name": "RS", "alias": "Serbia", "start": 2022, "end": 2025},
+    "10YCZ-CEPS-----N": {"name": "CZ", "alias": "Czech Republic", "start": 2015},
+    "10YDE-ENBW-----N": {
+        "name": "DE(TransnetBW)",
+        "alias": "Germany (TransnetBW)",
+        "start": 2015,
+    },
+    "10YDE-EON------1": {
+        "name": "DE(TenneT GER)",
+        "alias": "Germany (TenneT)",
+        "start": 2015,
+    },
+    "10YDE-RWENET---I": {
+        "name": "DE(Amprion)",
+        "alias": "Germany (Amprion)",
+        "start": 2015,
+    },
+    "10YDE-VE-------2": {
+        "name": "DE(50Hertz) / DE(50HzT)",
+        "alias": "Germany (50Hertz)",
+        "start": 2015,
+    },
+    "10YES-REE------0": {"name": "ES", "alias": "Spain", "start": 2014},
+    "10YFI-1--------U": {"name": "FI", "alias": "Finland", "start": 2015},
+    "10YFR-RTE------C": {"name": "FR", "alias": "France", "start": 2014},
+    "10YGB----------A": {
+        "name": "GB / National Grid",
+        "alias": "Great Britain / National Grid",
+        "start": 2015,
+        "end": 2021,
+    },
+    "10YGR-HTSO-----Y": {"name": "GR", "alias": "Greece", "start": 2015},
+    "10YHU-MAVIR----U": {"name": "HU", "alias": "Hungary", "start": 2015},
+    "10YIE-1001A00010": {
+        "name": "IE / SEM(EirGrid)",
+        "alias": "Ireland / SEM(EirGrid)",
+        "start": 2015,
+    },
+    "10YIT-GRTN-----B": {"name": "IT", "alias": "Italy", "start": 2015},
+    "10YLT-1001A0008Q": {"name": "LT", "alias": "Lithuania", "start": 2015},
+    "10YLV-1001A00074": {"name": "LV", "alias": "Latvia", "start": 2015},
+    "10YMK-MEPSO----8": {"name": "MK", "alias": "North Macedonia", "start": 2018},
+    "10YNL----------L": {"name": "NL", "alias": "Netherlands", "start": 2015},
+    "10YNO-0--------C": {"name": "NO", "alias": "Norway", "start": 2020},
+    "10YPL-AREA-----S": {"name": "PL", "alias": "Poland", "start": 2015},
+    "10YPT-REN------W": {"name": "PT", "alias": "Portugal", "start": 2014},
+    "10YRO-TEL------P": {"name": "RO", "alias": "Romania", "start": 2015},
+    "10YSE-1--------K": {"name": "SE", "alias": "Sweden", "start": 2014},
+    "10YSI-ELES-----O": {"name": "SI", "alias": "Slovenia", "start": 2015},
+    "10YSK-SEPS-----K": {"name": "SK", "alias": "Slovakia", "start": 2015},
+}
+
+ACTIVE_ZONES = list(ACTIVE_ZONES_METADATA.keys())
+MIN_YEAR = min([int(v["start"]) for v in ACTIVE_ZONES_METADATA.values()])

@@ -3,6 +3,7 @@
 Remote API access of ENTSO-E Platform using the entsoe-apy package.
 """
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -10,16 +11,21 @@ import pandas as pd
 from entsoe.config import get_config, set_config
 from entsoe.Generation import ActualGenerationPerGenerationUnit
 from entsoe.query.decorators import ServiceUnavailableError
-from entsoe.utils import add_timestamps, extract_records, mappings
+from entsoe.utils import add_timestamps, extract_records
 from loguru import logger
 
+from rbc.energy.entsoe.mappings import ACTIVE_ZONES, ACTIVE_ZONES_METADATA
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
+    DownloadTask,
     EnergyDownloader,
+    InvalidError,
+    MissingDataError,
+    write_df_to_csv,
 )
 
-RELEVANT_RECORD_KEYS = {
+EXPECTED_COLS_MAPPING = {
     "timestamp": "timestamp",
     "time_series.mkt_psrtype.power_system_resources.name": "Unit_Name",
     "time_series.mkt_psrtype.power_system_resources.m_rid.value": "Unit_Code",
@@ -44,7 +50,7 @@ class EntsoeDownloader(EnergyDownloader):
         token: str,
         output_path: Path,
         years: list[int],
-        bidding_zones: list[str] = mappings.keys(),
+        bidding_zones: list[str] = ACTIVE_ZONES,
         resume: bool = True,
     ) -> None:
         """Initializes the instance.
@@ -55,17 +61,17 @@ class EntsoeDownloader(EnergyDownloader):
             years (list[int]): List of years to get data for.
             bidding_zones (list[str]): List of bidding zones to get data for.
             resume (bool, optional): Whether to resume from a previous download (True)
-            or start from scratch (False). Defaults to True.
+                or start from scratch (False). Defaults to True.
 
         Raises:
-            ValueError: If bidding zone is unsupported or token is invalid.
+            InvalidError: If bidding zone is unsupported or token is invalid.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self.bidding_zones = list(bidding_zones)
 
         for bz in self.bidding_zones:
-            if bz not in list(mappings.keys()):
-                raise ValueError(f"Bidding zone '{bz}' is not supported.")
+            if bz not in ACTIVE_ZONES:
+                raise InvalidError(f"Bidding zone '{bz}' is not supported.")
 
         logger.info(
             f"Entsoe-E Downloader initialized for:"
@@ -75,35 +81,31 @@ class EntsoeDownloader(EnergyDownloader):
 
         set_config(security_token=token)
         if get_config().security_token is None:
-            raise ValueError(
+            raise InvalidError(
                 f"Entsoe-apy failed to successfully configure token '{token}'!"
             )
 
     def download_data(self) -> None:
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""
         all_dates = self._get_date_list()
+        tasks = [
+            DownloadTask(date=d, bidding_zone=bz)
+            for bz in self.bidding_zones
+            for d in all_dates
+        ]
 
-        for bz in self.bidding_zones:
-            bz_path = Path(self.output_path, bz)
-            bz_path.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            f"Downloading tasks: {tasks[0].identifier} --- {tasks[-1].identifier}"
+        )
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+            executor.map(self._threading_wrapper, tasks)
 
-            checkpoint_path = Path(bz_path, "status.pickle")
-            checkpoint = self._load_checkpoint(checkpoint_path)
-
-            logger.info(
-                f"Downloading data in '{bz}' for: {all_dates[0]} to {all_dates[-1]}"
-            )
-            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-                executor.map(
-                    lambda t: self._threading_wrapper(t, checkpoint, checkpoint_path),
-                    [(bz, d) for d in all_dates],
-                )
-
-    def _get_task_data(self, task: tuple[str, str]) -> pd.DataFrame:  # type: ignore[override]
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:  # type: ignore[override]
         """Get Entso-e generation data per plant for one specific date and bidding zone.
 
         Args:
-            task (tuple): Tuple of (zone, date) to download data for.
+            task (DownloadTask): The metadata of a downloading task,
+                here: date (YYYY-MM-DD), bidding_zone
 
         Returns:
             pd.DataFrame: Dataframe for specific task with the columns
@@ -112,36 +114,38 @@ class EntsoeDownloader(EnergyDownloader):
 
         Raises:
             ConnectionError: If Entso-E TP is unavailable or the API did not
-            return the requested data (this will cause a retry on the next resume).
-            ValueError: If no data is available for the given task (this will cause
-            the task to be skipped in future).
-            DataStructureError: If data structure has changed and relevant columns
-            are missing (this will cause the entire run to be killed).
+                return the requested data (this will cause a retry on the next resume).
+            MissingDataError: If no data is available for the given task (this will cause
+                the task to be skipped in future).
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing (this will cause the entire run to be killed).
         """
-        zone, date = task
-        dt = pd.Period(date, freq="D")
+        task.validate_required_fields("bidding_zone")
+        dt = pd.Period(task.date, freq="D")
+
+        bz_start = int(ACTIVE_ZONES_METADATA[str(task.bidding_zone)]["start"])
+        if dt.year < bz_start:
+            raise MissingDataError(
+                f"No data for year {dt.year} (it's before start {bz_start}). Skipping..."
+            )
 
         try:
             result = ActualGenerationPerGenerationUnit(
                 period_start=int(dt.strftime("%Y%m%d0000")),  # start of day
                 period_end=int(dt.strftime("%Y%m%d2359")),  # end of day
-                in_domain=zone,
+                in_domain=task.bidding_zone,
                 psr_type=None,
                 registered_resource=None,
             ).query_api()
 
         except ServiceUnavailableError:
-            raise ConnectionError(
-                "Entso-E Transparency Platform is currently unavailable!"
-            )
+            raise ConnectionError("Entso-E Transparency Platform is unavailable!")
 
-        if type(result) is not list:
-            raise ConnectionError(f"API call did not return requested data for {task}!")
+        if not isinstance(result, list):
+            raise ConnectionError("API call did not return requested data!")
 
         if not result:
-            raise ValueError(
-                f"No data available for {task}! Setting download status to 1."
-            )
+            raise MissingDataError("No energy generation data available! Skipping...")
 
         records = extract_records(result)  # turns into list of dicts
         records = add_timestamps(records)  # adds key 'timestamp' to each dict
@@ -149,12 +153,12 @@ class EntsoeDownloader(EnergyDownloader):
 
         try:
             # Columns names are made to match those on the Entso-E Transparency Platform
-            df = df.loc[:, list(RELEVANT_RECORD_KEYS.keys())].rename(
-                columns=RELEVANT_RECORD_KEYS
+            df = df.loc[:, list(EXPECTED_COLS_MAPPING.keys())].rename(
+                columns=EXPECTED_COLS_MAPPING
             )
         except KeyError as e:
             raise DataStructureError(
-                f"Entsoe-E structure change detected for {task}! "
+                f"Entsoe-E structure change detected for '{task.identifier}'! "
                 f"Relevant columns are missing: {e}"
             )
 
@@ -164,3 +168,45 @@ class EntsoeDownloader(EnergyDownloader):
 
         df = df.sort_values(by=["timestamp", "Unit_Name"], ascending=[True, True])
         return df
+
+    def _save_task_data(self, task: DownloadTask, df: pd.DataFrame) -> None:
+        """Save ENTSO-E downloaded task data to disk, splitting by temporal resolution.
+
+        The API does not allow temporal resolution arguments, but ENTSO-E data has varying
+        resolutions. The df is grouped by t_res and subsets are written to the correct folder.
+
+        Args:
+            task (DownloadTask): The metadata for the task that was downloaded.
+            df (pd.DataFrame): Downloaded dataframe for the task.
+        """
+        df_full = df.dropna(subset=["Temporal_Resolution"])
+        if len(df_full) != len(df):
+            logger.warning(
+                "Some rows are missing temporal resolution values! Removing those rows."
+            )
+
+        for t_res, df_t_res in df_full.groupby("Temporal_Resolution", sort=True):
+            updated_task = task.update(
+                temporal_resolution=self._normalize_temporal_resolution(str(t_res))
+            )
+            file_path = self._build_task_path(updated_task)
+            write_df_to_csv(df=df_t_res, file_path=file_path)
+
+    @staticmethod
+    def _normalize_temporal_resolution(t_res: str) -> str:
+        """Convert ENTSO-E ISO-like temporal resolution string to name, i.e. PT60M -> 1h.
+
+        Args:
+            t_res (str): Temporal resolution string as defined in ENTSO-E (i.e. PT60M).
+
+        Returns:
+            Normalized temporal resolution name.
+
+        Raises:
+            DataStructureError: If the resolution format is unknown.
+        """
+        if match := re.search(r"^PT(\d+)M$", t_res):
+            minutes = int(match.group(1))
+            return "1h" if minutes == 60 else f"{minutes}min"
+
+        raise DataStructureError(f"Unknown ENTSO-E temporal resolution '{t_res}'")

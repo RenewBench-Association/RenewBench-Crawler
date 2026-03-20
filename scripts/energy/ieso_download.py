@@ -5,6 +5,7 @@ Download data from IESO website for Ontario, Canada.
 """
 
 from argparse import ArgumentParser, Namespace
+from datetime import datetime
 
 from loguru import logger
 
@@ -27,9 +28,9 @@ def parse_arguments() -> Namespace:
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2010, 2026)),  # these are the available years for hourly gen
+        default=list(range(2010, datetime.now().year + 1)),  # available years
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2010, 2026))}",
+        f"Default: {list(range(2010, datetime.now().year + 1))}",
     )
     parser.add_argument(
         "--no-resume",

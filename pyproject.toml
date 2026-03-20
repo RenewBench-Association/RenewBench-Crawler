@@ -21,6 +21,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "boxsdk",
     "cdsapi",
     "entsoe-apy",
     "eptr2",

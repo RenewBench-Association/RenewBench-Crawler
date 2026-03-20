@@ -2,10 +2,8 @@
 """Tests for energy utility functions and classes."""
 
 import pickle
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
 from unittest.mock import patch
 
 import pandas as pd
@@ -15,110 +13,126 @@ from requests import exceptions
 from rbc.energy.utils import (
     MAX_RETRIES,
     DataStructureError,
+    DownloadTask,
     EnergyDownloader,
     InvalidError,
+    MissingDataError,
     load_df_from_file,
     write_df_to_csv,
 )
 
-
 # ----------------------------------
 # Fixtures
 # ----------------------------------
+TASK_DAY = DownloadTask(date="2020-01-01")
+TASK_YESTERDAY = DownloadTask(
+    date=(pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+)
+
+
 class MockDownloader(EnergyDownloader):
     """A dummy child class to test EnergyDownloader logic directly."""
 
-    def _get_task_data(self, task: str | tuple[str, str]):
+    def _get_task_data(self, task: DownloadTask) -> None:
         """Dummy method to test EnergyDownloader._get_task_data function.
 
         Args:
-            task (str | tuple[str, str]): Task for downloading.
+            task (DownloadTask): The metadata for a task to download data for.
         """
         pass
 
 
 @pytest.fixture
-def downloader(tmp_path: Path) -> MockDownloader:
-    """Fixture to create an instance of EnergyDownloader.
+def init_args(tmp_path: Path) -> dict:
+    """Creates a basic setup with a temporary directory.
 
     Args:
-        tmp_path (Path): Path to temporary directory.
+        tmp_path (Path): Path to the temporary directory.
 
     Returns:
-        MockDownloader: Instance of the mock EnergyDownloader child class.
+        dict: Initialisation arguments.
     """
-    return MockDownloader(output_path=tmp_path, years=[2020])
+    return {
+        "output_path": tmp_path,
+        "years": [2020],
+    }
 
 
 @pytest.fixture
-def ckpt_setup(downloader: MockDownloader, tmp_path: Path) -> Callable:
-    """Fixture to define a setup function for setting up the checkpoint file and path.
+def downloader(init_args: dict) -> EnergyDownloader:
+    """Fixture to create an instance of EnergyDownloader.
 
     Args:
-        downloader (MockDownloader): Instance of the MockDownloader class.
-        tmp_path (Path): Path to temporary directory.
+        init_args (dict): Arguments used to initialize an EnergyDownloader instance.
 
     Returns:
-        Callable: Function that defines checkpoint setup for specific task.
+        EnergyDownloader: Instance of the mock EnergyDownloader child class.
     """
-
-    def _setup(task: str | tuple[str, str], use_self_ckpt: bool) -> tuple[dict, Path]:
-        """Function that defines checkpoint setup for specific task.
-
-        Args:
-            task (str | tuple[str, str]): Task for downloading.
-            use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
-
-        Returns:
-            tuple[dict, Path]: Checkpoint dictionary and checkpoint path.
-        """
-        if use_self_ckpt:
-            d = cast(Any, downloader)  # prevents mypy complaining about missing attribs
-            d.checkpoint_path = Path(tmp_path, "status.pickle")
-            d.checkpoint = {}
-            return d.checkpoint, d.checkpoint_path
-        else:
-            nested_path = Path(tmp_path, task[0], "status.pickle")
-            nested_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure dir exists
-            return {}, nested_path
-
-    return _setup
+    return MockDownloader(
+        output_path=init_args["output_path"], years=init_args["years"]
+    )
 
 
 # ----------------------------------
 # Tests - EnergyDownloader
 # ----------------------------------
+def test_initialization(downloader: EnergyDownloader, init_args: dict) -> None:
+    """Happy path for EnergyDownloader initialization.
+
+    Args:
+        downloader (EnergyDownloader): Instance of EnergyDownloader class.
+        init_args (dict): Arguments used to initialize an EnergyDownloader instance.
+    """
+    assert downloader.years == init_args["years"]
+    assert downloader.output_path == init_args["output_path"]
+    assert downloader.checkpoint_path == Path(init_args["output_path"], "status.pickle")
+    assert downloader.checkpoint == {}
+
+
 @pytest.mark.parametrize(
-    "task, use_self_ckpt",
-    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
+    "task",
+    [TASK_DAY, TASK_DAY.update(bidding_zone="ZONE_A")],
 )
-def test_threading_wrapper(
-    downloader: MockDownloader,
-    ckpt_setup: Callable,
-    task: str | tuple[str, str],
-    use_self_ckpt: bool,
-) -> None:
+def test_threading_wrapper(downloader: MockDownloader, task: DownloadTask) -> None:
     """Happy path for _threading_wrapper (and, inherently, _download_task_data).
 
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
-        ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
-        task (str | tuple[str, str]): Task for downloading.
-        use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+        task (DownloadTask): The metadata for a task to download data for.
     """
-    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
-
-    with patch.object(downloader, "_get_task_data"):
+    with patch.object(downloader, "_download_task_data", return_value=1) as mock_dl:
         with patch.object(downloader, "_save_checkpoint") as mock_save:
-            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+            downloader._threading_wrapper(task)
 
-            assert checkpoint[task] == 1
-            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+            assert downloader.checkpoint[task.identifier] == 1
+            mock_dl.assert_called_once_with(task=task)
+            mock_save.assert_called_once()
+
+
+def test_threading_wrapper_skip_existing_task(downloader: MockDownloader) -> None:
+    """Happy path for _threading_wrapper when task exists from previous run and is skipped.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+    """
+    downloader.checkpoint = {TASK_DAY.identifier: 1}
+
+    with patch.object(downloader, "_download_task_data") as mock_dl:
+        with patch.object(downloader, "_save_checkpoint") as mock_save:
+            downloader._threading_wrapper(TASK_DAY)
+
+            mock_dl.assert_not_called()
+            mock_save.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    "task, use_self_ckpt",
-    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
+    "task, expected_error_status",
+    [
+        (TASK_DAY, 1),  # for EIA/EPIAS/...
+        (TASK_YESTERDAY, 0),
+        (TASK_DAY.update(bidding_zone="ZONE_A"), 1),  # for Entso-E
+        (TASK_YESTERDAY.update(bidding_zone="ZONE_A"), 0),
+    ],
 )
 @pytest.mark.parametrize(
     "code, expected_status, expected_sleep_calls",
@@ -131,9 +145,8 @@ def test_threading_wrapper(
 )
 def test_threading_error_catching(
     downloader: MockDownloader,
-    ckpt_setup: Callable,
-    task: str | tuple[str, str],
-    use_self_ckpt: bool,
+    task: DownloadTask,
+    expected_error_status: int,
     code: int | None,
     expected_status: int,
     expected_sleep_calls: int,
@@ -146,53 +159,53 @@ def test_threading_error_catching(
 
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
-        ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
-        task (str | tuple[str, str]): Task for downloading.
-        use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
+        task (DownloadTask): The metadata for a task to download data for.
+        expected_error_status (int): Expected MissingDataError status.
         code (int | None): Status code for HTTPError logic.
         expected_status (int): Expected status for resuming logic.
         expected_sleep_calls (int): Expected number of times sleep is called.
     """
+    downloader.checkpoint = {}
+
     # 1. Test error requiring immediate exit (DataStructureError / RateLimitError -> exit)
-    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
     with patch("os._exit", side_effect=SystemExit) as mock_exit:
         with patch.object(downloader, "_get_task_data", side_effect=DataStructureError):
             with pytest.raises(SystemExit):
-                downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+                downloader._threading_wrapper(task)
 
     mock_exit.assert_called_once_with(1)  # assert outside "with"-block for correct exec
 
-    # 2. Test missing data (ValueError -> status 1)
-    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
-    with patch.object(downloader, "_get_task_data", side_effect=ValueError):
+    # 2. Test missing data (MissingDataError -> status 0 = current year, status 1 = prior)
+    downloader.checkpoint = {}
+    with patch.object(downloader, "_get_task_data", side_effect=MissingDataError):
         with patch.object(downloader, "_save_checkpoint") as mock_save:
-            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+            downloader._threading_wrapper(task)
 
-            assert checkpoint[task] == 1
-            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+            assert downloader.checkpoint[task.identifier] == expected_error_status
+            mock_save.assert_called_once()
 
     # 3. Test HTTPError - no code: (->0), retry: code=300 (->0), missing: code=404 (->1), client: code=400 (->1)
-    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
+    downloader.checkpoint = {}
     with patch.object(
         downloader, "_get_task_data", side_effect=exceptions.HTTPError("")
     ):
         with patch.object(downloader, "_get_status_code", return_value=code):
             with patch("rbc.energy.utils.time.sleep") as mock_sleep:
                 with patch.object(downloader, "_save_checkpoint") as mock_save:
-                    downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+                    downloader._threading_wrapper(task)
 
-                    assert checkpoint[task] == expected_status
+                    assert downloader.checkpoint[task.identifier] == expected_status
                     assert mock_sleep.call_count == expected_sleep_calls
-                    mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+                    mock_save.assert_called_once()
 
     # 4. Test other errors (that are not specifically handled in _download_task_data)
-    checkpoint, checkpoint_path = ckpt_setup(task, use_self_ckpt)
+    downloader.checkpoint = {}
     with patch.object(downloader, "_get_task_data", side_effect=Exception):
         with patch.object(downloader, "_save_checkpoint") as mock_save:
-            downloader._threading_wrapper(task, checkpoint, checkpoint_path)
+            downloader._threading_wrapper(task)
 
-            assert checkpoint[task] == 0
-            mock_save.assert_called_once_with(checkpoint, checkpoint_path)
+            assert downloader.checkpoint[task.identifier] == 0
+            mock_save.assert_called_once()
 
 
 # ----------------------------------
@@ -217,35 +230,61 @@ def test_get_status_code(error: Exception, expected_return: str | None) -> None:
 
 
 @pytest.mark.parametrize(
-    "valid_input, expected_csv",
-    [("str", Path("str.csv")), (("str1", "str2"), Path("str1", "str2.csv"))],
+    "task, expected_csv",
+    [
+        (TASK_DAY, Path("1h", "2020-01-01.csv")),
+        (TASK_DAY.update(bidding_zone="A"), Path("1h", "A", "2020-01-01.csv")),
+        (TASK_DAY.update(temporal_resolution="5min"), Path("5min", "2020-01-01.csv")),
+    ],
 )
-def test_get_csv_path(
-    downloader: MockDownloader, valid_input: str | tuple[str, str], expected_csv: Path
+def test_build_task_path(
+    downloader: MockDownloader, task: DownloadTask, expected_csv: Path
 ) -> None:
-    """Happy path for _get_csv_path when valid inputs are provided.
+    """Happy path for _build_task_path when valid inputs are provided.
 
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
-        valid_input (str | tuple[str, str]): Valid input for _get_csv_path.
+        task (DownloadTask): Valid DownloadTask for _build_task_path.
         expected_csv (str): Expected csv path name.
     """
-    path = downloader._get_csv_path(valid_input)
+    path = downloader._build_task_path(task)
     assert str(expected_csv) in str(path)
 
 
-@pytest.mark.parametrize("invalid_input", [12345, ("first", "second", "third")])
-def test_get_csv_path_invalid_task(
-    downloader: MockDownloader, invalid_input: Any
+@pytest.mark.parametrize(
+    "task",
+    [TASK_DAY, TASK_DAY.update(bidding_zone="ZONE_A")],
+)
+def test_save_checkpoint(
+    downloader: MockDownloader,
+    task: DownloadTask,
 ) -> None:
-    """Failure path for _get_csv_path when invalid task is provided.
+    """Happy path for _save_checkpoint with valid checkpoint setups.
 
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
-        invalid_input (Any): Invalid input for _get_csv_path.
+        task (DownloadTask): The metadata for a task to download data for.
     """
-    with pytest.raises(ValueError, match="Unsupported task format"):
-        downloader._get_csv_path(invalid_input)
+    downloader.checkpoint = {task.identifier: 1}
+    downloader._save_checkpoint()
+
+    assert downloader.checkpoint_path.is_file()
+    with open(downloader.checkpoint_path, "rb") as f:
+        assert pickle.load(f) == downloader.checkpoint
+
+
+def test_load_checkpoint(downloader: MockDownloader) -> None:
+    """Happy path for _load_checkpoint.
+
+    Args:
+        downloader (MockDownloader): Instance of the MockDownloader class.
+    """
+    assert downloader.resume is True
+    downloader.checkpoint = {"test": 1}
+    downloader._save_checkpoint()
+
+    result = downloader._load_checkpoint()
+    assert result == {"test": 1}
 
 
 def test_load_checkpoint_corrupted(downloader: MockDownloader) -> None:
@@ -257,35 +296,8 @@ def test_load_checkpoint_corrupted(downloader: MockDownloader) -> None:
     path = Path(downloader.output_path, "status.pickle")
     path.write_text("corrupted data")
 
-    result = downloader._load_checkpoint(path)
+    result = downloader._load_checkpoint()
     assert result == {}
-
-
-@pytest.mark.parametrize(
-    "task, use_self_ckpt",
-    [("2020-01-01", True), (("ZONE_A", "2020-01-01"), False)],  # EIA/EPIAS, Entso-E
-)
-def test_save_checkpoint(
-    downloader: MockDownloader,
-    ckpt_setup: Callable,
-    task: str | tuple[str, str],
-    use_self_ckpt: bool,
-) -> None:
-    """Happy path for _save_checkpoint with valid checkpoint setups.
-
-    Args:
-        downloader (MockDownloader): Instance of the MockDownloader class.
-        ckpt_setup (Callable): Function that defined checkpoint setup for specific task.
-        task (str | tuple[str, str]): Task for downloading.
-        use_self_ckpt (bool): Whether to use class attribute (self.) for checkpointing.
-    """
-    _, checkpoint_path = ckpt_setup(task, use_self_ckpt)
-    checkpoint = {task: 1}
-    downloader._save_checkpoint(checkpoint, checkpoint_path)
-
-    assert checkpoint_path.is_file()
-    with open(checkpoint_path, "rb") as f:
-        assert pickle.load(f) == checkpoint
 
 
 def test_get_date_list_current_year(downloader: MockDownloader) -> None:
@@ -294,9 +306,7 @@ def test_get_date_list_current_year(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    fake_today = pd.Timestamp("2025-02-01")
-
-    with patch("pandas.Timestamp.now", return_value=fake_today):
+    with patch("pandas.Timestamp.now", return_value=pd.Timestamp("2025-02-01")):
         downloader.years = [2025]
         dates = downloader._get_date_list()
 
@@ -310,9 +320,9 @@ def test_get_date_list_future_years(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    downloader.years = [datetime.now().year + 1]
+    downloader.years = [pd.Timestamp.now().year + 1]
 
-    with pytest.raises(ValueError, match="lie in the future"):
+    with pytest.raises(InvalidError, match="lie in the future"):
         downloader._get_date_list()
 
 
@@ -322,9 +332,7 @@ def test_get_month_list_current_year(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    fake_today = pd.Timestamp("2025-02-01")
-
-    with patch("pandas.Timestamp.now", return_value=fake_today):
+    with patch("pandas.Timestamp.now", return_value=pd.Timestamp("2025-02-01")):
         downloader.years = [2025]
         months = downloader._get_month_list()
 
@@ -338,14 +346,121 @@ def test_get_year_list_current_year(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    fake_today = pd.Timestamp("2025-02-01")
-
-    with patch("pandas.Timestamp.now", return_value=fake_today):
+    with patch("pandas.Timestamp.now", return_value=pd.Timestamp("2025-02-01")):
         downloader.years = [2025]
         years = downloader._get_year_list()
 
         assert len(years) == 1
         assert years[-1] == "2025"
+
+
+# ----------------------------------
+# Tests - DownloadTask class
+# ----------------------------------
+@pytest.mark.parametrize(
+    "tres, bz",
+    [(None, None), ("5min", None), (None, "ZONE_A"), ("5min", "ZONE_A")],
+)
+def test_downloadtask_initialise(tres: str | None, bz: str | None) -> None:
+    """Happy path for initialising a DownloadTask instance.
+
+    Args:
+        tres (str): Valid temporal resolution.
+        bz (str): Valid bidding zone.
+    """
+    date = "2020-01-01"
+    all_args = {"date": date, "temporal_resolution": tres, "bidding_zone": bz}
+    args = {k: v for k, v in all_args.items() if v is not None}
+    task = DownloadTask(**args)
+
+    exp_tres = tres if tres is not None else "1h"
+    exp_bz = bz if bz is not None else None
+
+    assert task.date == date
+    assert task.temporal_resolution == exp_tres
+    assert task.bidding_zone == exp_bz
+
+    if bz is not None:
+        assert (
+            task.identifier
+            == f"date={date}|temporal_resolution={exp_tres}|bidding_zone={bz}"
+        )
+    else:
+        assert task.identifier == f"date={date}|temporal_resolution={exp_tres}"
+
+
+@pytest.mark.parametrize("invalid_date", ["20200101", "invalid", "", "2020-02-31"])
+def test_downloadtask_initialise_with_invalid_date(invalid_date: str) -> None:
+    """Failure path for initialising a DownloadTask instance.
+
+    Args:
+        invalid_date (str): Invalid date.
+    """
+    with pytest.raises(ValueError, match=r"Invalid.*date"):
+        DownloadTask(date=invalid_date)
+
+
+@pytest.mark.parametrize("invalid_tres", ["5days", "invalid", ""])
+def test_downloadtask_initialise_with_invalid_tres(invalid_tres: str) -> None:
+    """Failure path for initialising a DownloadTask instance.
+
+    Args:
+        invalid_tres (str): Invalid temporal resolution.
+    """
+    with pytest.raises(ValueError, match="Invalid temporal resolution"):
+        DownloadTask(date="2020-01-01", temporal_resolution=invalid_tres)
+
+
+def test_downloadtask_update() -> None:
+    """Happy path for DownloadTask method "update"."""
+    date = "2020-01-01"
+    task = DownloadTask(date=date)
+
+    new_date = "2020-02-01"
+    new_task = task.update(
+        date=new_date, temporal_resolution="10h", bidding_zone="ZONE_A"
+    )
+
+    assert task is not new_task
+    assert task.date != new_date
+    assert task.bidding_zone is None
+    assert new_task.date == new_date
+    assert new_task.temporal_resolution == "10h"
+    assert new_task.bidding_zone == "ZONE_A"
+
+
+def test_downloadtask_validate_required_fields() -> None:
+    """Happy path for DownloadTask's "validate_required_fields"."""
+    task = DownloadTask(date="2020-01-01", bidding_zone="ZONE_A")
+    task.validate_required_fields("date", "temporal_resolution", "bidding_zone")
+
+
+def test_downloadtask_validate_required_fields_value_missing() -> None:
+    """Failure path for DownloadTask's "validate_required_fields" when value is missing."""
+    task = DownloadTask(date="2020-01-01")
+    with pytest.raises(ValueError, match="Required attribute 'bidding_zone' missing"):
+        task.validate_required_fields("bidding_zone")
+
+
+@pytest.mark.parametrize("empty_bz", [None, "", "   "])
+def test_downloadtask_validate_required_fields_value_empty(
+    empty_bz: None | str,
+) -> None:
+    """Failure path for DownloadTask's "validate_required_fields" when exists but is empty.
+
+    Args:
+        empty_bz (str): Empty definition of attribute 'bidding_zone'.
+    """
+    task = DownloadTask(date="2020-01-01", bidding_zone=empty_bz)
+    with pytest.raises(ValueError, match="Required attribute 'bidding_zone' missing"):
+        task.validate_required_fields("bidding_zone")
+
+
+def test_downloadtask_validate_required_fields_field_not_an_attribute() -> None:
+    """Failure path for DownloadTask's "validate_required_fields" for non-existent attribute."""
+    task = DownloadTask(date="2020-01-01")
+    with pytest.raises(AttributeError):
+        task.validate_required_fields("invalid")
 
 
 # ----------------------------------
