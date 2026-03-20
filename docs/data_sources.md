@@ -141,7 +141,7 @@ RenewBench-Crawler package.
 **Download & data structure**
 - Spatial resolution: per plant
 - Temporal resolution: hourly / 5 min
-- Available data timespan: 2015-01 to now / 2015-01 to 2023-02
+- Available data timespan hourly: 2015-01 to now; 5 min: 2015-01 to 2023-02
 - Downloadable files: 1 `.zip` containing 1 `.csv` per month / 6-month periods
 - Files saved as **raw**: 1 `.csv` per month
 - Columns saved as **raw**:
