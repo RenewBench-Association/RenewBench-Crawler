@@ -111,8 +111,6 @@ RenewBench-Crawler package.
 | Global                     | ERA5              | downloader &check;  | 0.25° (~31 km); hourly | 1940–present      | API token | [Copernicus / ECMWF](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1),<br> [Guide](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5), [API how-to](https://cds.climate.copernicus.eu/how-to-api) |
 | Global                     | ICON DREAM Global | downloader &check;  | ~13 km; hourly         | 2010–present      | public    | [DWD Open Data](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly/), [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) |
 | Europe                     | ICON DREAM Europe | downloader &check;  | ~6.5 km; hourly        | 2010–present      | public    | [DWD Open Data](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-EU/hourly/), [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) |
-| New Zealand                | NZRA              | under consideration | 1.5 km; 30 min         | 1990-             | unclear   | [NIWA](https://niwa.co.nz/climate-and-weather/new-zealand-reanalysis-nzra-dataset) |
-
 
 ### Not considered
 
@@ -152,13 +150,54 @@ A reanalysis dataset is excluded if it fails to meet **all** of the following cr
 | Global              | NOAA-CIRES 20CRv2c     | Resolution too low (>0.25°); Temporal resolution too low (>1 hour); Outdated (no update since 2014)    | ~75 km; 6-hourly             | 1851–2014         | [NOAA PSL](https://psl.noaa.gov/data/20thC_Rean/), [NCAR](https://rda.ucar.edu/datasets/ds131.2/) |
 | Global              | NOAA-CIRES-DOE 20CRv3  | Resolution too low (>0.25°); Temporal resolution too low (>1 hour); Outdated (no update since 2015)    | 1° ~75 km; 3-hourly          | 1836–2015         | [NOAA PSL](https://psl.noaa.gov/data/gridded/data.20thC_ReanV3.html), [NCAR](https://rda.ucar.edu/datasets/ds131.3/) |
 | Norway              | NORA3                  | Temporal resolution too low (>1 hour); Outdated (no update since 2012)                                 | ~3 km; 3-hourly              | 1970–2021         | [MET Norway](https://data.met.no/dataset/64636e8c-c486-4496-bdda-89687e1d8f97) |
+| New Zealand         | NZRA                   | NZRA is currently not publicly available in NIWA DataHub                                               | 1.5 km; 30 min               | 1990-             | [NIWA](https://niwa.co.nz/climate-and-weather/new-zealand-reanalysis-nzra-dataset) |
 | Global              | OCADA                  | Temporal resolution too low (>1 hour); Outdated (no update since 2015)                                 | 1°; 6-hourly                 | 1836–2015         | [MRI-JMA](https://climate.mri-jma.go.jp/pub/archives/Ishii-et-al_OCADA/) |
 
 
 ### Data Source Details
 
 <details>
-<summary><b>ERA5 (Gloabl)</b></summary>
+<summary><b>BARRA2</b></summary>
+
+**Access**
+- Platform: [NCI THREDDS server](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/)
+- Docs / reference: [BOM BARRA2 guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53)
+- Requirements: open HTTP access (no authentication)
+
+
+**Download & data structure**
+
+BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology (BOM), downscaling ERA5 over Australia and surrounding regions. Three model configurations are supported:
+
+| Model key  | Grid label | Nominal resolution | Temporal resolution | Coverage start |
+|------------|------------|--------------------|---------------------|----------------|
+| `R2`       | AUS-11     | ~11 km             | 1 hour              | 1979           |
+| `C2`       | AUST-04    | ~4 km              | 1 hour              | 1991           |
+| `C2_20min` | AUST-04    | ~4 km              | 20 min              | 1991           |
+
+
+- Spatial coverage:
+  - R2: Australia and surrounding region (~11 km, `AUS-11` grid)
+  - C2 / C2_20min: Australia only (~4 km, `AUST-04` grid)
+- Levels:
+  - Single-level (surface / 2D variables, the majority of variables)
+  - Pressure levels (3D fields; R2: 39 levels, C2: 16 levels)
+  - Invariant (time-independent fields: orography, land-sea mask)
+- Raw output files (as implemented here):
+  - Format: NetCDF (`*.nc`), fetched via HTTP from NCI THREDDS fileServer
+  - Temporal files: `barra2_<MODEL>_<TEMPORAL_RES>_<YYYYMM>_<BARRA2_CODE>.nc`
+  - Invariant files: `barra2_<MODEL>_fx_<BARRA2_CODE>.nc` (downloaded once, stored in `invariant/` subfolder)
+  - One file per year–month and variable; invariants are model-wide constants
+- Key dimensions & variables (conceptual):
+  - Dimensions: `time`, `lat`, `lon`, optional `lev` (pressure level)
+  - Default variables: `tas` (1.5 m temperature), `pr` (precipitation), `uas` / `vas` (10 m wind components), `rsds` (surface downwelling shortwave radiation), `ps` (surface pressure), `huss` (specific humidity)
+  - Additional variables selectable by name (use `--list-variables` to see available codes per model)
+
+</details>
+
+
+<details>
+<summary><b>ERA5</b></summary>
 
 **Access**
 
@@ -184,7 +223,7 @@ A reanalysis dataset is excluded if it fails to meet **all** of the following cr
 </details>
 
 <details>
-<summary><b>ICON-DREAM Global (Global)</b></summary>
+<summary><b>ICON-DREAM Global</b></summary>
 
 **Access**
 - Platform: [DWD Open Data – ICON-DREAM Global hourly](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly/)
@@ -237,41 +276,3 @@ A reanalysis dataset is excluded if it fails to meet **all** of the following cr
 
 </details>
 
-<details>
-<summary><b>BARRA2 (Australia)</b></summary>
-
-**Access**
-- Platform: [NCI THREDDS server](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/)
-- Docs / reference: [BOM BARRA2 guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53)
-- Requirements: open HTTP access (no authentication)
-
-
-**Download & data structure**
-
-BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology (BOM), downscaling ERA5 over Australia and surrounding regions. Three model configurations are supported:
-
-| Model key  | Grid label | Nominal resolution | Temporal resolution | Coverage start |
-|------------|------------|--------------------|---------------------|----------------|
-| `R2`       | AUS-11     | ~11 km             | 1 hour              | 1979           |
-| `C2`       | AUST-04    | ~4 km              | 1 hour              | 1991           |
-| `C2_20min` | AUST-04    | ~4 km              | 20 min              | 1991           |
-
-
-- Spatial coverage:
-  - R2: Australia and surrounding region (~11 km, `AUS-11` grid)
-  - C2 / C2_20min: Australia only (~4 km, `AUST-04` grid)
-- Levels:
-  - Single-level (surface / 2D variables, the majority of variables)
-  - Pressure levels (3D fields; R2: 39 levels, C2: 16 levels)
-  - Invariant (time-independent fields: orography, land-sea mask)
-- Raw output files (as implemented here):
-  - Format: NetCDF (`*.nc`), fetched via HTTP from NCI THREDDS fileServer
-  - Temporal files: `barra2_<MODEL>_<TEMPORAL_RES>_<YYYYMM>_<BARRA2_CODE>.nc`
-  - Invariant files: `barra2_<MODEL>_fx_<BARRA2_CODE>.nc` (downloaded once, stored in `invariant/` subfolder)
-  - One file per year–month and variable; invariants are model-wide constants
-- Key dimensions & variables (conceptual):
-  - Dimensions: `time`, `lat`, `lon`, optional `lev` (pressure level)
-  - Default variables: `tas` (1.5 m temperature), `pr` (precipitation), `uas` / `vas` (10 m wind components), `rsds` (surface downwelling shortwave radiation), `ps` (surface pressure), `huss` (specific humidity)
-  - Additional variables selectable by name (use `--list-variables` to see available codes per model)
-
-</details>
