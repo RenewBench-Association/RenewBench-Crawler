@@ -100,6 +100,7 @@ class DownloadTask:
             raise ValueError(
                 f"Invalid temporal resolution: '{self.temporal_resolution}'"
             )
+
     # Validate that the date is actually a valid calendar date
     try:
         pd.to_datetime(self.date)
