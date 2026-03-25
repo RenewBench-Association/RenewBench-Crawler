@@ -21,14 +21,18 @@ from rbc.energy.utils import (
 
 URL_BASE = "https://emidatasets.blob.core.windows.net/publicdata/Datasets/Wholesale/Generation/Generation_MD"
 EXPECTED_COLS = [
-    "Site_Code",
-    "POC_Code",
-    "Nwk_Code",
-    "Gen_Code",
-    "Fuel_Code",
-    "Tech_Code",
-    "Trading_date",
-] + [f"TP{i}" for i in range(1, 51)]
+    c.lower()
+    for c in [
+        "Site_Code",
+        "POC_Code",
+        "Nwk_Code",
+        "Gen_Code",
+        "Fuel_Code",
+        "Tech_Code",
+        "Trading_date",
+    ]
+    + [f"TP{i}" for i in range(1, 51)]
+]  # make lower case because column capitalisation changes across the years in EAT data
 
 
 class EatDownloader(EnergyDownloader):
@@ -108,7 +112,8 @@ class EatDownloader(EnergyDownloader):
                 f"No energy generation data available for {year}-{month}. Skipping..."
             )
 
-        missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
+        df_columns_lower = [c.lower() for c in df.columns]
+        missing_cols = [c for c in EXPECTED_COLS if c not in df_columns_lower]
         if missing_cols:
             raise DataStructureError(
                 f"EAT file structure change detected for '{task.identifier}'! "
