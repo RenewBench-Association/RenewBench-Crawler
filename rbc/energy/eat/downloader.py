@@ -112,8 +112,8 @@ class EatDownloader(EnergyDownloader):
                 f"No energy generation data available for {year}-{month}. Skipping..."
             )
 
-        df_columns_lower = [c.lower() for c in df.columns]
-        missing_cols = [c for c in EXPECTED_COLS if c not in df_columns_lower]
+        df.columns = [c.strip().lower() for c in df.columns]
+        missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:
             raise DataStructureError(
                 f"EAT file structure change detected for '{task.identifier}'! "
