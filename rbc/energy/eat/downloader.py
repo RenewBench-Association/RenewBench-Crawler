@@ -95,21 +95,17 @@ class EatDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        dt = pd.Period(task.date, freq="M")
-        year = dt.year
-        month = dt.month
-
-        if year < 1997:
+        if task.year < 1997:
             raise MissingDataError(
-                f"No data for year {year} (it's before 1997). Skipping..."
+                f"No energy data for year {task.year} (it's before 1997). Skipping..."
             )
 
-        url = f"{URL_BASE}/{year}{str(month).zfill(2)}_Generation_MD.csv"
+        url = f"{URL_BASE}/{task.year}{str(task.month).zfill(2)}_Generation_MD.csv"
         df = load_df_from_file(url, index_col=False)
 
         if df.empty:
             raise MissingDataError(
-                f"No energy generation data available for {year}-{month}. Skipping..."
+                f"No energy data available for {task.year}-{task.month}. Skipping..."
             )
 
         df.columns = [c.strip().lower() for c in df.columns]

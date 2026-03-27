@@ -379,6 +379,9 @@ def test_downloadtask_initialise(tres: str | None, bz: str | None) -> None:
     assert task.date == date
     assert task.temporal_resolution == exp_tres
     assert task.bidding_zone == exp_bz
+    assert task.dt == pd.Timestamp(date)
+    assert task.year == 2020
+    assert task.month == 1
 
     if bz is not None:
         assert (

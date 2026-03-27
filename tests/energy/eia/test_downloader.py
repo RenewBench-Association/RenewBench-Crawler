@@ -335,9 +335,7 @@ def test_get_task_data_no_generation_data(
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
         mock_get.return_value = mock_response
 
-        with pytest.raises(
-            MissingDataError, match="No energy generation data available"
-        ):
+        with pytest.raises(MissingDataError, match="No energy data available"):
             downloader._get_task_data(task)
 
 

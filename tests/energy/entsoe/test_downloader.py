@@ -228,7 +228,7 @@ def test_get_task_data_no_data_for_old_year(
     """
     old_year_task = task.update(date="1900-01-01")
 
-    with pytest.raises(MissingDataError, match="No data for year"):
+    with pytest.raises(MissingDataError, match="No energy data for year"):
         downloader._get_task_data(old_year_task)
 
 
@@ -282,9 +282,7 @@ def test_get_task_data_no_generation_data(
     ) as mock_api:
         mock_api.return_value.query_api.return_value = []
 
-        with pytest.raises(
-            MissingDataError, match="No energy generation data available"
-        ):
+        with pytest.raises(MissingDataError, match="No energy data available"):
             downloader._get_task_data(task)
 
 

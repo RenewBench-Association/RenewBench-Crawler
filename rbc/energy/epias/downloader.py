@@ -108,7 +108,8 @@ class EpiasDownloader(EnergyDownloader):
         """
         # get power-plants   # ['id', 'name', 'eic', 'shortName']
         start = task.date
-        end = (pd.Timestamp(start) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        end = (task.dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
         df_pp = self.eptr.call("pp-list-for-date-range", start_date=start, end_date=end)
         if df_pp.empty:
             raise MissingDataError("No power plant data available! Skipping...")
@@ -118,13 +119,13 @@ class EpiasDownloader(EnergyDownloader):
         batches = np.array_split(df_pp["id"].values, num_batches)
 
         gen_data = [
-            self.eptr.call("rt-gen-bulk", date=task.date, pp_ids=b.tolist())
+            self.eptr.call("rt-gen-bulk", date=start, pp_ids=b.tolist())
             for b in batches
         ]
 
         df_gen = pd.concat(gen_data)
         if df_gen.empty:
-            raise MissingDataError("No energy generation data available! Skipping...")
+            raise MissingDataError("No energy data available! Skipping...")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
         if missing_cols:

@@ -237,7 +237,7 @@ def test_get_task_data_no_data_for_old_year(downloader: IesoDownloader) -> None:
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
         with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
-            with pytest.raises(MissingDataError, match="No data for year"):
+            with pytest.raises(MissingDataError, match="No energy data for year"):
                 downloader._get_task_data(old_year_task)
 
 
@@ -254,9 +254,7 @@ def test_get_task_data_no_generation_data(
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
         with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
-            with pytest.raises(
-                MissingDataError, match="No energy generation data available"
-            ):
+            with pytest.raises(MissingDataError, match="No energy data available"):
                 downloader._get_task_data(task)
 
 

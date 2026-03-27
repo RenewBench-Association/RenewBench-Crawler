@@ -114,9 +114,10 @@ class EiaDownloader(EnergyDownloader):
                 relevant columns to be missed (this will cause the entire run to be killed).
             MissingDataError: If the loaded dataframe is empty.
         """
-        dt = pd.Period(task.date, freq="D")
-        start = dt.strftime("%Y-%m-%dT00")
-        end = pd.Period((dt + pd.Timedelta(days=1)), freq="D").strftime("%Y-%m-%dT00")
+        start = task.dt.strftime("%Y-%m-%dT00")
+        end = pd.Period((task.dt + pd.Timedelta(days=1)), freq="D").strftime(
+            "%Y-%m-%dT00"
+        )
 
         params = {
             "api_key": self.token,
@@ -193,7 +194,7 @@ class EiaDownloader(EnergyDownloader):
 
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
-            raise MissingDataError("No energy generation data available! Skipping...")
+            raise MissingDataError("No energy data available! Skipping...")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
         if missing_cols:

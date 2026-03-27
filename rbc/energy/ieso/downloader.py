@@ -97,23 +97,19 @@ class IesoDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        dt = pd.Period(task.date, freq="M")
-        year = dt.year
-        month = dt.month
-
-        if year < 2010:
+        if task.year < 2010:
             raise MissingDataError(
-                f"No data for year {year} (it's before 2010). Skipping..."
+                f"No energy data for year {task.year} (it's before 2010). Skipping..."
             )
 
-        if year < 2019 or (year == 2019 and month <= 4):
-            df = self._get_from_old_source(year, month)
+        if task.year < 2019 or (task.year == 2019 and task.month <= 4):
+            df = self._get_from_old_source(task.year, task.month)
         else:
-            df = self._get_from_new_source(year, month)
+            df = self._get_from_new_source(task.year, task.month)
 
         if df.empty:
             raise MissingDataError(
-                f"No energy generation data available for {year}-{month}. Skipping..."
+                f"No energy data available for {task.year}-{task.month}. Skipping..."
             )
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
