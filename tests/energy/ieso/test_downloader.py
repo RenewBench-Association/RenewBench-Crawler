@@ -86,20 +86,6 @@ def get_mock_df(specific_task: DownloadTask) -> pd.DataFrame:
     )
 
 
-def get_task_year_month(task: DownloadTask) -> tuple[int, int]:
-    """Return (year, month) from a monthly DownloadTask.
-
-    Args:
-        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
-
-    Returns:
-        tuple[int, int]: Tuple containing (year, month).
-    """
-    assert task.date is not None
-    year, month = task.date.split("-")
-    return int(year), int(month)
-
-
 # ----------------------------------
 # Tests - Initialization
 # ----------------------------------
@@ -285,7 +271,6 @@ def test_get_from_new_source(downloader: IesoDownloader, task: DownloadTask) -> 
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    year, month = get_task_year_month(task)
     mock_df = pd.DataFrame(
         {"Measurement": ["Output", "Forecast", "Capability"], "Value": [10, 20, 30]}
     )
@@ -293,12 +278,10 @@ def test_get_from_new_source(downloader: IesoDownloader, task: DownloadTask) -> 
     with patch(
         "rbc.energy.ieso.downloader.load_df_from_file", return_value=mock_df
     ) as mock_load:
-        df = downloader._get_from_new_source(year=year, month=month)
+        df = downloader._get_from_new_source(year=task.year, month=task.month)
 
         # check correct URL was created
-        expected_url = (
-            f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{year}{month:02d}.csv"
-        )
+        expected_url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{task.year}{task.month:02d}.csv"
         mock_load.assert_called_with(expected_url, header=3, index_col=False)
 
         # check forecast data was filtered out
@@ -315,12 +298,11 @@ def test_get_from_new_source_missing_measurement(
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    year, month = get_task_year_month(task)
     mock_df = get_mock_df(task).drop(columns="Measurement")
 
     with patch("rbc.energy.ieso.downloader.load_df_from_file", return_value=mock_df):
         with pytest.raises(DataStructureError, match="'Measurement' column is missing"):
-            downloader._get_from_new_source(year=year, month=month)
+            downloader._get_from_new_source(year=task.year, month=task.month)
 
 
 @pytest.mark.parametrize(
@@ -340,17 +322,16 @@ def test_get_from_old_source(
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
         suffix (str): Expected suffix of URL.
     """
-    year, month = get_task_year_month(task)
     mock_df = pd.DataFrame(
         {
             "Delivery Date": pd.to_datetime(
-                [f"{task.date}-01", f"{year}-{month + 1:02d}-01"]
+                [f"{task.date}-01", f"{task.year}-{task.month + 1:02d}-01"]
             )
         }
     )
 
     with patch.object(downloader, "_load_yearly_excel", return_value=mock_df) as mock_f:
-        df = downloader._get_from_old_source(year=year, month=month)
+        df = downloader._get_from_old_source(year=task.year, month=task.month)
 
         # check correct URL was created
         expected_url = (
@@ -360,7 +341,7 @@ def test_get_from_old_source(
 
         # check all except current month were filtered out
         assert len(df) == 1
-        assert df["Delivery Date"].dt.month.iloc[0] == month
+        assert df["Delivery Date"].dt.month.iloc[0] == task.month
 
 
 def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None:
@@ -370,7 +351,6 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    year, month = get_task_year_month(task)
     mock_df = pd.DataFrame(
         {"DATE": pd.to_datetime(f"{task.date}-01"), "HOUR": [1], "GEN_A": [10]}
     )
@@ -380,9 +360,9 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None
     with patch("rbc.energy.ieso.downloader.load_df_from_file") as mock_load:
         mock_load.side_effect = [mock_df, mock_df]
 
-        downloader._get_from_old_source(year=year, month=month)
-        downloader._get_from_old_source(year=year, month=month)
-        downloader._get_from_old_source(year=year, month=month)
+        downloader._get_from_old_source(year=task.year, month=task.month)
+        downloader._get_from_old_source(year=task.year, month=task.month)
+        downloader._get_from_old_source(year=task.year, month=task.month)
 
         # check method called 2x - both in _load_yearly_excel call in 1st _get_from_old_source
         assert mock_load.call_count == 2
@@ -397,13 +377,11 @@ def test_get_from_old_source_structure_changed(
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    year, month = get_task_year_month(task)
-
     with patch.object(downloader, "_load_yearly_excel") as mock_load:
         mock_load.return_value = pd.DataFrame({"Delivery Date": [f"{task.date}-01"]})
 
         with pytest.raises(DataStructureError, match="no longer datetimelike"):
-            downloader._get_from_old_source(year=year, month=month)
+            downloader._get_from_old_source(year=task.year, month=task.month)
 
 
 def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> None:
