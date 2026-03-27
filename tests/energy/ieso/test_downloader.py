@@ -163,7 +163,7 @@ def test_download_task_data(downloader: IesoDownloader, task: DownloadTask) -> N
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_df = pd.DataFrame({"Hour 1": [16.2]})
+    mock_df = get_mock_df(task)
 
     with patch.object(downloader, "_get_task_data", return_value=mock_df):
         status = downloader._download_task_data(task)
@@ -173,7 +173,7 @@ def test_download_task_data(downloader: IesoDownloader, task: DownloadTask) -> N
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
-        assert saved_df.iloc[0]["Hour 1"] == 16.2
+        assert saved_df.iloc[0]["Hour 1"] == int(mock_df.iloc[0]["Hour 1"])
 
 
 @pytest.mark.parametrize(
