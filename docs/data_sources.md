@@ -450,18 +450,19 @@ An energy data source is excluded if it fails to meet **any** of the following c
 1. Spatial resolution finer than "state/country" level (e.g., must be per plant, per
    company, or per small area)
 2. Temporal resolution of at least 1 hour (hourly or sub-hourly)
-3. Absence of publication prohibitions or restrictive licensing
+3. Data based on actual historical observations (not purely simulated generation)
+4. Publicly accessible without restrictive publication prohibitions
 
-| Region       | Source                                                                                            | Status                                                 | Resolution                             | Data availability |
-|--------------|---------------------------------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------|-------------------|
-| World        | [IEA](https://www.iea.org/data-and-statistics/data-tools/renewable-energy-progress-tracker)       | Spatial and temporal resolutions too low, inaccessible | per country; **yearly**                | 2000 – 2024       |
-| World        | [IRENA](https://www.irena.org/Data/Downloads/IRENASTAT)                                           | Spatial and temporal resolutions too low               | per country; **yearly**	               | 2000 – 2024       |
-| India        | [CEA](https://cea.nic.in/dashboard/?lang=en)                                                      | Spatial and temporal resolutions too low               | per state (<=350,000 km²); **monthly** | 2019 – now        |
-| Paraguay     | [ANDE](https://ande.gov.py/documentos_contables/706/ande_-_compilacion_estadistica_1999-2019.pdf) | Spatial and temporal resolutions too low               | per country (~400,000 km²); **yearly** | 1996 – 2019       |
-| Mexico       | [CENACE](https://www.cenace.gob.mx/Paginas/SIM/Reportes/EnergiaGeneradaTipoTec.aspx)              | Spatial resolution too low                             | per country (~2,000,000 km²); hourly   | 2016 – now        |
-| South Africa | [Eskom](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)     | Spatial resolution too low                             | per country (~1,000,000 km²); hourly   | 2021 – now        |
-| South Korea  | [KPX](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)       | Spatial resolution too low                             | per country (~100,000 km²); 5 min      | 2022 – now        |
-| Europe       | [EMHIRES Dataset](https://new.kpx.or.kr/powerSource.es?mid=a10606030000&device=chart)             | Spatial resolution too low, simulated data!            | per country; hourly                    | 2006 – now        |
+| Region       | Source  | Status                                                 | Resolution                             | Data availability | Source                                                                                              |
+|--------------| ------- |--------------------------------------------------------| -------------------------------------- | ----------------- |-----------------------------------------------------------------------------------------------------|
+| World        | IEA     | Spatial and temporal resolutions too low, inaccessible | per country; **yearly**                | 2000 – 2024       | [Platform](https://www.iea.org/data-and-statistics/data-tools/renewable-energy-progress-tracker)    |
+| World        | IRENA   | Spatial and temporal resolutions too low               | per country; **yearly**                | 2000 – 2024       | [Data hosting](https://www.irena.org/Data/Downloads/IRENASTAT)                                      |
+| India        | CEA     | Spatial and temporal resolutions too low               | per state (<=350,000 km²); **monthly** | 2019 – now        | [Dashboard](https://cea.nic.in/dashboard/?lang=en)                                                  |
+| Paraguay     | ANDE    | Spatial and temporal resolutions too low               | per country (~400,000 km²); **yearly** | 1996 – 2019       | [Report](https://ande.gov.py/documentos_contables/706/ande_-_compilacion_estadistica_1999-2019.pdf) |
+| Mexico       | CENACE  | Spatial resolution too low                             | per country (~2,000,000 km²); hourly   | 2016 – now        | [Platform](https://www.cenace.gob.mx/Paginas/SIM/Reportes/EnergiaGeneradaTipoTec.aspx)              |
+| South Africa | Eskom   | Spatial resolution too low                             | per country (~1,000,000 km²); hourly   | 2021 – now        | [Dashboard](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)   |
+| South Korea  | KPX     | Spatial resolution too low                             | per country (~100,000 km²); 5 min      | 2022 – now        | [Website](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)     |
+| Europe       | EMHIRES | Spatial resolution too low, simulated data!            | per country; hourly                    | 2006 – now        | [Dataset](https://new.kpx.or.kr/powerSource.es?mid=a10606030000&device=chart)                       |
 
 ## Weather
 
