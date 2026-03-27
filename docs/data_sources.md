@@ -239,7 +239,8 @@ RenewBench-Crawler package.
   midnight in half hour intervals. **NOTE:** Daylight saving is applied (46 TP = on
   the day saving starts, 50 TP = on the day it ends)
 
-> [!NOTE]
+> **PLEASE NOTE:**
+>
 > The EA website states: "This data series will be replaced by one that is more reliable and
 > contains a richer set of plant metadata at some point in the future."
 >
