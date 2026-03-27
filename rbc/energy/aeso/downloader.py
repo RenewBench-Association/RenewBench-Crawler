@@ -28,7 +28,7 @@ URL_BASE = "https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5"
 BOXAPI = f"shared_link={URL_BASE}"
 ROOT_ID = "196731538687"
 FOLDER_ID_DICT = {"1h": "196178549071", "5min": "196706124680"}
-
+MIN_YEAR = 2015
 EXPECTED_COLS = [
     "Date (MST)",
     "Date (MPT)",

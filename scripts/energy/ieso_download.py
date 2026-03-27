@@ -11,6 +11,7 @@ from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
 from rbc.energy.ieso import IesoDownloader
+from rbc.energy.ieso.downloader import MIN_YEAR
 from rbc.utils import setup_logging
 
 SOURCE = "ieso"
@@ -28,9 +29,9 @@ def parse_arguments() -> Namespace:
         "--years",
         nargs="+",
         type=int,
-        default=list(range(2010, datetime.now().year + 1)),  # available years
+        default=list(range(MIN_YEAR, datetime.now().year + 1)),  # available years
         help=f"Years to download. Example: -y 2020 2021. "
-        f"Default: {list(range(2010, datetime.now().year + 1))}",
+        f"Default: {list(range(MIN_YEAR, datetime.now().year + 1))}",
     )
     parser.add_argument(
         "--no-resume",

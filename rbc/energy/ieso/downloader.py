@@ -23,6 +23,7 @@ from rbc.energy.utils import (
 
 URL_NEW_BASE = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
 URL_OLD_BASE = "https://www.ieso.ca"
+MIN_YEAR = 2010
 EXPECTED_COLS = ["Delivery Date", "Generator", "Fuel Type", "Measurement"] + [
     f"Hour {i}" for i in range(1, 25)
 ]
@@ -97,9 +98,9 @@ class IesoDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < 2010:
+        if task.year < MIN_YEAR:
             raise MissingDataError(
-                f"No energy data for year {task.year} (it's before 2010). Skipping..."
+                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
             )
 
         if task.year < 2019 or (task.year == 2019 and task.month <= 4):

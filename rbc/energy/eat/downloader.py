@@ -20,6 +20,7 @@ from rbc.energy.utils import (
 )
 
 URL_BASE = "https://emidatasets.blob.core.windows.net/publicdata/Datasets/Wholesale/Generation/Generation_MD"
+MIN_YEAR = 1997
 EXPECTED_COLS = [
     c.lower()
     for c in [
@@ -95,9 +96,9 @@ class EatDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < 1997:
+        if task.year < MIN_YEAR:
             raise MissingDataError(
-                f"No energy data for year {task.year} (it's before 1997). Skipping..."
+                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
             )
 
         url = f"{URL_BASE}/{task.year}{str(task.month).zfill(2)}_Generation_MD.csv"

@@ -10,7 +10,12 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.ieso import IesoDownloader
-from rbc.energy.ieso.downloader import EXPECTED_COLS, URL_NEW_BASE, URL_OLD_BASE
+from rbc.energy.ieso.downloader import (
+    EXPECTED_COLS,
+    MIN_YEAR,
+    URL_NEW_BASE,
+    URL_OLD_BASE,
+)
 from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
 
@@ -213,12 +218,12 @@ def test_get_task_data(
 
 
 def test_get_task_data_no_data_for_old_year(downloader: IesoDownloader) -> None:
-    """Failure path for "_get_task_data" method when a task with year before 2010 is provided.
+    """Failure path for "_get_task_data" method when a task before MIN_YEAR is provided.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
     """
-    old_year_task = DownloadTask(date="2009-01")
+    old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
     mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch.object(downloader, "_get_from_old_source", return_value=mock_df):

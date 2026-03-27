@@ -26,6 +26,7 @@ from rbc.energy.utils import (
 URL_ROOT = "https://api.eia.gov/v2/"
 URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
 
+MIN_YEAR = 2019
 EXPECTED_COLS = [
     "period",
     "respondent",
@@ -114,6 +115,11 @@ class EiaDownloader(EnergyDownloader):
                 relevant columns to be missed (this will cause the entire run to be killed).
             MissingDataError: If the loaded dataframe is empty.
         """
+        if task.year < MIN_YEAR:
+            raise MissingDataError(
+                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
+            )
+
         start = task.dt.strftime("%Y-%m-%dT00")
         end = pd.Period((task.dt + pd.Timedelta(days=1)), freq="D").strftime(
             "%Y-%m-%dT00"

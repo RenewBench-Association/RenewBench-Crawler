@@ -10,7 +10,7 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.eat import EatDownloader
-from rbc.energy.eat.downloader import EXPECTED_COLS
+from rbc.energy.eat.downloader import EXPECTED_COLS, MIN_YEAR
 from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
 
@@ -197,12 +197,12 @@ def test_get_task_data(downloader: EatDownloader, task: DownloadTask) -> None:
 
 
 def test_get_task_data_no_data_for_old_year(downloader: EatDownloader) -> None:
-    """Failure path for "_get_task_data" method when a task with year before 2010 is provided.
+    """Failure path for "_get_task_data" method when a task before MIN_YEAR is provided.
 
     Args:
         downloader (EatDownloader): Instance of EatDownloader class.
     """
-    old_year_task = DownloadTask(date="1996-01")
+    old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
     mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch("rbc.energy.eat.downloader.load_df_from_file", return_value=mock_df):

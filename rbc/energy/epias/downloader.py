@@ -21,6 +21,7 @@ from rbc.energy.utils import (
     MissingDataError,
 )
 
+MIN_YEAR = 2013
 EXPECTED_COLS = [
     "date",
     "hour",
@@ -106,6 +107,11 @@ class EpiasDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
+        if task.year < MIN_YEAR:
+            raise MissingDataError(
+                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
+            )
+
         # get power-plants   # ['id', 'name', 'eic', 'shortName']
         start = task.date
         end = (task.dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
