@@ -240,7 +240,6 @@ RenewBench-Crawler package.
   the day saving starts, 50 TP = on the day it ends)
 
 > [!NOTE]
->
 > The EA website states: "This data series will be replaced by one that is more reliable and
 > contains a richer set of plant metadata at some point in the future."
 >

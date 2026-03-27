@@ -82,9 +82,7 @@ def get_mock_df(specific_task: DownloadTask) -> pd.DataFrame:
         else:
             data[col] = "mock_value"
 
-    return pd.DataFrame(data, index=[0])[
-        EXPECTED_COLS
-    ]  # df follows EXPECTED_COLS order
+    return pd.DataFrame(data, index=[0])[EXPECTED_COLS]  # ensure correct order
 
 
 # ----------------------------------
