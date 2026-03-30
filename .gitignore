@@ -148,7 +148,7 @@ env.bak/
 venv.bak/
 
 # General stuff
-outputs/
+outputs*/
 
 # Spyder project settings
 .spyderproject

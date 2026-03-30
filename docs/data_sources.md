@@ -19,7 +19,7 @@ RenewBench-Crawler package.
 | **Brazil**               | ONS      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Uruguay**              | ADME     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
-| **New<br>Zealand**       | EAT      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
+| **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
 | **Japan**                | REI      | planned            | hourly; per region       |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Taiwan**               | Taipower | downloader &check; | 10 min; per plant        | public            | [Website](https://www.taipower.com.tw/d006/loadGraph/loadGraph/genshx_e.html), [JSON](https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json),<br> [Example parser](https://github.com/electricitymaps/electricitymaps-contrib/blob/master/electricitymap/contrib/parsers/TAIPOWER.py)              |
 
@@ -203,6 +203,51 @@ RenewBench-Crawler package.
   00:00`) and measurement type
 
 </details>
+
+
+<details>
+<summary><b>EAT (New Zealand)</b></summary>
+
+**Access**
+- Website: [EA Te-Mana-Hiko power data](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)
+- Requirements: public, no authentication needed
+
+**Download & data structure**
+- Spatial resolution: per plant
+- Temporal resolution: 30 min
+- Available data timespan: 1997-08 to now
+- Downloadable files: 1 `.csv` per month
+- Files saved as **raw**: 1 `.csv` per month
+- Columns saved as **raw**:
+
+  `site_code` – ?
+
+  `poc_code` – the point of connection on the grid at which injections occur (three-letter
+  code denoting geographic location)
+
+  `nwk_code` – the network code
+
+  `gen_code` – a name given to the plant
+
+  `fuel_code` – the fuel type used at the plant
+
+  `tech_code` – the plant technology
+
+  `trading_date` – the date on which the injections occurred
+
+  `tp1`, `tp2`, …, `tp50` – generation values (in kWh) per trading period, starting at
+  midnight in half hour intervals. **NOTE:** Daylight saving is applied (46 TP = on
+  the day saving starts, 50 TP = on the day it ends)
+
+> **PLEASE NOTE:**
+>
+> The EA website states: "This data series will be replaced by one that is more reliable and
+> contains a richer set of plant metadata at some point in the future."
+>
+> This will likely affect data parsing when it is implemented, but for now things work...
+
+</details>
+
 
 <details>
 <summary><b>Taipower (Taiwan)</b></summary>
@@ -401,9 +446,27 @@ This section lists energy and meteorological sources that are currently ineligib
 
 ## Energy
 
+An energy data source is excluded if it fails to meet **any** of the following criteria:
+1. Spatial resolution finer than "state/country" level (e.g., must be per plant, per
+   company, or per small area)
+2. Temporal resolution of at least 1 hour (hourly or sub-hourly)
+3. Data based on actual historical observations (not purely simulated generation)
+4. Publicly accessible without restrictive publication prohibitions
+
+| Region       | Source  | Status                                                 | Resolution                             | Data availability | Source                                                                                              |
+|--------------| ------- |--------------------------------------------------------| -------------------------------------- | ----------------- |-----------------------------------------------------------------------------------------------------|
+| World        | IEA     | Spatial and temporal resolutions too low, inaccessible | per country; **yearly**                | 2000 – 2024       | [Platform](https://www.iea.org/data-and-statistics/data-tools/renewable-energy-progress-tracker)    |
+| World        | IRENA   | Spatial and temporal resolutions too low               | per country; **yearly**                | 2000 – 2024       | [Data hosting](https://www.irena.org/Data/Downloads/IRENASTAT)                                      |
+| India        | CEA     | Spatial and temporal resolutions too low               | per state (<=350,000 km²); **monthly** | 2019 – now        | [Dashboard](https://cea.nic.in/dashboard/?lang=en)                                                  |
+| Paraguay     | ANDE    | Spatial and temporal resolutions too low               | per country (~400,000 km²); **yearly** | 1996 – 2019       | [Report](https://ande.gov.py/documentos_contables/706/ande_-_compilacion_estadistica_1999-2019.pdf) |
+| Mexico       | CENACE  | Spatial resolution too low                             | per country (~2,000,000 km²); hourly   | 2016 – now        | [Platform](https://www.cenace.gob.mx/Paginas/SIM/Reportes/EnergiaGeneradaTipoTec.aspx)              |
+| South Africa | Eskom   | Spatial resolution too low                             | per country (~1,000,000 km²); hourly   | 2021 – now        | [Dashboard](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)   |
+| South Korea  | KPX     | Spatial resolution too low                             | per country (~100,000 km²); 5 min      | 2022 – now        | [Website](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)     |
+| Europe       | EMHIRES | Spatial resolution too low, simulated data!            | per country; hourly                    | 2006 – now        | [Dataset](https://new.kpx.or.kr/powerSource.es?mid=a10606030000&device=chart)                       |
+
 ## Weather
 
-A reanalysis dataset is excluded if it fails to meet **all** of the following criteria:
+A reanalysis dataset is excluded if it fails to meet **any** of the following criteria:
 1. Spatial resolution equal to or finer than ERA5 (grid spacing ≤ 0.25°)
 2. Temporal resolution of at least 1 hour (hourly or sub-hourly)
 3. Actively updated through at least the end of 2025

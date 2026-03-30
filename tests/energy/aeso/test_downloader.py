@@ -282,7 +282,7 @@ def test_get_task_data_no_generation_data(
     mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch.object(downloader, "_load_zip", return_value=mock_df):
-        with pytest.raises(MissingDataError, match="No energy generation"):
+        with pytest.raises(MissingDataError, match="No energy data available"):
             downloader._get_task_data(task)
 
 
