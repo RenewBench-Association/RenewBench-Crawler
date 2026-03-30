@@ -446,7 +446,7 @@ This section lists energy and meteorological sources that are currently ineligib
 
 ## Energy
 
-An energy data source is excluded if it fails to meet **any** of the following criteria:
+An energy data source is excluded if fails to meet **any** of the following criteria:
 1. Spatial resolution finer than "state/country" level (e.g., must be per plant, per
    company, or per small area)
 2. Temporal resolution of at least 1 hour (hourly or sub-hourly)
@@ -466,7 +466,7 @@ An energy data source is excluded if it fails to meet **any** of the following c
 
 ## Weather
 
-A reanalysis dataset is excluded if it fails to meet **all** of the following criteria:
+A reanalysis dataset is excluded if fails to meet **any** of the following criteria:
 1. Spatial resolution equal to or finer than ERA5 (grid spacing ≤ 0.25°)
 2. Temporal resolution of at least 1 hour (hourly or sub-hourly)
 3. Actively updated through at least the end of 2025
