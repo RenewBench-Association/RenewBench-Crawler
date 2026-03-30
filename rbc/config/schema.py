@@ -114,6 +114,20 @@ class AccessValidation:
 # ----------------------------------
 # Per-source schemas - ENERGY
 # ----------------------------------
+class AesoConfig(PathValidation, AccessValidation, BaseModel):
+    """Configuration schema for the AESO energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAPI): Access pydantic model for access settings.
+    """
+
+    source: Literal["aeso"] = "aeso"
+    paths: Paths
+    access: AccessAPI
+
+
 class EiaConfig(PathValidation, AccessValidation, BaseModel):
     """Configuration schema for the EIA energy data source.
 
@@ -156,7 +170,7 @@ class EpiasConfig(PathValidation, AccessValidation, BaseModel):
     access: AccessAccount
 
 
-class IesoConfig(BaseModel):
+class IesoConfig(PathValidation, BaseModel):
     """Configuration schema for the IESO energy data source.
 
     Attributes:
@@ -185,7 +199,7 @@ class Era5Config(PathValidation, AccessValidation, BaseModel):
     access: AccessAPI
 
 
-class IconDreamGlobalConfig(BaseModel):
+class IconDreamGlobalConfig(PathValidation, BaseModel):
     """Configuration schema for the ICON-DREAM Global weather data source.
 
     Attributes:
@@ -197,7 +211,7 @@ class IconDreamGlobalConfig(BaseModel):
     paths: Paths
 
 
-class IconDreamEuConfig(BaseModel):
+class IconDreamEuConfig(PathValidation, BaseModel):
     """Configuration schema for the ICON-DREAM EU weather data source.
 
     Attributes:
@@ -209,15 +223,29 @@ class IconDreamEuConfig(BaseModel):
     paths: Paths
 
 
+class Barra2Config(PathValidation, BaseModel):
+    """Configuration schema for the BARRA2 reanalysis weather data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["barra2"] = "barra2"
+    paths: Paths
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
+    "aeso": AesoConfig,
     "eia": EiaConfig,
     "entsoe": EntsoeConfig,
     "epias": EpiasConfig,
     "ieso": IesoConfig,
+    "barra2": Barra2Config,
     "era5": Era5Config,
-    "icon_dream_global": IconDreamGlobalConfig,
     "icon_dream_eu": IconDreamEuConfig,
+    "icon_dream_global": IconDreamGlobalConfig,
 }

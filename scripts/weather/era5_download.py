@@ -66,7 +66,7 @@ def parse_arguments() -> argparse.Namespace:
         type=float,
         default=None,
         metavar=("NORTH", "WEST", "SOUTH", "EAST"),
-        help="Bounding box in degrees [North, West, South, East]. Default: World (all)",
+        help="Bounding box in degrees [North, West, South, East]. Default: Global (all)",
     )
     parser.add_argument(
         "-pl",
@@ -106,11 +106,13 @@ def parse_arguments() -> argparse.Namespace:
         "Useful for debugging request parameters.",
     )
     parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume download from a previous checkpoint. "
-        "Skips already downloaded year/month/level_type combinations.",
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Do not resume download from a previous checkpoint.",
     )
+    parser.set_defaults(resume=True)
+
     parser.add_argument(
         "-o",
         "--cfg_options",

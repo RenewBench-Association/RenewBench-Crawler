@@ -16,6 +16,10 @@ def source_configs(tmp_path: Path) -> dict:
         dict: Dictionary of example source config dicts.
     """
     return {
+        "aeso": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "aeso"))},
+            "access": {"api_key": "token"},
+        },
         "eia": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "eia"))},
             "access": {"api_key": "token"},
@@ -29,15 +33,18 @@ def source_configs(tmp_path: Path) -> dict:
             "access": {"username": "name", "password": "pw"},
         },
         "ieso": {"paths": {"dst_dir_raw": str(Path(tmp_path, "ieso"))}},
+        "barra2": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "barra2"))},
+        },
         "era5": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "era5"))},
             "access": {"api_key": "token"},
         },
-        "icon_dream_global": {
-            "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
-        },
         "icon_dream_eu": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_eu"))},
+        },
+        "icon_dream_global": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
         },
     }
 
