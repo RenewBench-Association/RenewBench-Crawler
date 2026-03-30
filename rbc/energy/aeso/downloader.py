@@ -28,7 +28,7 @@ URL_BASE = "https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5"
 BOXAPI = f"shared_link={URL_BASE}"
 ROOT_ID = "196731538687"
 FOLDER_ID_DICT = {"1h": "196178549071", "5min": "196706124680"}
-
+MIN_YEAR = 2015
 EXPECTED_COLS = [
     "Date (MST)",
     "Date (MPT)",
@@ -167,7 +167,7 @@ class AesoDownloader(EnergyDownloader):
         df = self._load_zip(item_id=item["id"], item_name=item["name"])
 
         if df.empty:
-            raise MissingDataError("No energy generation data available! Skipping...")
+            raise MissingDataError("No energy data available! Skipping...")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:
@@ -187,9 +187,7 @@ class AesoDownloader(EnergyDownloader):
         df = df.loc[date_col.dt.to_period("M") == pd.Period(task.date, freq="M")].copy()
 
         if df.empty:
-            raise MissingDataError(
-                "No energy generation data after month filter! Skipping..."
-            )
+            raise MissingDataError("No energy data after month filter! Skipping...")
 
         df = df.sort_values(
             by=["Date (MST)", "Date (MPT)", "Asset Name"], ignore_index=True

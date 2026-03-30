@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""IESO DATA DOWNLOAD SCRIPT.
+"""EAT DATA DOWNLOAD SCRIPT.
 
-Download data from IESO website for Ontario, Canada.
+Download data from EAT website for New Zealand.
 """
 
 from argparse import ArgumentParser, Namespace
@@ -10,11 +10,11 @@ from datetime import datetime
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
-from rbc.energy.ieso import IesoDownloader
-from rbc.energy.ieso.downloader import MIN_YEAR
+from rbc.energy.eat import EatDownloader
+from rbc.energy.eat.downloader import MIN_YEAR
 from rbc.utils import setup_logging
 
-SOURCE = "ieso"
+SOURCE = "eat"
 
 
 def parse_arguments() -> Namespace:
@@ -23,7 +23,7 @@ def parse_arguments() -> Namespace:
     Returns:
         argparse.Namespace: Namespace parsed command line arguments.
     """
-    parser = ArgumentParser(prog="IESO data download")
+    parser = ArgumentParser(prog="EAT data download")
     parser.add_argument(
         "-y",
         "--years",
@@ -51,7 +51,7 @@ def parse_arguments() -> Namespace:
 
 
 def main() -> None:
-    """Coordinating IESO data download."""
+    """Coordinating EAT data download."""
     args = parse_arguments()
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
@@ -60,7 +60,7 @@ def main() -> None:
     logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
     logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
-    downloader = IesoDownloader(
+    downloader = EatDownloader(
         output_path=cfg.paths.dst_dir_raw,
         years=args.years,
         resume=args.resume,

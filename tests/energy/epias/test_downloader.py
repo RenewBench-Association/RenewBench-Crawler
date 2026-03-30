@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from rbc.energy.epias import EpiasDownloader
-from rbc.energy.epias.downloader import EXPECTED_COLS
+from rbc.energy.epias.downloader import EXPECTED_COLS, MIN_YEAR
 from rbc.energy.utils import (
     DataStructureError,
     DownloadTask,
@@ -207,6 +207,20 @@ def test_get_task_data(downloader: EpiasDownloader, task: DownloadTask) -> None:
     assert not df.empty
     assert df.iloc[0]["date"] == task.date
     assert df.iloc[0]["total"] == 16.2
+
+
+def test_get_task_data_no_data_for_old_year(downloader: EpiasDownloader) -> None:
+    """Failure path for "_get_task_data" method when a task before MIN_YEAR is provided.
+
+    Args:
+        downloader (EpiasDownloader): Instance of EpiasDownloader class.
+    """
+    old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
+    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
+
+    with patch("rbc.energy.eat.downloader.load_df_from_file", return_value=mock_df):
+        with pytest.raises(MissingDataError, match="No energy data for year"):
+            downloader._get_task_data(old_year_task)
 
 
 @pytest.mark.parametrize(

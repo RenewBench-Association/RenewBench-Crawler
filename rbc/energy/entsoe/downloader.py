@@ -121,18 +121,17 @@ class EntsoeDownloader(EnergyDownloader):
                 missing (this will cause the entire run to be killed).
         """
         task.validate_required_fields("bidding_zone")
-        dt = pd.Period(task.date, freq="D")
 
         bz_start = int(ACTIVE_ZONES_METADATA[str(task.bidding_zone)]["start"])
-        if dt.year < bz_start:
+        if task.year < bz_start:
             raise MissingDataError(
-                f"No data for year {dt.year} (it's before start {bz_start}). Skipping..."
+                f"No energy data for year {task.year} (it's before {bz_start}). Skipping..."
             )
 
         try:
             result = ActualGenerationPerGenerationUnit(
-                period_start=int(dt.strftime("%Y%m%d0000")),  # start of day
-                period_end=int(dt.strftime("%Y%m%d2359")),  # end of day
+                period_start=int(task.dt.strftime("%Y%m%d0000")),  # start of day
+                period_end=int(task.dt.strftime("%Y%m%d2359")),  # end of day
                 in_domain=task.bidding_zone,
                 psr_type=None,
                 registered_resource=None,
@@ -145,7 +144,7 @@ class EntsoeDownloader(EnergyDownloader):
             raise ConnectionError("API call did not return requested data!")
 
         if not result:
-            raise MissingDataError("No energy generation data available! Skipping...")
+            raise MissingDataError("No energy data available! Skipping...")
 
         records = extract_records(result)  # turns into list of dicts
         records = add_timestamps(records)  # adds key 'timestamp' to each dict

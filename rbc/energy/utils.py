@@ -10,7 +10,7 @@ import threading
 import time
 import urllib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pandas as pd
@@ -77,11 +77,24 @@ class DownloadTask:
         date (str | None): Date in the format YYYY-MM(-DD) to download data for.
         temporal_resolution (str): Temporal resolution of data. Defaults to "1h".
         bidding_zone (str | None): Optional bidding zone of data. Defaults to None.
+        identifier (str): Task identifier, set in __post_init__.
+        dt (pd.Timestamp): Task datetime, set in __post_init__.
+        year (int): Task year, set in __post_init__.
+        month (int): Task month, set in __post_init__.
+        _DATE_PATTERN (re.Pattern): Pattern for enforcing "date" format.
+        _TRES_PATTERN (re.Pattern): Pattern for enforcing "temporal_resolution" format.
     """
 
+    # attributes of the actual task
     date: str
     temporal_resolution: str = "1h"
     bidding_zone: str | None = None
+
+    # attributes to be defined in __post_init__
+    identifier: str = field(init=False, repr=False)
+    dt: pd.Timestamp = field(init=False, repr=False)
+    year: int = field(init=False, repr=False)
+    month: int = field(init=False, repr=False)
 
     # patterns for matching
     _DATE_PATTERN = re.compile(r"^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$")
@@ -93,35 +106,31 @@ class DownloadTask:
         Raises:
             ValueError: If provided date or temporal resolution are in the wrong format.
         """
-        # check that date matches pattern and is a valid calendar date
-        if not self._DATE_PATTERN.match(self.date):
-            raise ValueError(f"Invalid date / date format: '{self.date}'")
-        try:
-            pd.to_datetime(self.date)
-        except (ValueError, TypeError):
-            raise ValueError(f"Invalid calendar date: '{self.date}'")
-
-        # check that temporal resolution matches pattern
+        # perform validation checks (temporal resolution, date)
         if not self._TRES_PATTERN.match(self.temporal_resolution):
             raise ValueError(
                 f"Invalid temporal resolution: '{self.temporal_resolution}'"
             )
 
-    @property
-    def identifier(self) -> str:
-        """A task's unique string representation for checkpointing and logging.
+        if not self._DATE_PATTERN.match(self.date):
+            raise ValueError(f"Invalid date / date format: '{self.date}'")
 
-        Returns:
-            str: Unique string 'date=YYYY-MM(-DD)|temporal_resolution=1h(|bidding_zone=<bz>)'
-        """
-        parts = [
-            f"date={self.date}",
-            f"temporal_resolution={self.temporal_resolution}",
-        ]
+        try:
+            timestamp = pd.to_datetime(self.date)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid calendar date: '{self.date}'")
+
+        # assign values
+        object.__setattr__(self, "dt", timestamp)
+        object.__setattr__(self, "year", timestamp.year)
+        object.__setattr__(self, "month", timestamp.month)
+
+        # build ID ('date=YYYY-MM(-DD)|temporal_resolution=1h(|bidding_zone=<bz>)')
+        parts = [f"date={self.date}", f"temporal_resolution={self.temporal_resolution}"]
         if self.bidding_zone:
             parts.append(f"bidding_zone={self.bidding_zone}")
 
-        return "|".join(parts)
+        object.__setattr__(self, "identifier", "|".join(parts))
 
     def update(self, **changes) -> "DownloadTask":
         """Update a key with provided changes.
@@ -143,12 +152,10 @@ class DownloadTask:
         Raises:
               ValueError: If any of the required fields are None.
         """
-        for field in fields:
-            value = getattr(self, field)
+        for f in fields:
+            value = getattr(self, f)
             if value is None or (isinstance(value, str) and not value.strip()):
-                raise ValueError(
-                    f"Required attribute '{field}' missing for task: {self}"
-                )
+                raise ValueError(f"Required attribute '{f}' missing for task: {self}")
 
 
 class EnergyDownloader(ABC):
