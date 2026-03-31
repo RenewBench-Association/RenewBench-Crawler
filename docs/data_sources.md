@@ -16,7 +16,7 @@ RenewBench-Crawler package.
 | **Canada<br> (Alberta)** | AESO     | downloader &check; | hourly/5 min; per plant  | `box` API token   | [Website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/), [Data hosting](https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5/folder/196731538687), <br> [API how-to](https://developer.box.com/guides/authentication/tokens/developer-tokens) (s. details!) |
 | **Canada<br> (Ontario)** | IESO     | downloader &check; | hourly; per plant        | public            | [Website](https://www.ieso.ca/power-data/data-directory)                                                                                                                                                                                                                                                               |
 | **Chile**                | CEN      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
-| **Brazil**               | ONS      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
+| **Brazil**               | ONS      | planned            | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
 | **Uruguay**              | ADME     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
@@ -80,7 +80,7 @@ RenewBench-Crawler package.
 
   `hour` – hour
 
-  `total` – total generation of the power plant (MWh)
+  `total` – total generation of the power plant in MWh
 
   `powerPlantName` – name of the power plant
 
@@ -185,7 +185,8 @@ RenewBench-Crawler package.
 - Spatial resolution: per plant
 - Temporal resolution: hourly
 - Available data timespan: 2010-01 to now
-- Downloadable files: 1 `.xlsx` per year (pre-April-2019), 1 `.csv` per month (post-April-2019)
+- Downloadable files: 1 `.xlsx` per year (before April-2019), 1 `.csv` per month
+  (from April-2019 onwards)
 - Files saved as **raw**: 1 `.csv` per month
 - Columns saved as **raw**:
 
@@ -196,7 +197,7 @@ RenewBench-Crawler package.
   `Fuel Type` – fuel type (not given in `.xlsx` so `=NaN`; to be filled in during processing)
 
   `Measurement` – type of measurement:
-  - `Output`: generation (MW)
+  - `Output`: generation in MW
   - `Capability`: available capacity
 
   `Hour 1`, `Hour 2`, …, `Hour 24` – ending hour intervals (i.e. `00:00 - 01:00` to `23:00 to
@@ -204,6 +205,48 @@ RenewBench-Crawler package.
 
 </details>
 
+
+<details>
+<summary><b>ONS (Brazil)</b></summary>
+
+**Access**
+- Website: [ONS generation data](https://dados.ons.org.br/dataset/geracao-usina-2)
+- Requirements: public, no authentication needed (CC Attribution License)
+
+**Download & data structure**
+- Spatial resolution: per plant
+- Temporal resolution: hourly
+- Available data timespan: 2000 to now
+- Downloadable files: 1 `.csv` (or `.xlsx`) per year (before 2022), 1 `.csv` (or `.xlsx`) per
+  month (from 2022 onwards)
+- Files saved as **raw**: 1 `.csv` per month
+- Columns saved as **raw**:
+
+  `din_instante` - reference timestamp (YYYY-MM-DD HH:MM:SS), hourly resolution
+
+  `id_subsistema` - subsystem identifier (3-character code for Brazilian grid subsystem)
+
+  `nom_subsistema` - name of the subsystem
+
+  `id_estado` - state identifier (2-character code for Brazilian state)
+
+  `nom_estado` - name of the state where the plant is located
+
+  `cod_modalidadeoperacao` - plant operation mode (e.g. type of operational dispatch)
+
+  `nom_tipousina` - plant type (e.g. hydro, thermal, wind, solar)
+
+  `nom_tipocombustivel` - fuel type used by the plant
+
+  `nom_usina` - name of the power plant
+
+  `id_ons` - unique identifier assigned by ONS (National System Operator)
+
+  `ceg` - unique generation project identifier assigned by ANEEL (Brazilian regulator)
+
+  `val_geracao` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
+
+</details>
 
 <details>
 <summary><b>EAT (New Zealand)</b></summary>
@@ -235,7 +278,7 @@ RenewBench-Crawler package.
 
   `trading_date` – the date on which the injections occurred
 
-  `tp1`, `tp2`, …, `tp50` – generation values (in kWh) per trading period, starting at
+  `tp1`, `tp2`, …, `tp50` – generation values in kWh (!) per trading period, starting at
   midnight in half hour intervals. **NOTE:** Daylight saving is applied (46 TP = on
   the day saving starts, 50 TP = on the day it ends)
 
