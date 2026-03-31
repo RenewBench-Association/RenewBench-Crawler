@@ -83,7 +83,7 @@ class EpiasDownloader(EnergyDownloader):
         except Exception:
             raise InvalidError("Provided username and password are incorrect.")
 
-    def download_data(self):
+    def download_data(self) -> None:
         """Parse data for all given years from EPIAS Platform and save to CSV."""
         tasks = [DownloadTask(date=d) for d in self._get_date_list()]
 

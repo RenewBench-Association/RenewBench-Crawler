@@ -20,6 +20,7 @@ from rbc.energy.utils import (
 )
 
 URL_BASE = "https://emidatasets.blob.core.windows.net/publicdata/Datasets/Wholesale/Generation/Generation_MD"
+
 MIN_YEAR = 1997
 EXPECTED_COLS = [
     c.lower()
@@ -54,7 +55,7 @@ class EatDownloader(EnergyDownloader):
                 or start from scratch (False). Defaults to True.
 
         Raises:
-            ConnectionError: If the base URLs aren't reachable.
+            ConnectionError: If the base URL isn't reachable.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         logger.info(f"EAT Downloader initialized for:\n- years:\t\t{years}")

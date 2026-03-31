@@ -79,7 +79,7 @@ class EiaDownloader(EnergyDownloader):
             logger.info(f"Failed: {e}")
             raise InvalidError(f"Provided API token {token} incorrect.")
 
-    def download_data(self):
+    def download_data(self) -> None:
         """Parse data for all given years from EIA site and save to CSV."""
         tasks = [DownloadTask(date=d) for d in self._get_date_list()]
 

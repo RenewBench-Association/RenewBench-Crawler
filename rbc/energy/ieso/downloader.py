@@ -23,6 +23,7 @@ from rbc.energy.utils import (
 
 URL_NEW_BASE = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
 URL_OLD_BASE = "https://www.ieso.ca"
+
 MIN_YEAR = 2010
 EXPECTED_COLS = ["Delivery Date", "Generator", "Fuel Type", "Measurement"] + [
     f"Hour {i}" for i in range(1, 25)
@@ -134,7 +135,6 @@ class IesoDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for a desired month.
 
         Raises:
-            RETRY_ERRORS / InvalidError: If loading data from the URL fails.
             DataStructureError: If downloaded data does not have the 'Measurement' column.
         """
         url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{year}{str(month).zfill(2)}.csv"
@@ -160,7 +160,7 @@ class IesoDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for a desired month.
 
         Raises:
-            DataStructureError: If downloaded data does not have the 'Measurement' column.
+            DataStructureError: If 'Delivery Date' column data is not datetime-like.
         """
         url = f"{URL_OLD_BASE}/-/media/Files/IESO/Power-Data/data-directory/GOC-{year}"
         url += "-Jan-April.xlsx" if year == 2019 else ".xlsx"
@@ -193,7 +193,6 @@ class IesoDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for the desired year.
 
         Raises:
-            RETRY_ERRORS / InvalidError: If loading data from the URL fails.
             DataStructureError: If downloaded data does not have capacity values.
         """
         # 1. get generation ('Output') data and standardize
@@ -231,7 +230,7 @@ class IesoDownloader(EnergyDownloader):
     # --------------------------------------------
     @staticmethod
     def standardize_old_data(df: pd.DataFrame, measurement_type: str) -> pd.DataFrame:
-        """Standardize old (pre-2019) dataframes to match the newer CSV format.
+        """Standardize old dataframes (before 04-2019) to match the newer CSV format.
 
         From:   DATE | HOUR | Unnamed: 2 | Generator 1 | Generator 2 | ...
         → to:   Delivery Date | Generator | Fuel Type | Measurement | Hour 1 | Hour 2 | ...
