@@ -26,7 +26,7 @@ URL_BASE = "https://ons-aws-prod-opendata.s3.amazonaws.com/dataset/geracao_usina
 
 MIN_YEAR = 2000
 EXPECTED_COLS = {
-    "din_instante": "reference_datetime",
+    "din_instante": "datetime",
     "id_subsistema": "subsystem_id",
     "nom_subsistema": "subsystem_name",
     "id_estado": "state_id",
