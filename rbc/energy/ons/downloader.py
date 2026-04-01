@@ -147,9 +147,6 @@ class OnsDownloader(EnergyDownloader):
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
-
-        Raises:
-            DataStructureError: If 'din_instante' column data is not datetime-like.
         """
         url = f"{URL_BASE}GERACAO_USINA-2_{task.year}.csv"
 
@@ -157,15 +154,9 @@ class OnsDownloader(EnergyDownloader):
             df_year = self._load_yearly_csv(url)
 
         # filter for the specific month
-        try:
-            month_mask = (df_year["din_instante"].dt.year == task.year) & (
-                df_year["din_instante"].dt.month == task.month
-            )
-        except ValueError as e:
-            raise DataStructureError(
-                f"ONS file structure change detected in yearly csv '{url}'! "
-                f"'din_instante' is no longer datetimelike: {e}"
-            )
+        month_mask = (df_year["din_instante"].dt.year == task.year) & (
+            df_year["din_instante"].dt.month == task.month
+        )
 
         df_month = df_year[month_mask].copy()
         return df_month
@@ -181,7 +172,8 @@ class OnsDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for the desired year.
 
         Raises:
-            DataStructureError: If downloaded data does not have the 'din_instante' column.
+            DataStructureError: If downloaded data does not have the 'din_instante' column
+                or the data in the column cannot be converted to datetime-like values.
         """
         df = load_df_from_file(url, delimiter=";")
         try:
@@ -191,5 +183,9 @@ class OnsDownloader(EnergyDownloader):
                 f"ONS file structure change detected for '{url}'! "
                 f"Missing datetime column 'din_instante'"
             )
-
+        except ValueError as e:  # if to_datetime raises DateParseError
+            raise DataStructureError(
+                f"ONS file structure change detected for '{url}'! "
+                f"'din_instante' is no longer datetimelike: {e}"
+            )
         return df
