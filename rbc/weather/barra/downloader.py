@@ -135,7 +135,7 @@ class Barra2Downloader(WeatherDownloader):
         base_output_path = Path(output_path)
         resolved_output_path = (
             base_output_path
-            if base_output_path.name == self.model
+            if self.model in base_output_path.name
             else Path(base_output_path, self.model)
         )
         self.invariant_output_path = Path(resolved_output_path, "invariant")
