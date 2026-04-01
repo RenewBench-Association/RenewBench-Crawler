@@ -297,7 +297,7 @@ class TestDownloadFileStreaming:
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
             download_file_streaming(
-                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+                "http://example.com/file.nc", output_file, "test"
             )
 
         assert output_file.parent.is_dir()
@@ -311,7 +311,7 @@ class TestDownloadFileStreaming:
             side_effect=requests.exceptions.RequestException("network error"),
         ):
             result = download_file_streaming(
-                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+                "http://example.com/file.nc", output_file, "test"
             )
 
         assert result == 0
@@ -326,7 +326,7 @@ class TestDownloadFileStreaming:
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
             result = download_file_streaming(
-                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+                "http://example.com/file.nc", output_file, "test"
             )
 
         assert result == 0
@@ -343,7 +343,7 @@ class TestDownloadFileStreaming:
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
             result = download_file_streaming(
-                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+                "http://example.com/file.nc", output_file, "test"
             )
 
         assert result == 0
