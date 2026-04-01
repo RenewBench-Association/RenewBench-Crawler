@@ -108,7 +108,7 @@ class OnsDownloader(EnergyDownloader):
         if task.year < 2022:
             df = self._get_from_yearly_csv(task)
         else:
-            df = self._get_from_monthly_csv(task.year, task.month)
+            df = self._get_from_monthly_csv(task)
 
         if df.empty:
             raise MissingDataError(
@@ -126,17 +126,16 @@ class OnsDownloader(EnergyDownloader):
         return df
 
     @staticmethod
-    def _get_from_monthly_csv(year: int, month: int) -> pd.DataFrame:
+    def _get_from_monthly_csv(task: DownloadTask) -> pd.DataFrame:
         """Extract data from 2022 onwards for a given month.
 
         Args:
-            year (int): Year to extract data for.
-            month (int): Month to extract data for.
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
         """
-        url = f"{URL_BASE}GERACAO_USINA-2_{year}_{str(month).zfill(2)}.csv"
+        url = f"{URL_BASE}GERACAO_USINA-2_{task.year}_{str(task.month).zfill(2)}.csv"
         df = load_df_from_file(url, delimiter=";")
         return df
 
