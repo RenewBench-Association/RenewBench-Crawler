@@ -3,13 +3,10 @@
 Download BARRA2 reanalysis data (R2, C2, or C2_20min) from National Computational Infrastructure (NCI) THREDDS server.
 """
 
-import datetime
-import pickle
 from pathlib import Path
 
 import requests
 from loguru import logger
-from tqdm import tqdm
 
 from rbc.weather.barra.mappings import (
     C2_20MIN_SINGLE_LEVEL_VARIABLES,
@@ -24,6 +21,7 @@ from rbc.weather.barra.mappings import (
     R2_SINGLE_LEVEL_VARIABLES,
     VARIABLE_TO_BARRA2_PARAM,
 )
+from rbc.weather.utils import WeatherDownloader, download_file_streaming
 
 
 def _normalize_model(model: str) -> str:
@@ -73,7 +71,7 @@ def _get_available_codes(model_name: str) -> set[str]:
         return C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
 
 
-class Barra2Downloader:
+class Barra2Downloader(WeatherDownloader):
     """BARRA2 reanalysis data downloader.
 
     Downloads BARRA2 NWP reanalysis data from NCI THREDDS server.
@@ -83,20 +81,12 @@ class Barra2Downloader:
     Attributes:
         available_codes (set[str]): Set of BARRA2 parameter codes available for the model.
         available_variables (set[str]): Known available variables for this model.
-        checkpoint (dict): Dict tracking download status per (year, month, variable).
-        checkpoint_path (Path): Path to checkpoint file for resume capability.
-        config (dict): Model-specific configuration from MODEL_CONFIG.
-        dry_run (bool): If True, print requests without downloading.
+        model_config (dict): Model-specific configuration from MODEL_CONFIG.
         include_invariants (bool): If True, invariant variables are included in the download.
         invariant_output_path (Path): Directory for invariant variable outputs.
         model (str): Model key ("R2", "C2", or "C2_20min").
-        months (list[str]): List of months to download (01-12).
-        output_path (Path): Path to output directory.
         pressure_levels (list[int]): Pressure levels for 3D variables (hPa).
-        resume (bool): If True, resume from previous checkpoint.
         temporal_res (str): Temporal resolution (from MODEL_CONFIG).
-        variables (list[str]): List of variables to download.
-        years (list[int]): List of years to download.
     """
 
     def __init__(
@@ -134,39 +124,24 @@ class Barra2Downloader:
         Raises:
             ValueError: If model name is not recognized, any year is invalid,
                 or any month is out of range (01-12).
+            ConnectionError: If one or more BARRA2 endpoints are unreachable.
         """
         self.model = _normalize_model(model)
-        self.config = MODEL_CONFIG[self.model]
-        self.temporal_res: str = self.config["temporal_res"]
-        self.years = sorted(years)
-        self.months = (
-            months if months is not None else [f"{i:02d}" for i in range(1, 13)]
-        )
+        self.model_config = MODEL_CONFIG[self.model]
+        self.temporal_res: str = self.model_config["temporal_res"]
         self.include_invariants = include_invariants
-        self.dry_run = dry_run
-        self.resume = resume
 
-        # Output path setup
+        # Output path setup: append model subdirectory if not already present
         base_output_path = Path(output_path)
-        if base_output_path.name == self.model:
-            self.output_path = base_output_path
-        else:
-            self.output_path = Path(base_output_path, self.model)
-        self.output_path.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_path = Path(self.output_path, "status.pickle")
-        self.invariant_output_path = Path(self.output_path, "invariant")
+        resolved_output_path = (
+            base_output_path
+            if base_output_path.name == self.model
+            else Path(base_output_path, self.model)
+        )
+        self.invariant_output_path = Path(resolved_output_path, "invariant")
 
-        # Check if years are within valid range (1979 to current year)
-        current_year = datetime.date.today().year
-        invalid_years = [y for y in self.years if not (1979 <= y <= current_year)]
-        if invalid_years:
-            raise ValueError(
-                f"Invalid years: {invalid_years}. Years must be between 1979 and {current_year}."
-            )
-
-        # Build available BARRA2 codes for selected model
+        # Build available BARRA2 codes and variable names for selected model
         self.available_codes = _get_available_codes(self.model)
-        # Build set of descriptive names available for this model key
         self.available_variables = {
             name
             for name, code in VARIABLE_TO_BARRA2_PARAM.items()
@@ -179,17 +154,15 @@ class Barra2Downloader:
         )
         if self.include_invariants:
             invariant_variable_names = sorted(
-                [
-                    name
-                    for name, code in VARIABLE_TO_BARRA2_PARAM.items()
-                    if code in INVARIANT_VARIABLES
-                ]
+                name
+                for name, code in VARIABLE_TO_BARRA2_PARAM.items()
+                if code in INVARIANT_VARIABLES
             )
-            self.variables: list[str] = list(
+            resolved_variables: list[str] = list(
                 dict.fromkeys([*base_variables, *invariant_variable_names])
             )
         else:
-            self.variables = base_variables
+            resolved_variables = base_variables
 
         # Setup pressure levels (use model defaults if none provided)
         if pressure_levels is not None:
@@ -201,31 +174,31 @@ class Barra2Downloader:
         else:
             self.pressure_levels = []
 
+        super().__init__(
+            output_path=resolved_output_path,
+            years=years,
+            months=months,
+            variables=resolved_variables,
+            dry_run=dry_run,
+            resume=resume,
+            start_year=int(self.model_config["start_year"]),
+        )
+
         dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
         logger.info(
             f"BARRA2 Downloader initialized for:{dry_run_str}"
-            f"\n- model:\t\t{self.config['label']} ({self.config['resolution']})"
+            f"\n- model:\t\t{self.model_config['label']} ({self.model_config['resolution']})"
             f"\n- years:\t\t{self.years}"
             f"\n- months:\t\t{self.months}"
             f"\n- variables:\t\t{self.variables}"
         )
 
-        # Validate model-variable compatibility
         self._validate_variables()
-
-        # Initialize or load checkpoint
-        self.checkpoint: dict[tuple[int | str, str, str], int] = {}
-        if resume and self.checkpoint_path.is_file():
-            with open(self.checkpoint_path, "rb") as f:
-                self.checkpoint = pickle.load(f)
-            logger.info(f"Resuming from checkpoint: {self.checkpoint_path}")
-        else:
-            logger.info("Starting fresh download (no checkpoint found).")
 
         try:
             for url in [
-                self.config["catalog_url"],
-                self.config["invariant_catalog_url"],
+                self.model_config["catalog_url"],
+                self.model_config["invariant_catalog_url"],
             ]:
                 requests.head(url, timeout=10).raise_for_status()
         except Exception as e:
@@ -288,148 +261,61 @@ class Barra2Downloader:
             )
         logger.info(f"All {len(self.variables)} requested variables are available.")
 
-    def download_data(self) -> None:
-        """Download BARRA2 data for all specified years, months, and variables.
+    def _get_tasks(self) -> list[tuple]:
+        """Return all download tasks: invariant variables first, then temporal.
 
-        Fetches files from NCI THREDDS server and downloads them according to
-        checkpoint status. Supports resume capability.
-        Invariant (time-independent) variables are downloaded once before the
-        temporal loop.
+        Invariant tasks use the sentinel key ("fx", "fx", variable).
+        Temporal tasks use (year, month, variable).
+
+        Returns:
+            list[tuple]: Ordered list of task tuples.
         """
         logger.info(
-            f"Starting BARRA2 {self.config['label']} download "
+            f"Starting BARRA2 {self.model_config['label']} download "
             f"({self.temporal_res} frequency)"
         )
 
-        # Split variables into invariant (time-independent) and temporal
-        invariant_vars = [
-            v
+        invariant_tasks: list[tuple] = [
+            ("fx", "fx", v)
             for v in self.variables
             if self._get_barra2_param(v) in INVARIANT_VARIABLES
         ]
-        temporal_vars = [
-            v
+        temporal_tasks: list[tuple] = [
+            (year, month, v)
+            for year in self.years
+            for month in self.months
             for v in self.variables
             if self._get_barra2_param(v) not in INVARIANT_VARIABLES
         ]
+        return invariant_tasks + temporal_tasks
 
-        # Download invariant variables once (not per year/month)
-        for variable in invariant_vars:
-            task: tuple[int | str, str, str] = ("fx", "fx", variable)
-
-            if self.checkpoint.get(task, 0) == 1:
-                logger.info(f"({variable}): Invariant already downloaded. Skipping.")
-                continue
-
-            success_code = self._download_variable(
-                year=0, month="fx", variable=variable
-            )
-
-            if not self.dry_run:
-                self.checkpoint[task] = success_code
-                with open(self.checkpoint_path, "wb") as f:
-                    pickle.dump(self.checkpoint, f)
-
-        # Download temporal variables per year/month
-        for year in self.years:
-            logger.info(f"Processing year {year}...")
-
-            for month in self.months:
-                for variable in temporal_vars:
-                    task = (year, month, variable)
-
-                    # Check if task was previously run and was unsuccessful before (= 0)
-                    if self.checkpoint.get(task, 0) == 0:
-                        success_code = self._download_variable(
-                            year=year, month=month, variable=variable
-                        )
-                        if not self.dry_run:
-                            self.checkpoint[task] = success_code
-                            with open(self.checkpoint_path, "wb") as f:
-                                pickle.dump(self.checkpoint, f)
-                    else:
-                        logger.info(
-                            f"{year}-{month} ({variable}): Data previously downloaded."
-                        )
-
-        logger.info("All downloads completed!")
-
-    def _download_variable(self, year: int, month: str, variable: str) -> int:
-        """Download a single BARRA2 data file from the NCI THREDDS server.
+    def _download_task(self, task: tuple) -> int:
+        """Download a single BARRA2 data file.
 
         Args:
-            year (int): Year to download.
-            month (str): Month to download (format: "01" to "12").
-            variable (str): Variable name (e.g. "tas", "pr", "ta500").
+            task (tuple): Task tuple of (year, month, variable).
+                Invariant variables use ("fx", "fx", variable).
 
         Returns:
             int: 1 if successful, 0 if failed.
         """
+        year, month, variable = task
         url = self._build_opendap_url(year, month, variable)
         output_file = self._construct_file_path(year, month, variable)
+        description = f"{year}-{month} ({variable})"
 
-        # Check if file already exists locally
         if output_file.exists():
-            logger.info(
-                f"{year}-{month} ({variable}): File already exists locally, skipping"
-            )
+            logger.info(f"{description}: File already exists locally, skipping")
             return 1
 
         if self.dry_run:
-            logger.info(
-                f"{year}-{month} ({variable}): DRY RUN - Would download from {url}"
-            )
-            return 0
-
-        try:
-            logger.info(
-                f"{year}-{month} ({variable}): Downloading {output_file.name}..."
-            )
-
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Download with streaming
-            response = requests.get(url, stream=True, timeout=300)
-            response.raise_for_status()
-
-            # Get total file size
-            total_size = int(response.headers.get("content-length", 0))
-            size_mb = total_size / (1024**2)
-
-            logger.info(f"{year}-{month} ({variable}): File size: {size_mb:.2f} MB")
-
-            # Download with progress tracking using tqdm
-            progress_bar = tqdm(
-                total=total_size,
-                unit="B",
-                unit_scale=True,
-                desc=f"{year}-{month} ({variable})",
-                unit_divisor=1024,
-            )
-
-            with open(output_file, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):  # 8KB chunks
-                    if chunk:
-                        f.write(chunk)
-                        progress_bar.update(len(chunk))
-            progress_bar.close()
-
-            logger.info(
-                f"{year}-{month} ({variable}): Successfully downloaded to {output_file}"
-            )
+            logger.info(f"{description}: DRY RUN - Would download from {url}")
             return 1
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"{year}-{month} ({variable}): Download failed: {e}")
-            # Clean up partial file
-            if output_file.exists():
-                output_file.unlink()
-            return 0
-        except Exception as e:
-            logger.error(f"{year}-{month} ({variable}): Error: {e}")
-            if output_file.exists():
-                output_file.unlink()
-            return 0
+        logger.info(f"{description}: Downloading {output_file.name}...")
+        return download_file_streaming(
+            url=url, output_file=output_file, description=description
+        )
 
     def _build_opendap_url(self, year: int, month: str, variable: str) -> str:
         """Build OPeNDAP URL for a specific file on the NCI THREDDS server.
@@ -444,13 +330,13 @@ class Barra2Downloader:
         Returns:
             str: Full OPeNDAP URL for accessing the file.
         """
-        base_url = str(self.config["opendap_url"]).replace("/dodsC/", "/fileServer/")
+        base_url = self.model_config["opendap_url"].replace("/dodsC/", "/fileServer/")
         barra2_code = self._get_barra2_param(variable)
-        grid = str(self.config["grid"])
-        dataset_label = str(self.config["label"])
+        grid = self.model_config["grid"]
+        dataset_label = self.model_config["label"]
 
         if barra2_code in INVARIANT_VARIABLES:
-            invariant_path = str(self.config.get("invariant_path", "fx"))
+            invariant_path = self.model_config.get("invariant_path", "fx")
             dataset_file = (
                 f"{barra2_code}_{grid}_ERA5_historical_hres_BOM_{dataset_label}_v1.nc"
             )

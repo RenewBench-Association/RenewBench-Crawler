@@ -3,7 +3,7 @@
 
 import pickle
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -14,6 +14,14 @@ from rbc.weather.era5 import Era5Downloader
 # ----------------------------------
 # Specific fixtures
 # ----------------------------------
+@pytest.fixture(autouse=True)
+def mock_requests_head():
+    """Suppress the ERA5 connectivity check for all tests in this module."""
+    with patch("rbc.weather.era5.downloader.requests.head") as mock_head:
+        mock_head.return_value = MagicMock(status_code=200)
+        yield mock_head
+
+
 @pytest.fixture
 def api_credentials() -> dict:
     """Fixture with fake API credentials."""
@@ -44,6 +52,22 @@ def downloader(init_args: dict) -> Era5Downloader:
     """Returns an instantiated Era5Downloader with mocked CDS client."""
     with patch("rbc.weather.era5.downloader.cdsapi.Client"):
         dl = Era5Downloader(**init_args)
+    return dl
+
+
+@pytest.fixture
+def model_level_downloader(api_credentials: dict, tmp_path: Path) -> Era5Downloader:
+    """Returns an Era5Downloader configured with model levels only (no pressure levels)."""
+    with patch("rbc.weather.era5.downloader.cdsapi.Client"):
+        dl = Era5Downloader(
+            **api_credentials,
+            output_path=tmp_path,
+            years=[2020],
+            months=["01"],
+            variables=["temperature"],
+            pressure_levels=None,
+            model_levels=["135", "136", "137"],
+        )
     return dl
 
 
@@ -108,6 +132,70 @@ def test_downloader_initialization_invalid_format(
                 output_path=tmp_path,
                 years=[2020],
                 file_format="hdf5",
+            )
+
+
+def test_downloader_initialization_unreachable_endpoint(
+    api_credentials: dict, tmp_path: Path, mock_requests_head: MagicMock
+) -> None:
+    """Test that ConnectionError is raised when the CDS endpoint is unreachable.
+
+    Args:
+        api_credentials (dict): API credentials.
+        tmp_path (Path): Temporary directory.
+        mock_requests_head (MagicMock): Autouse fixture for requests.head mock.
+    """
+    mock_requests_head.side_effect = Exception("unreachable")
+
+    with pytest.raises(ConnectionError, match="CDS API endpoint unreachable"):
+        with patch("rbc.weather.era5.downloader.cdsapi.Client"):
+            Era5Downloader(
+                **api_credentials,
+                output_path=tmp_path,
+                years=[2020],
+            )
+
+
+def test_model_levels_empty_list_becomes_default(
+    api_credentials: dict, tmp_path: Path
+) -> None:
+    """Test that model_levels=[] falls back to DEFAULT_MODEL_LEVELS.
+
+    Args:
+        api_credentials (dict): API credentials.
+        tmp_path (Path): Temporary directory.
+    """
+    from rbc.weather.era5.mappings import DEFAULT_MODEL_LEVELS
+
+    with patch("rbc.weather.era5.downloader.cdsapi.Client"):
+        downloader = Era5Downloader(
+            **api_credentials,
+            output_path=tmp_path,
+            years=[2020],
+            pressure_levels=None,
+            model_levels=[],
+        )
+    assert downloader.model_levels == DEFAULT_MODEL_LEVELS
+
+
+def test_cdsapi_client_initialization_failure(
+    api_credentials: dict, tmp_path: Path
+) -> None:
+    """Test that ValueError is raised when the CDS API client cannot be initialized.
+
+    Args:
+        api_credentials (dict): API credentials.
+        tmp_path (Path): Temporary directory.
+    """
+    with patch(
+        "rbc.weather.era5.downloader.cdsapi.Client",
+        side_effect=Exception("auth failed"),
+    ):
+        with pytest.raises(ValueError, match="Failed to initialize CDS API client"):
+            Era5Downloader(
+                **api_credentials,
+                output_path=tmp_path,
+                years=[2020],
             )
 
 
@@ -220,7 +308,7 @@ def test_validate_variables_invalid_single_level(
         api_credentials (dict): API credentials.
         tmp_path (Path): Temporary directory.
     """
-    with pytest.raises(ValueError, match="Invalid pressure-level variables"):
+    with pytest.raises(ValueError, match="Unrecognized variables"):
         with patch("rbc.weather.era5.downloader.cdsapi.Client"):
             Era5Downloader(
                 **api_credentials,
@@ -256,6 +344,35 @@ def test_validate_variables_invalid_pressure_level(
         assert downloader.variables == ["2m_temperature"]
 
 
+def test_validate_variables_pressure_level_invalid(downloader: Era5Downloader) -> None:
+    """Test validation when a variable is not available at the requested pressure levels.
+
+    Patches ALL_PRESSURE_LEVEL_VARIABLES to be empty so 'temperature' (still in
+    ALL_MODEL_LEVEL_VARIABLES) triggers the invalid-pressure-level error branch.
+
+    Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
+    """
+    with patch("rbc.weather.era5.downloader.ALL_PRESSURE_LEVEL_VARIABLES", set()):
+        with pytest.raises(ValueError, match="Invalid pressure-level"):
+            downloader._validate_variables()
+
+
+def test_validate_variables_model_level_invalid(downloader: Era5Downloader) -> None:
+    """Test validation when a variable is not available at the requested model levels.
+
+    Patches ALL_MODEL_LEVEL_VARIABLES to be empty so 'temperature' (still in
+    ALL_PRESSURE_LEVEL_VARIABLES) triggers the invalid-model-level error branch.
+
+    Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
+    """
+    downloader.model_levels = ["137"]  # enable model-level checking
+    with patch("rbc.weather.era5.downloader.ALL_MODEL_LEVEL_VARIABLES", set()):
+        with pytest.raises(ValueError, match="Invalid model-level"):
+            downloader._validate_variables()
+
+
 # ----------------------------------
 # Tests - MARS request building
 # ----------------------------------
@@ -269,6 +386,18 @@ def test_get_mars_param(downloader: Era5Downloader) -> None:
     assert downloader._get_mars_param("10m_u_component_of_wind") == "10u"
     assert downloader._get_mars_param("temperature") == "t"
     assert downloader._get_mars_param("u_component_of_wind") == "u"
+
+
+def test_get_mars_param_fallback_returns_variable_name(
+    downloader: Era5Downloader,
+) -> None:
+    """Test that _get_mars_param returns the variable name when it is not in the mapping.
+
+    Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
+    """
+    result = downloader._get_mars_param("custom_unmapped_variable")
+    assert result == "custom_unmapped_variable"
 
 
 def test_build_mars_request_batch_single_level(downloader: Era5Downloader) -> None:
@@ -310,35 +439,23 @@ def test_build_mars_request_batch_pressure_level(downloader: Era5Downloader) -> 
 
 
 def test_build_mars_request_batch_model_level(
-    api_credentials: dict, tmp_path: Path
+    model_level_downloader: Era5Downloader,
 ) -> None:
     """Test MARS request building for model-level variables.
 
     Args:
-        api_credentials (dict): API credentials.
-        tmp_path (Path): Temporary directory.
+        model_level_downloader (Era5Downloader): Downloader configured with model levels.
     """
-    with patch("rbc.weather.era5.downloader.cdsapi.Client"):
-        downloader = Era5Downloader(
-            **api_credentials,
-            output_path=tmp_path,
-            years=[2020],
-            months=["01"],
-            variables=["temperature"],
-            pressure_levels=None,
-            model_levels=["135", "136", "137"],
-        )
+    request = model_level_downloader._build_mars_request_batch(
+        variables=["temperature"],
+        year=2020,
+        month="01",
+        level_type="model",
+    )
 
-        request = downloader._build_mars_request_batch(
-            variables=["temperature"],
-            year=2020,
-            month="01",
-            level_type="model",
-        )
-
-        assert request["param"] == "t"
-        assert request["levtype"] == "ml"
-        assert request["levelist"] == "135/136/137"
+    assert request["param"] == "t"
+    assert request["levtype"] == "ml"
+    assert request["levelist"] == "135/136/137"
 
 
 # ----------------------------------
@@ -352,14 +469,15 @@ def test_download_variables_dry_run(downloader: Era5Downloader) -> None:
     """
     downloader.dry_run = True
 
-    with patch("builtins.print") as mock_print:
+    with patch("rbc.weather.era5.downloader.logger.info") as mock_log:
         status = downloader._download_variables(
-            year=2020, month="01", level_type="single", checkpoint_idx=0
+            year=2020, month="01", level_type="single"
         )
 
     assert status == 1
-    # Check that print was called (dry run output)
-    assert mock_print.called
+    # Check that logger was called with the dry run output
+    logged = "".join(str(c.args[0]) for c in mock_log.call_args_list)
+    assert "DRY RUN" in logged
 
 
 def test_download_variables_with_api_call(downloader: Era5Downloader) -> None:
@@ -372,11 +490,36 @@ def test_download_variables_with_api_call(downloader: Era5Downloader) -> None:
 
     with patch.object(downloader.client, "retrieve") as mock_retrieve:
         status = downloader._download_variables(
-            year=2020, month="01", level_type="single", checkpoint_idx=0
+            year=2020, month="01", level_type="single"
         )
 
     assert status == 1
     assert mock_retrieve.called
+
+
+def test_download_variables_already_exists(downloader: Era5Downloader) -> None:
+    """Test _download_variables skips the API call when the output file exists.
+
+    Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
+    """
+    downloader.dry_run = False
+
+    # The fixture has variables=["2m_temperature", "temperature"] and
+    # pressure_levels=["1000","950"]. For level_type="single", only
+    # 2m_temperature (param "2t") is downloaded, producing this filename:
+    existing_file = (
+        downloader.output_path / f"era5_2020_01_sl_2t.{downloader.file_extension}"
+    )
+    existing_file.touch()
+
+    with patch.object(downloader.client, "retrieve") as mock_retrieve:
+        status = downloader._download_variables(
+            year=2020, month="01", level_type="single"
+        )
+
+    assert status == 1
+    assert not mock_retrieve.called
 
 
 def test_download_data_dry_run(downloader: Era5Downloader) -> None:
@@ -387,11 +530,77 @@ def test_download_data_dry_run(downloader: Era5Downloader) -> None:
     """
     downloader.dry_run = True
 
-    with patch("builtins.print") as mock_print:
+    with patch("rbc.weather.era5.downloader.logger.info") as mock_log:
         downloader.download_data()
 
-    # Should have printed at least 2 requests (single-level + pressure-level)
-    assert mock_print.called
+    # Should have logged at least 2 dry run requests (single-level + pressure-level)
+    logged = "".join(str(c.args[0]) for c in mock_log.call_args_list)
+    assert "DRY RUN" in logged
+
+
+def test_get_tasks_includes_model_level(
+    model_level_downloader: Era5Downloader,
+) -> None:
+    """Test that model-level tasks are generated when model_levels is set.
+
+    Args:
+        model_level_downloader (Era5Downloader): Downloader configured with model levels.
+    """
+    tasks = model_level_downloader._get_tasks()
+    level_types = {t[2] for t in tasks}
+    assert "model" in level_types
+    assert "single" in level_types
+
+
+def test_download_variables_model_level_dry_run(
+    model_level_downloader: Era5Downloader,
+) -> None:
+    """Test _download_variables dry-run for model level (covers model branch and custom suffix).
+
+    Uses non-default model_levels so the custom level suffix path is also exercised.
+
+    Args:
+        model_level_downloader (Era5Downloader): Downloader configured with model levels.
+    """
+    model_level_downloader.dry_run = True
+    status = model_level_downloader._download_variables(
+        year=2020, month="01", level_type="model"
+    )
+    assert status == 1
+
+
+def test_download_variables_empty_variables_for_level_type_returns_1(
+    downloader: Era5Downloader,
+) -> None:
+    """Test that _download_variables returns 1 immediately when no variables match the level type.
+
+    With only single-level variables and level_type="pressure", variables_to_download
+    is empty and the early-return path is exercised.
+
+    Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
+    """
+    downloader.variables = ["2m_temperature"]
+    status = downloader._download_variables(
+        year=2020, month="01", level_type="pressure"
+    )
+    assert status == 1
+
+
+def test_download_variables_api_exception_returns_0(downloader: Era5Downloader) -> None:
+    """Test that an exception raised by client.retrieve returns 0.
+
+    Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
+    """
+    downloader.dry_run = False
+    with patch.object(
+        downloader.client, "retrieve", side_effect=Exception("MARS error")
+    ):
+        status = downloader._download_variables(
+            year=2020, month="01", level_type="single"
+        )
+    assert status == 0
 
 
 # ----------------------------------

@@ -134,9 +134,9 @@ def test_downloader_init_model_configs(
 
     if variables is None:
         assert downloader.variables == DEFAULT_VARIABLES
-    assert exp_label in downloader.config["label"]
-    assert exp_spatial_res in downloader.config["resolution"]
-    assert exp_grid in downloader.config["grid"]
+    assert exp_label in downloader.model_config["label"]
+    assert exp_spatial_res in downloader.model_config["resolution"]
+    assert exp_grid in downloader.model_config["grid"]
     assert downloader.temporal_res == exp_temporal_res
     assert len(downloader.available_variables) > 0
 
@@ -147,7 +147,6 @@ def test_downloader_init_model_configs(
         ({"model": "INVALID"}, "Unknown BARRA2 model"),
         ({"model": "C2_invalid"}, "Unknown BARRA2 model"),
         ({"variables": ["nonexistent_var_xyz"]}, "Invalid variables"),
-        ({"years": [1800]}, "Invalid years"),
         # Variable exists in the mapping but is not available for R2
         (
             {"variables": ["vertical_velocity_in_pressure"]},
@@ -171,6 +170,17 @@ def test_initialization_validation_errors(
 
     with pytest.raises(ValueError, match=error_match):
         Barra2Downloader(**basic_args)
+
+
+def test_invalid_years_are_filtered_out(basic_args: dict) -> None:
+    """Years outside the valid range are silently filtered out, not raised.
+
+    Args:
+        basic_args (dict): Initialization arguments for Barra2Downloader.
+    """
+    basic_args["years"] = [1800, 2020, 9999]
+    downloader = Barra2Downloader(**basic_args)
+    assert downloader.years == [2020]
 
 
 def test_downloader_initialization_optional_args(tmp_path: Path) -> None:
@@ -478,7 +488,7 @@ def test_download_data_skips_completed(basic_args: dict) -> None:
     basic_args["resume"] = True
     downloader = Barra2Downloader(**basic_args)
 
-    with patch.object(downloader, "_download_variable") as mock_dl:
+    with patch.object(downloader, "_download_task") as mock_dl:
         downloader.download_data()
         mock_dl.assert_not_called()
 
@@ -492,11 +502,9 @@ def test_download_data_calls_download_variable(basic_args: dict) -> None:
     basic_args["variables"] = ["1.5m_temperature"]
     downloader = Barra2Downloader(**basic_args)
 
-    with patch.object(downloader, "_download_variable", return_value=1) as mock_dl:
+    with patch.object(downloader, "_download_task", return_value=1) as mock_dl:
         downloader.download_data()
-        mock_dl.assert_called_once_with(
-            year=2020, month="01", variable="1.5m_temperature"
-        )
+        mock_dl.assert_called_once_with((2020, "01", "1.5m_temperature"))
 
 
 def test_download_data_calls_download_variable_for_invariant(basic_args: dict) -> None:
@@ -508,9 +516,9 @@ def test_download_data_calls_download_variable_for_invariant(basic_args: dict) -
     basic_args["variables"] = ["orography"]
     downloader = Barra2Downloader(**basic_args)
 
-    with patch.object(downloader, "_download_variable", return_value=1) as mock_dl:
+    with patch.object(downloader, "_download_task", return_value=1) as mock_dl:
         downloader.download_data()
-        mock_dl.assert_called_once_with(year=0, month="fx", variable="orography")
+        mock_dl.assert_called_once_with(("fx", "fx", "orography"))
 
 
 def test_download_data_skips_completed_invariant(basic_args: dict) -> None:
@@ -529,7 +537,7 @@ def test_download_data_skips_completed_invariant(basic_args: dict) -> None:
     basic_args["resume"] = True
     downloader = Barra2Downloader(**basic_args)
 
-    with patch.object(downloader, "_download_variable") as mock_dl:
+    with patch.object(downloader, "_download_task") as mock_dl:
         downloader.download_data()
         mock_dl.assert_not_called()
 
@@ -572,7 +580,7 @@ def test_download_variable_skips_when_file_exists(downloader: Barra2Downloader) 
     output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
     output_file.write_bytes(b"already here")
 
-    result = downloader._download_variable(2020, "01", "1.5m_temperature")
+    result = downloader._download_task((2020, "01", "1.5m_temperature"))
 
     assert result == 1
 
@@ -588,14 +596,14 @@ def test_download_variable_success_writes_file(downloader: Barra2Downloader) -> 
     mock_response.iter_content.return_value = [b"ab", b"cd"]
     mock_response.raise_for_status.return_value = None
 
-    with patch(
-        "rbc.weather.barra.downloader.requests.get", return_value=mock_response
-    ), patch("rbc.weather.barra.downloader.tqdm") as mock_tqdm:
+    with patch("rbc.weather.utils.requests.get", return_value=mock_response), patch(
+        "rbc.weather.utils.tqdm"
+    ) as mock_tqdm:
         progress = MagicMock()
         progress.__enter__.return_value = progress  # make context manager return itself
         mock_tqdm.return_value = progress
 
-        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+        result = downloader._download_task((2020, "01", "1.5m_temperature"))
 
     output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
     assert result == 1
@@ -617,10 +625,10 @@ def test_download_variable_request_exception_removes_partial(
     assert not output_file.exists()
 
     with patch(
-        "rbc.weather.barra.downloader.requests.get",
+        "rbc.weather.utils.requests.get",
         side_effect=requests.exceptions.RequestException("boom"),
     ):
-        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+        result = downloader._download_task((2020, "01", "1.5m_temperature"))
 
     assert result == 0
     assert not output_file.exists()
@@ -644,10 +652,10 @@ def test_download_variable_request_exception_removes_existing_partial(
     mock_response.raise_for_status.return_value = None
     mock_response.iter_content.side_effect = _failing_chunks
 
-    with patch(
-        "rbc.weather.barra.downloader.requests.get", return_value=mock_response
-    ), patch("rbc.weather.barra.downloader.tqdm", return_value=MagicMock()):
-        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+    with patch("rbc.weather.utils.requests.get", return_value=mock_response), patch(
+        "rbc.weather.utils.tqdm", return_value=MagicMock()
+    ):
+        result = downloader._download_task((2020, "01", "1.5m_temperature"))
 
     output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
     assert result == 0
@@ -673,13 +681,13 @@ def test_download_variable_generic_exception_removes_partial(
     mock_response.iter_content.side_effect = _broken_chunks
     mock_response.raise_for_status.return_value = None
 
-    with patch(
-        "rbc.weather.barra.downloader.requests.get", return_value=mock_response
-    ), patch("rbc.weather.barra.downloader.tqdm") as mock_tqdm:
+    with patch("rbc.weather.utils.requests.get", return_value=mock_response), patch(
+        "rbc.weather.utils.tqdm"
+    ) as mock_tqdm:
         progress = MagicMock()
         progress.__enter__.return_value = progress
         mock_tqdm.return_value = progress
-        result = downloader._download_variable(2020, "01", "1.5m_temperature")
+        result = downloader._download_task((2020, "01", "1.5m_temperature"))
 
     output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
     assert result == 0
@@ -705,3 +713,21 @@ def test_print_available_variables_invalid_model_raises() -> None:
     """Test static variable printer rejects unknown model keys."""
     with pytest.raises(ValueError, match="Unknown BARRA2 model"):
         Barra2Downloader.print_available_variables("X2")
+
+
+# ----------------------------------
+# Tests - Connectivity failure
+# ----------------------------------
+def test_connectivity_check_failure(basic_args: dict) -> None:
+    """Test that ConnectionError is raised when a BARRA2 endpoint is unreachable.
+
+    The autouse mock_connectivity_check fixture is overridden here so that
+    raise_for_status raises an exception, triggering the connection-error branch.
+
+    Args:
+        basic_args (dict): Initialization arguments for Barra2Downloader.
+    """
+    with patch("rbc.weather.barra.downloader.requests.head") as mock_head:
+        mock_head.return_value.raise_for_status.side_effect = Exception("timeout")
+        with pytest.raises(ConnectionError, match="BARRA2 endpoints are unreachable"):
+            Barra2Downloader(**basic_args)

@@ -3,11 +3,11 @@
 Remote API access of ERA5 reanalysis data using the cdsapi package.
 """
 
-import pickle
 from calendar import monthrange
 from pathlib import Path
 
 import cdsapi  # type: ignore[import-untyped]
+import requests
 from loguru import logger
 
 from rbc.weather.era5.mappings import (
@@ -19,40 +19,24 @@ from rbc.weather.era5.mappings import (
     DEFAULT_MODEL_LEVELS,
     DEFAULT_PRESSURE_LEVELS,
     DEFAULT_VARIABLES,
+    MODEL_CONFIG,
     VARIABLE_TO_MARS_PARAM,
 )
-
-# CDS API base URL
-URL = "https://cds.climate.copernicus.eu/api"
-
-# MARS request constants
-MARS_CLASS = "ea"
-MARS_STREAM = "oper"
-MARS_TYPE = "an"
-MARS_EXPVER = "1"
-LEVTYPE_SINGLE = "sfc"
-LEVTYPE_PRESSURE = "pl"
-LEVTYPE_MODEL = "ml"
+from rbc.weather.utils import WeatherDownloader
 
 
-class Era5Downloader:
+class Era5Downloader(WeatherDownloader):
     """ERA5 reanalysis data downloader.
 
     Attributes:
         area (list[float] | None): Bounding box [North, West, South, East] in degrees. None for world (all).
-        checkpoint (np.ndarray): Array of 0 and 1 values for tracking download status.
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
         client (cdsapi.Client): CDS API client for retrieving data.
-        dry_run (bool): If True, print requests without submitting them.
         file_extension (str): File extension based on file_format.
         file_format (str): Output file format ("grib" or "netcdf").
+        model_config (dict): Model-specific configuration from MODEL_CONFIG.
         model_levels (list[str] | None): List of model levels to download (for 3D variables).
-        months (list[str]): List of months to get data for.
-        output_path (Path): Path to the output directory.
         pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
         resolution (str): Grid resolution (e.g., "0.25/0.25").
-        variables (list[str]): List of ERA5 variables to download.
-        years (list[int]): List of years to get data for.
     """
 
     def __init__(
@@ -67,8 +51,8 @@ class Era5Downloader:
         pressure_levels: list[str] | None = None,
         model_levels: list[str] | None = None,
         file_format: str = "grib",
-        resume: bool = False,
         dry_run: bool = False,
+        resume: bool = True,
     ) -> None:
         """Initializes the instance.
 
@@ -83,27 +67,23 @@ class Era5Downloader:
             pressure_levels (list[str], optional): Pressure levels (hPa). Defaults to default levels if None.
             model_levels (list[str], optional): Model levels (1-137). Defaults to default levels if None.
             file_format (str, optional): Output file format ("grib" or "netcdf"). Defaults to "grib".
-            resume (bool, optional): Whether to resume from a previous download. Defaults to False.
             dry_run (bool, optional): If True, print requests without submitting them. Defaults to False.
+            resume (bool, optional): Whether to resume from a previous download. Defaults to True.
 
         Raises:
             ValueError: If API credentials are invalid or invalid file_format.
+            ConnectionError: If the CDS API endpoint is unreachable.
         """
+        self.model_config = MODEL_CONFIG
         if file_format.lower() not in ["grib", "netcdf"]:
             raise ValueError(
                 f"file_format must be 'grib' or 'netcdf', got '{file_format}'"
             )
 
-        self.years = years
-        self.months = (
-            months if months is not None else [f"{i:02d}" for i in range(1, 13)]
-        )
-        self.variables = variables if variables is not None else DEFAULT_VARIABLES
         self.area = area  # If None, API downloads global data (area parameter omitted from request)
         self.resolution = resolution
         self.file_format = file_format.lower()
         self.file_extension = "nc" if self.file_format == "netcdf" else "grib"
-        self.dry_run = dry_run
 
         # Determine which level types to download
         # If both are None, default to pressure levels
@@ -120,12 +100,6 @@ class Era5Downloader:
             if self.model_levels is not None and len(self.model_levels) == 0:
                 self.model_levels = DEFAULT_MODEL_LEVELS
 
-        self.output_path = Path(output_path)
-        self.checkpoint_path = Path(self.output_path, "status.pickle")
-
-        # Create output directory if it doesn't exist
-        self.output_path.mkdir(parents=True, exist_ok=True)
-
         area_str = f"{self.area}" if self.area is not None else "Global (all)"
         level_info = []
         if self.pressure_levels is not None:
@@ -133,36 +107,45 @@ class Era5Downloader:
         if self.model_levels is not None:
             level_info.append(f"Model levels: {len(self.model_levels)} levels")
 
-        dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
-        logger.info(
-            f"ERA5 Downloader initialized for:{dry_run_str}"
-            f"\n- years:\t\t{years}"
-            f"\n- months:\t\t{self.months}"
-            f"\n- variables:\t\t{self.variables}"
-            f"\n- area (N,W,S,E):\t{area_str}"
-            f"\n- resolution:\t\t{self.resolution}"
-            f"\n- file_format:\t\t{self.file_format}"
-            f"\n- {'; '.join(level_info) if level_info else 'No levels specified'}"
-        )
+        resolved_variables = variables if variables is not None else DEFAULT_VARIABLES
 
-        # Initialize CDS API client
+        # Initialize CDS API client before calling super().__init__ so that
+        # _validate_variables() (called after super) can use self.client.
         try:
-            self.client = cdsapi.Client(url=URL, key=api_key)
+            self.client = cdsapi.Client(url=self.model_config["url"], key=api_key)
             logger.info("CDS API client initialized successfully.")
         except Exception as e:
             raise ValueError(f"Failed to initialize CDS API client: {e}")
 
-        # Validate requested variables
-        self._validate_variables()
+        try:
+            requests.head(self.model_config["url"], timeout=10).raise_for_status()
+        except Exception as e:
+            logger.error("Initialization ERA5 connectivity check failed!")
+            raise ConnectionError(f"CDS API endpoint unreachable: {e}")
 
-        # Initialize or load checkpoint
-        if resume and self.checkpoint_path.is_file():
-            with open(self.checkpoint_path, "rb") as f:
-                self.checkpoint = pickle.load(f)
-            logger.info(f"Resuming from checkpoint: {self.checkpoint_path}")
-        else:
-            self.checkpoint = {}
-            logger.info("Starting fresh download (no checkpoint found).")
+        super().__init__(
+            output_path=output_path,
+            years=years,
+            months=months,
+            variables=resolved_variables,
+            dry_run=dry_run,
+            resume=resume,
+            start_year=int(self.model_config["start_year"]),
+        )
+
+        dry_run_str = " [DRY RUN - NO DATA WILL BE DOWNLOADED]" if self.dry_run else ""
+        logger.info(
+            f"ERA5 Downloader initialized for:{dry_run_str}"
+            f"\n- years:\t\t{self.years}"
+            f"\n- months:\t\t{self.months}"
+            f"\n- variables:\t\t{self.variables}"
+            f"\n- area (N,W,S,E):\t{area_str}"
+            f"\n- resolution:\t\t{resolution}"
+            f"\n- file_format:\t\t{file_format}"
+            f"\n- {'; '.join(level_info) if level_info else 'No levels specified'}"
+        )
+
+        self._validate_variables()
 
     def _validate_variables(self) -> None:
         """Validate that all requested variables are available in ERA5.
@@ -170,7 +153,7 @@ class Era5Downloader:
         Raises:
             ValueError: If any requested variable is not available.
         """
-        invalid_single_level: list[str] = []
+        unrecognized_variables: list[str] = []
         invalid_pressure_level: list[str] = []
         invalid_model_level: list[str] = []
 
@@ -178,7 +161,7 @@ class Era5Downloader:
             is_single_level = variable in ALL_SINGLE_LEVEL_VARIABLES
 
             if is_single_level:
-                # Single-level variable is valid (already checked membership above)
+                # Single-level variable is valid
                 pass
             else:
                 # Check if 3D variable is available
@@ -186,7 +169,7 @@ class Era5Downloader:
                     variable not in ALL_PRESSURE_LEVEL_VARIABLES
                     and variable not in ALL_MODEL_LEVEL_VARIABLES
                 ):
-                    invalid_pressure_level.append(variable)
+                    unrecognized_variables.append(variable)
                 else:
                     # Check against specific level types if requested
                     if (
@@ -207,9 +190,9 @@ class Era5Downloader:
         # Compile error messages
         error_messages = []
 
-        if invalid_single_level:
+        if unrecognized_variables:
             error_messages.append(
-                f"Invalid single-level variables: {', '.join(invalid_single_level)}\n"
+                f"Unrecognized variables: {', '.join(unrecognized_variables)}\n"
                 f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
             )
 
@@ -230,54 +213,37 @@ class Era5Downloader:
 
         logger.info(f"All {len(self.variables)} requested variables are available.")
 
-    def download_data(self) -> None:
-        """Download ERA5 data for all given years and months."""
-        # Determine checkpoint indices for each level type
-        checkpoint_idx_map = {}
-        idx = 0
-        if True:  # always have single-level
-            checkpoint_idx_map["single"] = idx
-            idx += 1
-        if self.pressure_levels is not None:
-            checkpoint_idx_map["pressure"] = idx
-            idx += 1
-        if self.model_levels is not None:
-            checkpoint_idx_map["model"] = idx
+    def _get_tasks(self) -> list[tuple]:
+        """Return all download tasks as (year, month, level_type) tuples.
 
+        Returns:
+            list[tuple]: Ordered list of (year, month, level_type) tuples.
+        """
+        logger.info("Starting ERA5 download")
+        tasks = []
         for year in self.years:
-            logger.info(f"Processing year {year}...")
-
             for month in self.months:
-                # Download single-level (2D) variables
-                self._download_variables(
-                    year=year,
-                    month=month,
-                    level_type="single",
-                    checkpoint_idx=checkpoint_idx_map.get("single", 0),
-                )
-
-                # Download pressure levels if specified
+                tasks.append((year, month, "single"))
                 if self.pressure_levels is not None:
-                    self._download_variables(
-                        year=year,
-                        month=month,
-                        level_type="pressure",
-                        checkpoint_idx=checkpoint_idx_map.get("pressure", 0),
-                    )
-
-                # Download model levels if specified
+                    tasks.append((year, month, "pressure"))
                 if self.model_levels is not None:
-                    self._download_variables(
-                        year=year,
-                        month=month,
-                        level_type="model",
-                        checkpoint_idx=checkpoint_idx_map.get("model", 0),
-                    )
+                    tasks.append((year, month, "model"))
+        return tasks
 
-        logger.info("All downloads completed!")
+    def _download_task(self, task: tuple) -> int:
+        """Download ERA5 variables for a specific (year, month, level_type) task.
+
+        Args:
+            task (tuple): Task tuple of (year, month, level_type).
+
+        Returns:
+            int: 1 if successful, 0 if failed.
+        """
+        year, month, level_type = task
+        return self._download_variables(year=year, month=month, level_type=level_type)
 
     def _download_variables(
-        self, year: int, month: str, level_type: str = "single", checkpoint_idx: int = 0
+        self, year: int, month: str, level_type: str = "single"
     ) -> int:
         """Download ERA5 variables for a specific year, month, and level type.
 
@@ -288,7 +254,6 @@ class Era5Downloader:
             year (int): Year to download data for.
             month (str): Month to download data for (format: '01' to '12').
             level_type (str): Type of levels to download ("single", "pressure", or "model").
-            checkpoint_idx (int): Index in checkpoint array for tracking download status.
 
         Returns:
             int: Status of the download (1 if successful, 0 if any failed).
@@ -312,12 +277,6 @@ class Era5Downloader:
 
         # Skip if no variables to download for this level type
         if not variables_to_download:
-            return 1
-
-        # Check checkpoint using tuple key
-        task = (year, month, level_type)
-        if self.checkpoint.get(task, 0) != 0:
-            logger.info(f"{year}-{month} ({level_type}): Data previously downloaded.")
             return 1
 
         # Build filename suffix
@@ -345,6 +304,12 @@ class Era5Downloader:
             f"era5_{year}_{month}{level_suffix}_{variables_str}.{self.file_extension}",
         )
 
+        if output_file.exists():
+            logger.info(
+                f"{year}-{month} ({level_type}): File already exists locally, skipping"
+            )
+            return 1
+
         try:
             # Build a single request with all variables combined
             request_params = self._build_mars_request_batch(
@@ -355,23 +320,17 @@ class Era5Downloader:
             )
 
             if self.dry_run:
-                # Print request without submitting
-                print("\n" + "=" * 80)
-                print(
-                    f"DRY RUN: {year}-{month} ({level_type}, {len(variables_to_download)} variables)"
-                )
-                print("=" * 80)
-                print("Dataset: reanalysis-era5-complete")
-                print(f"Variables: {', '.join(variables_to_download)}")
-                print("Request parameters:")
-                for key, value in request_params.items():
-                    print(f"  {key}: {value}")
-                print(f"Output file (would be): {output_file}")
-                print("=" * 80 + "\n")
+                params_str = "\n".join(f"  {k}: {v}" for k, v in request_params.items())
                 logger.info(
-                    f"{year}-{month} ({level_type}): DRY RUN - Request printed (not submitted)"
+                    f"\n{'=' * 80}"
+                    f"\nDRY RUN: {year}-{month} ({level_type}, {len(variables_to_download)} variables)"
+                    f"\n{'=' * 80}"
+                    f"\nDataset: reanalysis-era5-complete"
+                    f"\nVariables: {', '.join(variables_to_download)}"
+                    f"\nRequest parameters:\n{params_str}"
+                    f"\nOutput file (would be): {output_file}"
+                    f"\n{'=' * 80}"
                 )
-                # Do not update checkpoint for dry runs
                 return 1
             else:
                 logger.info(
@@ -391,15 +350,7 @@ class Era5Downloader:
             )
             all_success = False
 
-        # Update checkpoint using tuple key
-        status = 1 if all_success else 0
-        task = (year, month, level_type)
-        self.checkpoint[task] = status
-
-        with open(self.checkpoint_path, "wb") as f:
-            pickle.dump(self.checkpoint, f)
-
-        return status
+        return 1 if all_success else 0
 
     def _get_mars_param(self, variable: str) -> str:
         """Convert variable name to MARS parameter code.
@@ -451,14 +402,14 @@ class Era5Downloader:
 
         # Build base request
         request = {
-            "class": MARS_CLASS,
+            "class": self.model_config["mars_class"],
             "date": date_range,
-            "expver": MARS_EXPVER,
+            "expver": self.model_config["mars_expver"],
             "grid": self.resolution,
             "param": combined_params,
-            "stream": MARS_STREAM,
+            "stream": self.model_config["mars_stream"],
             "time": times,
-            "type": MARS_TYPE,
+            "type": self.model_config["mars_type"],
         }
 
         # Add area if specified
@@ -468,13 +419,13 @@ class Era5Downloader:
         # Add level-specific parameters
         if level_type == "single":
             # Single-level (surface) variables
-            request["levtype"] = LEVTYPE_SINGLE
+            request["levtype"] = self.model_config["levtype_single"]
         elif level_type == "pressure":
-            request["levtype"] = LEVTYPE_PRESSURE
+            request["levtype"] = self.model_config["levtype_pressure"]
             if self.pressure_levels is not None:
                 request["levelist"] = "/".join(self.pressure_levels)
         elif level_type == "model":
-            request["levtype"] = LEVTYPE_MODEL
+            request["levtype"] = self.model_config["levtype_model"]
             if self.model_levels is not None:
                 request["levelist"] = "/".join(self.model_levels)
 
