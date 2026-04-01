@@ -283,7 +283,7 @@ def test_get_from_new_source(downloader: IesoDownloader, task: DownloadTask) -> 
     with patch(
         "rbc.energy.ieso.downloader.load_df_from_file", return_value=mock_df
     ) as mock_load:
-        df = downloader._get_from_new_source(year=task.year, month=task.month)
+        df = downloader._get_from_new_source(task=task)
 
         # check correct URL was created
         expected_url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{task.year}{task.month:02d}.csv"
@@ -307,7 +307,7 @@ def test_get_from_new_source_missing_measurement(
 
     with patch("rbc.energy.ieso.downloader.load_df_from_file", return_value=mock_df):
         with pytest.raises(DataStructureError, match="'Measurement' column is missing"):
-            downloader._get_from_new_source(year=task.year, month=task.month)
+            downloader._get_from_new_source(task=task)
 
 
 @pytest.mark.parametrize(
@@ -336,7 +336,7 @@ def test_get_from_old_source(
     )
 
     with patch.object(downloader, "_load_yearly_excel", return_value=mock_df) as mock_f:
-        df = downloader._get_from_old_source(year=task.year, month=task.month)
+        df = downloader._get_from_old_source(task=task)
 
         # check correct URL was created
         expected_url = (
@@ -365,9 +365,9 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None
     with patch("rbc.energy.ieso.downloader.load_df_from_file") as mock_load:
         mock_load.side_effect = [mock_df, mock_df]
 
-        downloader._get_from_old_source(year=task.year, month=task.month)
-        downloader._get_from_old_source(year=task.year, month=task.month)
-        downloader._get_from_old_source(year=task.year, month=task.month)
+        downloader._get_from_old_source(task=task)
+        downloader._get_from_old_source(task=task)
+        downloader._get_from_old_source(task=task)
 
         # check method called 2x - both in _load_yearly_excel call in 1st _get_from_old_source
         assert mock_load.call_count == 2
@@ -386,7 +386,7 @@ def test_get_from_old_source_structure_changed(
         mock_load.return_value = pd.DataFrame({"Delivery Date": [f"{task.date}-01"]})
 
         with pytest.raises(DataStructureError, match="no longer datetimelike"):
-            downloader._get_from_old_source(year=task.year, month=task.month)
+            downloader._get_from_old_source(task=task)
 
 
 def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> None:

@@ -105,9 +105,9 @@ class IesoDownloader(EnergyDownloader):
             )
 
         if task.year < 2019 or (task.year == 2019 and task.month <= 4):
-            df = self._get_from_old_source(task.year, task.month)
+            df = self._get_from_old_source(task)
         else:
-            df = self._get_from_new_source(task.year, task.month)
+            df = self._get_from_new_source(task)
 
         if df.empty:
             raise MissingDataError(
@@ -124,12 +124,11 @@ class IesoDownloader(EnergyDownloader):
         return df
 
     @staticmethod
-    def _get_from_new_source(year: int, month: int) -> pd.DataFrame:
+    def _get_from_new_source(task: DownloadTask) -> pd.DataFrame:
         """Extract data from post-04-2019 (new) source for a given month.
 
         Args:
-            year (int): Year to extract data for.
-            month (int): Month to extract data for.
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
@@ -137,7 +136,7 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             DataStructureError: If downloaded data does not have the 'Measurement' column.
         """
-        url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{year}{str(month).zfill(2)}.csv"
+        url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{task.year}{str(task.month).zfill(2)}.csv"
         df = load_df_from_file(url, header=3, index_col=False)
 
         try:
@@ -149,12 +148,11 @@ class IesoDownloader(EnergyDownloader):
             )
         return df
 
-    def _get_from_old_source(self, year: int, month: int) -> pd.DataFrame:
+    def _get_from_old_source(self, task: DownloadTask) -> pd.DataFrame:
         """Extract data from pre-04-2019 (old) source for a given month using the year's Excel.
 
         Args:
-            year (int): Year to extract data for.
-            month (int): Month to extract data for.
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
@@ -162,16 +160,16 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             DataStructureError: If 'Delivery Date' column data is not datetime-like.
         """
-        url = f"{URL_OLD_BASE}/-/media/Files/IESO/Power-Data/data-directory/GOC-{year}"
-        url += "-Jan-April.xlsx" if year == 2019 else ".xlsx"
+        url = f"{URL_OLD_BASE}/-/media/Files/IESO/Power-Data/data-directory/GOC-{task.year}"
+        url += "-Jan-April.xlsx" if task.year == 2019 else ".xlsx"
 
         with self._download_lock:
             df_year = self._load_yearly_excel(url)
 
         # filter for the specific month
         try:
-            month_mask = (df_year["Delivery Date"].dt.year == year) & (
-                df_year["Delivery Date"].dt.month == month
+            month_mask = (df_year["Delivery Date"].dt.year == task.year) & (
+                df_year["Delivery Date"].dt.month == task.month
             )
         except AttributeError as e:
             raise DataStructureError(
