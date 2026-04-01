@@ -21,8 +21,8 @@ from rbc.energy.utils import (
     load_df_from_file,
 )
 
-URL_NEW_BASE = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
-URL_OLD_BASE = "https://www.ieso.ca"
+URL_BASE_NEW = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
+URL_BASE_OLD = "https://www.ieso.ca"
 
 MIN_YEAR = 2010
 EXPECTED_COLS = ["Delivery Date", "Generator", "Fuel Type", "Measurement"] + [
@@ -56,16 +56,14 @@ class IesoDownloader(EnergyDownloader):
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self._download_lock = threading.Lock()
+        self._check_connection(
+            lambda: requests.head(URL_BASE_NEW, timeout=10), "IESO (new)"
+        )
+        self._check_connection(
+            lambda: requests.head(URL_BASE_OLD, timeout=10), "IESO (old)"
+        )
 
         logger.info(f"IESO Downloader initialized for:\n- years:\t\t{years}")
-
-        try:
-            for url in [URL_NEW_BASE, URL_OLD_BASE]:
-                requests.head(url, timeout=10).raise_for_status()
-
-        except Exception as e:
-            logger.error("Initialization IESO connectivity check failed!")
-            raise ConnectionError(f"One or more IESO endpoints are unreachable: {e}")
 
     def download_data(self) -> None:
         """Parse data for all given years from IESO site and save to CSV."""
@@ -136,7 +134,7 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             DataStructureError: If downloaded data does not have the 'Measurement' column.
         """
-        url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{task.year}{str(task.month).zfill(2)}.csv"
+        url = f"{URL_BASE_NEW}/PUB_GenOutputCapabilityMonth_{task.year}{str(task.month).zfill(2)}.csv"
         df = load_df_from_file(url, header=3, index_col=False)
 
         try:
@@ -160,7 +158,7 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             DataStructureError: If 'Delivery Date' column data is not datetime-like.
         """
-        url = f"{URL_OLD_BASE}/-/media/Files/IESO/Power-Data/data-directory/GOC-{task.year}"
+        url = f"{URL_BASE_OLD}/-/media/Files/IESO/Power-Data/data-directory/GOC-{task.year}"
         url += "-Jan-April.xlsx" if task.year == 2019 else ".xlsx"
 
         with self._download_lock:

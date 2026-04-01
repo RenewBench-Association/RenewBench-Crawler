@@ -34,7 +34,7 @@ EXPECTED_COLS = [
         "Trading_date",
     ]
     + [f"TP{i}" for i in range(1, 51)]
-]  # make lower case because column capitalisation changes across the years in EAT data
+]  # make lower case because column capitalization changes across the years in EAT data
 
 
 class EatDownloader(EnergyDownloader):
@@ -58,14 +58,9 @@ class EatDownloader(EnergyDownloader):
             ConnectionError: If the base URL isn't reachable.
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
+        self._check_connection(lambda: requests.head(URL_BASE, timeout=10), "EAT")
+
         logger.info(f"EAT Downloader initialized for:\n- years:\t\t{years}")
-
-        try:
-            requests.head(URL_BASE, timeout=10).raise_for_status()
-
-        except Exception as e:
-            logger.error("Initialization EAT connectivity check failed!")
-            raise ConnectionError(f"EAT endpoint is unreachable: {e}")
 
     def download_data(self) -> None:
         """Parse data for all given years from EAT site and save to CSV."""

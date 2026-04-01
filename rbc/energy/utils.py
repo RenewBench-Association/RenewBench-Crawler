@@ -12,6 +12,7 @@ import urllib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import requests
@@ -354,6 +355,46 @@ class EnergyDownloader(ABC):
     # --------------------------------------------
     # General helper methods
     # --------------------------------------------
+    @staticmethod
+    def _check_connection(
+        requests_func: Callable[[], requests.Response], source: str
+    ) -> None:
+        """Check API/URL connection to a remote endpoint with a generic wrapper using requests.
+
+        Args:
+            requests_func (Callable): Function to check the requests call response.
+            source (str): Name of the data source (for error messages).
+
+        Raises:
+            ConnectionError: If access to remote site failed or remote site is unreachable.
+        """
+        try:
+            response = requests_func()
+            response.raise_for_status()
+
+        except requests.exceptions.HTTPError as e:  # catch 4xx/5xx status codes
+            if response.content:
+                try:
+                    reason = (
+                        response.json().get("error", {}).get("code", "Unknown Error")
+                    )
+                except (requests.exceptions.JSONDecodeError, ValueError):
+                    reason = response.text[:100]  # fallback to raw text snippet
+                error_msg = f"status {response.status_code} ({reason})"
+            elif response.reason:
+                error_msg = f"status {response.status_code} ({response.reason})"
+            else:
+                error_msg = f"status {response.status_code} (Empty Response)"
+
+            logger.error(f"{source} API/URL request failed with {error_msg}")
+            raise ConnectionError(
+                f"{source} API/URL access failed with {error_msg}"
+            ) from e
+
+        except requests.exceptions.RequestException as e:  # catch connection/timeout/..
+            logger.error(f"{source} initialization connectivity check failed!")
+            raise ConnectionError(f"{source} API/URL unreachable: {e}") from e
+
     @staticmethod
     def _get_status_code(e: Exception) -> int | None:
         """Extracts HTTP status code from various library exceptions.

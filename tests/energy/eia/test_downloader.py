@@ -15,7 +15,6 @@ from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     DataStructureError,
     DownloadTask,
-    InvalidError,
     MissingDataError,
     RateLimitError,
 )
@@ -127,16 +126,16 @@ def test_downloader_initialization(downloader: EiaDownloader, init_args: dict) -
     assert downloader.checkpoint == {}
 
 
-def test_downloader_initialization_invalid_token(init_args: dict) -> None:
+def test_downloader_initialization_invalid_access(init_args: dict) -> None:
     """Failure path for class initialization with invalid token.
 
     Args:
         init_args (dict): Arguments used to initialize an EiaDownloader instance.
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
-        mock_get.return_value = MagicMock(status_code=400)
+        mock_get.return_value.raise_for_status.side_effect = exceptions.HTTPError(404)
 
-        with pytest.raises(InvalidError, match="incorrect"):
+        with pytest.raises(ConnectionError, match="EIA API/URL access failed"):
             EiaDownloader(**init_args)
 
 

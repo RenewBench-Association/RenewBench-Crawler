@@ -105,7 +105,7 @@ def test_downloader_initialization(init_args: dict, bz: str, valid: bool) -> Non
         assert downloader.checkpoint == {}
 
 
-def test_downloader_initialization_invalid_config(init_args: dict) -> None:
+def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
     """Failure path for class initialization with invalid API configuration.
 
     Args:

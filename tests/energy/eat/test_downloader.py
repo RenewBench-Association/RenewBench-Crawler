@@ -103,18 +103,16 @@ def test_downloader_initialization(downloader: EatDownloader, init_args: dict) -
     assert downloader.checkpoint == {}
 
 
-def test_downloader_initialization_invalid_url(init_args: dict) -> None:
+def test_downloader_initialization_invalid_access(init_args: dict) -> None:
     """Failure path for class initialization with invalid URL.
 
     Args:
         init_args (dict): Arguments used to initialize an EatDownloader instance.
     """
     with patch("rbc.energy.eat.downloader.requests.head") as mock_head:
-        mock_head.return_value.raise_for_status.side_effect = exceptions.HTTPError(
-            "404"
-        )
+        mock_head.return_value.raise_for_status.side_effect = exceptions.HTTPError(404)
 
-        with pytest.raises(ConnectionError, match="EAT endpoint"):
+        with pytest.raises(ConnectionError, match="EAT API/URL access failed"):
             EatDownloader(**init_args)
 
 

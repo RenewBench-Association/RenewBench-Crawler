@@ -13,8 +13,8 @@ from rbc.energy.ieso import IesoDownloader
 from rbc.energy.ieso.downloader import (
     EXPECTED_COLS,
     MIN_YEAR,
-    URL_NEW_BASE,
-    URL_OLD_BASE,
+    URL_BASE_NEW,
+    URL_BASE_OLD,
 )
 from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
@@ -109,18 +109,16 @@ def test_downloader_initialization(downloader: IesoDownloader, init_args: dict) 
     assert downloader.checkpoint == {}
 
 
-def test_downloader_initialization_invalid_url(init_args: dict) -> None:
+def test_downloader_initialization_invalid_access(init_args: dict) -> None:
     """Failure path for class initialization with invalid URL.
 
     Args:
         init_args (dict): Arguments used to initialize an IesoDownloader instance.
     """
     with patch("rbc.energy.ieso.downloader.requests.head") as mock_head:
-        mock_head.return_value.raise_for_status.side_effect = exceptions.HTTPError(
-            "404"
-        )
+        mock_head.return_value.raise_for_status.side_effect = exceptions.HTTPError(404)
 
-        with pytest.raises(ConnectionError, match="One or more IESO endpoints"):
+        with pytest.raises(ConnectionError, match="API/URL access failed"):
             IesoDownloader(**init_args)
 
 
@@ -286,7 +284,7 @@ def test_get_from_new_source(downloader: IesoDownloader, task: DownloadTask) -> 
         df = downloader._get_from_new_source(task=task)
 
         # check correct URL was created
-        expected_url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{task.year}{task.month:02d}.csv"
+        expected_url = f"{URL_BASE_NEW}/PUB_GenOutputCapabilityMonth_{task.year}{task.month:02d}.csv"
         mock_load.assert_called_with(expected_url, header=3, index_col=False)
 
         # check forecast data was filtered out
@@ -340,7 +338,7 @@ def test_get_from_old_source(
 
         # check correct URL was created
         expected_url = (
-            f"{URL_OLD_BASE}/-/media/Files/IESO/Power-Data/data-directory/GOC-{suffix}"
+            f"{URL_BASE_OLD}/-/media/Files/IESO/Power-Data/data-directory/GOC-{suffix}"
         )
         mock_f.assert_called_with(expected_url)
 

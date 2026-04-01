@@ -73,17 +73,17 @@ class EntsoeDownloader(EnergyDownloader):
             if bz not in ACTIVE_ZONES:
                 raise InvalidError(f"Bidding zone '{bz}' is not supported.")
 
-        logger.info(
-            f"Entsoe-E Downloader initialized for:"
-            f"\n- bidding zones:\t{bidding_zones}"
-            f"\n- years:\t\t{years}"
-        )
-
         set_config(security_token=token)
         if get_config().security_token is None:
             raise InvalidError(
                 f"Entsoe-apy failed to successfully configure token '{token}'!"
             )
+
+        logger.info(
+            f"Entsoe-E Downloader initialized for:"
+            f"\n- bidding zones:\t{bidding_zones}"
+            f"\n- years:\t\t{years}"
+        )
 
     def download_data(self) -> None:
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""

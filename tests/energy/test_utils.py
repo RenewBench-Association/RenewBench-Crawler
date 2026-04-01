@@ -4,7 +4,7 @@
 import pickle
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -211,6 +211,66 @@ def test_threading_error_catching(
 # ----------------------------------
 # Tests - EnergyDownloader helper methods
 # ----------------------------------
+def test_check_connection_success() -> None:
+    """Happy path for _check_connection when endpoint returns 2xx."""
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    MockDownloader._check_connection(lambda: mock_response, "TEST")
+
+
+@pytest.mark.parametrize(
+    "has_content, has_reason, json_side_effect, expected_match",
+    [
+        (True, True, None, "status 401"),  # JSON body with error code
+        (True, False, exceptions.JSONDecodeError("", "", 0), "status 500"),  # uncodable
+        (True, False, ValueError(), "status 500"),  # invalid JSON payload
+        (False, True, None, "status 403"),  # no content body, but has reason
+        (False, False, None, "status 500"),  # empty response
+    ],
+)
+def test_check_connection_http_error(
+    has_content: bool,
+    has_reason: bool,
+    json_side_effect: Exception | None,
+    expected_match: str,
+) -> None:
+    """Failure path for _check_connection when there is a HTTPError.
+
+    Args:
+        has_content (bool): Whether the response has a content.
+        has_reason (bool): Whether the response has a reason.
+        json_side_effect (Exception | None): Exception to raise on .json() call.
+        expected_match (str): Expected returned status code.
+    """
+    mock_response = MagicMock()
+    mock_response.raise_for_status.side_effect = exceptions.HTTPError()
+    mock_response.status_code = int(expected_match.split()[1])
+    mock_response.content = b"data" if has_content else b""
+    mock_response.reason = "Some Reason" if has_reason else None
+
+    if json_side_effect:
+        mock_response.json.side_effect = json_side_effect
+        mock_response.text = "Error details here"
+    else:
+        mock_response.json.return_value = {"error": {"code": "ERROR"}}
+
+    with pytest.raises(ConnectionError, match=expected_match):
+        MockDownloader._check_connection(lambda: mock_response, "TEST")
+
+
+@pytest.mark.parametrize(
+    "side_effect",
+    [exceptions.ConnectionError(), exceptions.Timeout()],
+)
+def test_check_connection_network_error(side_effect) -> None:
+    """Failure path for _check_connection when endpoint is unreachable (NetworkError)."""
+    mock_func = MagicMock(side_effect=side_effect)
+
+    with pytest.raises(ConnectionError, match="unreachable"):
+        MockDownloader._check_connection(mock_func, "TEST")
+        mock_func.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "error, expected_return",
     [

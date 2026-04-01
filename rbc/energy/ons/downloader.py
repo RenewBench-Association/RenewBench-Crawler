@@ -21,7 +21,6 @@ from rbc.energy.utils import (
     load_df_from_file,
 )
 
-# URL_HOMEPAGE = "https://dados.ons.org.br/dataset/geracao-usina-2"
 URL_BASE = "https://ons-aws-prod-opendata.s3.amazonaws.com/dataset/geracao_usina_2_ho/"
 
 MIN_YEAR = 2000
@@ -67,15 +66,9 @@ class OnsDownloader(EnergyDownloader):
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
         self._download_lock = threading.Lock()
+        self._check_connection(lambda: requests.head(URL_BASE, timeout=10), "ONS")
 
         logger.info(f"ONS Downloader initialized for:\n- years:\t\t{years}")
-
-        try:
-            requests.head(URL_BASE, timeout=10).raise_for_status()
-
-        except Exception as e:
-            logger.error("Initialization ONS connectivity check failed!")
-            raise ConnectionError(f"ONS endpoint is unreachable: {e}")
 
     def download_data(self) -> None:
         """Parse data for all given years from ONS site and save to CSV."""

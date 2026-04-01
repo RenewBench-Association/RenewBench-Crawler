@@ -76,12 +76,12 @@ class EpiasDownloader(EnergyDownloader):
         """
         super().__init__(output_path=output_path, years=years, resume=resume)
 
-        logger.info(f"EPIAS Downloader initialized for:\n- years:\t\t{years}")
-
         try:
             self.eptr = EPTR2(username=username, password=password)
         except Exception:
             raise InvalidError("Provided username and password are incorrect.")
+
+        logger.info(f"EPIAS Downloader initialized for:\n- years:\t\t{years}")
 
     def download_data(self) -> None:
         """Parse data for all given years from EPIAS Platform and save to CSV."""

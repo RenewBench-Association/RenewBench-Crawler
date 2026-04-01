@@ -154,18 +154,16 @@ def test_downloader_initialization_invalid_tres(init_args: dict) -> None:
         AesoDownloader(**args)
 
 
-def test_downloader_initialization_invalid_request(init_args: dict) -> None:
+def test_downloader_initialization_invalid_access(init_args: dict) -> None:
     """Failure path for class initialization with invalid request.
 
     Args:
         init_args (dict): Arguments used to initialize an AesoDownloader instance.
     """
     with patch("rbc.energy.aeso.downloader.requests.get") as mock_get:
-        mock_get.return_value.raise_for_status.side_effect = exceptions.HTTPError("404")
+        mock_get.return_value.raise_for_status.side_effect = exceptions.HTTPError(404)
 
-        with pytest.raises(
-            ConnectionError, match="AESO box cloud storage is unreachable"
-        ):
+        with pytest.raises(ConnectionError, match="AESO API/URL access failed"):
             AesoDownloader(**init_args)
 
 
