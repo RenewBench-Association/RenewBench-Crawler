@@ -65,7 +65,9 @@ class WeatherDownloader(ABC):
             years = filtered_years
 
         self.years = sorted(years)
-        self.months = months if months is not None else [f"{i:02d}" for i in range(1, 13)]
+        self.months = (
+            months if months is not None else [f"{i:02d}" for i in range(1, 13)]
+        )
         self.variables = variables
         self.dry_run = dry_run
         self.resume = resume
@@ -161,7 +163,7 @@ def download_file_streaming(url: str, output_file: Path, description: str) -> in
         response.raise_for_status()
 
         total_size = int(response.headers.get("content-length", 0))
-        logger.info(f"{description}: File size: {total_size / (1024 ** 2):.2f} MB")
+        logger.info(f"{description}: File size: {total_size / (1024**2):.2f} MB")
 
         progress_bar = tqdm(
             total=total_size,

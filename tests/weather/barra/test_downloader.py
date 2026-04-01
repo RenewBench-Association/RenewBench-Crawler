@@ -87,6 +87,21 @@ def test_downloader_initialization(basic_args: dict) -> None:
     assert downloader.checkpoint == {}
 
 
+def test_connectivity_check_failure(basic_args: dict) -> None:
+    """Test that ConnectionError is raised when a BARRA2 endpoint is unreachable.
+
+    The autouse mock_connectivity_check fixture is overridden here so that
+    raise_for_status raises an exception, triggering the connection-error branch.
+
+    Args:
+        basic_args (dict): Initialization arguments for Barra2Downloader.
+    """
+    with patch("rbc.weather.barra.downloader.requests.head") as mock_head:
+        mock_head.return_value.raise_for_status.side_effect = Exception("timeout")
+        with pytest.raises(ConnectionError, match="BARRA2 endpoints are unreachable"):
+            Barra2Downloader(**basic_args)
+
+
 def test_downloader_initialization_pre_suffixed_output_path(basic_args: dict) -> None:
     """Test that passing an output path already ending in the model name is handled correctly.
 
@@ -434,7 +449,7 @@ def test_temporal_res_in_opendap_url(tmp_path: Path) -> None:
 
 
 # ----------------------------------
-# Tests - Dry run
+# Tests - Download data
 # ----------------------------------
 def test_dry_run_flag(basic_args: dict) -> None:
     """Test dry_run flag setting.
@@ -466,9 +481,6 @@ def test_dry_run_completes_without_error(basic_args: dict) -> None:
     assert not downloader.checkpoint_path.exists()
 
 
-# ----------------------------------
-# Tests - Download data
-# ----------------------------------
 def test_download_data_skips_completed(basic_args: dict) -> None:
     """Test that download_data skips tasks already in checkpoint.
 
@@ -713,21 +725,3 @@ def test_print_available_variables_invalid_model_raises() -> None:
     """Test static variable printer rejects unknown model keys."""
     with pytest.raises(ValueError, match="Unknown BARRA2 model"):
         Barra2Downloader.print_available_variables("X2")
-
-
-# ----------------------------------
-# Tests - Connectivity failure
-# ----------------------------------
-def test_connectivity_check_failure(basic_args: dict) -> None:
-    """Test that ConnectionError is raised when a BARRA2 endpoint is unreachable.
-
-    The autouse mock_connectivity_check fixture is overridden here so that
-    raise_for_status raises an exception, triggering the connection-error branch.
-
-    Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
-    """
-    with patch("rbc.weather.barra.downloader.requests.head") as mock_head:
-        mock_head.return_value.raise_for_status.side_effect = Exception("timeout")
-        with pytest.raises(ConnectionError, match="BARRA2 endpoints are unreachable"):
-            Barra2Downloader(**basic_args)

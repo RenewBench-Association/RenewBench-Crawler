@@ -2,6 +2,7 @@
 """Tests for ERA5 reanalysis data downloader."""
 
 import pickle
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,8 +16,12 @@ from rbc.weather.era5 import Era5Downloader
 # Specific fixtures
 # ----------------------------------
 @pytest.fixture(autouse=True)
-def mock_requests_head():
-    """Suppress the ERA5 connectivity check for all tests in this module."""
+def mock_requests_head() -> Iterator[MagicMock]:
+    """Suppress the ERA5 connectivity check for all tests in this module.
+
+    Yields:
+        MagicMock: Mocked requests.head with a 200 status code response.
+    """
     with patch("rbc.weather.era5.downloader.requests.head") as mock_head:
         mock_head.return_value = MagicMock(status_code=200)
         yield mock_head
@@ -24,7 +29,11 @@ def mock_requests_head():
 
 @pytest.fixture
 def api_credentials() -> dict:
-    """Fixture with fake API credentials."""
+    """Fixture with fake API credentials.
+
+    Returns:
+        dict: API credentials for Era5Downloader.
+    """
     return {
         "api_key": "fake_api_key_12345",
     }
@@ -32,7 +41,15 @@ def api_credentials() -> dict:
 
 @pytest.fixture
 def init_args(tmp_path: Path, api_credentials: dict) -> dict:
-    """Creates a basic setup with a temporary directory."""
+    """Creates a basic setup with a temporary directory.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+        api_credentials (dict): API credentials for Era5Downloader.
+
+    Returns:
+        dict: Initialization arguments for Era5Downloader.
+    """
     return {
         **api_credentials,
         "output_path": tmp_path,
@@ -49,7 +66,14 @@ def init_args(tmp_path: Path, api_credentials: dict) -> dict:
 
 @pytest.fixture
 def downloader(init_args: dict) -> Era5Downloader:
-    """Returns an instantiated Era5Downloader with mocked CDS client."""
+    """Returns an instantiated Era5Downloader with mocked CDS client.
+
+    Args:
+        init_args (dict): Initialization arguments for Era5Downloader.
+
+    Returns:
+        Era5Downloader: Instance of Era5Downloader class.
+    """
     with patch("rbc.weather.era5.downloader.cdsapi.Client"):
         dl = Era5Downloader(**init_args)
     return dl
@@ -57,7 +81,15 @@ def downloader(init_args: dict) -> Era5Downloader:
 
 @pytest.fixture
 def model_level_downloader(api_credentials: dict, tmp_path: Path) -> Era5Downloader:
-    """Returns an Era5Downloader configured with model levels only (no pressure levels)."""
+    """Returns an Era5Downloader configured with model levels only (no pressure levels).
+
+    Args:
+        api_credentials (dict): API credentials for Era5Downloader.
+        tmp_path (Path): Path to the temporary directory.
+
+    Returns:
+        Era5Downloader: Era5Downloader instance configured with model levels.
+    """
     with patch("rbc.weather.era5.downloader.cdsapi.Client"):
         dl = Era5Downloader(
             **api_credentials,
@@ -74,25 +106,21 @@ def model_level_downloader(api_credentials: dict, tmp_path: Path) -> Era5Downloa
 # ----------------------------------
 # Tests - Initialization
 # ----------------------------------
-def test_downloader_initialization(init_args: dict) -> None:
+def test_downloader_initialization(downloader: Era5Downloader, init_args: dict) -> None:
     """Test basic initialization of Era5Downloader.
 
     Args:
+        downloader (Era5Downloader): Instance of Era5Downloader.
         init_args (dict): Arguments used to initialize an Era5Downloader instance.
     """
-    with patch("rbc.weather.era5.downloader.cdsapi.Client"):
-        downloader = Era5Downloader(**init_args)
-
-        assert downloader.years == init_args["years"]
-        assert downloader.months == init_args["months"]
-        assert downloader.variables == init_args["variables"]
-        assert downloader.area == init_args["area"]
-        assert downloader.pressure_levels == init_args["pressure_levels"]
-        assert downloader.model_levels == init_args["model_levels"]
-        assert downloader.output_path == init_args["output_path"]
-        assert downloader.checkpoint_path == Path(
-            init_args["output_path"], "status.pickle"
-        )
+    assert downloader.years == init_args["years"]
+    assert downloader.months == init_args["months"]
+    assert downloader.variables == init_args["variables"]
+    assert downloader.area == init_args["area"]
+    assert downloader.pressure_levels == init_args["pressure_levels"]
+    assert downloader.model_levels == init_args["model_levels"]
+    assert downloader.output_path == init_args["output_path"]
+    assert downloader.checkpoint_path == Path(init_args["output_path"], "status.pickle")
 
 
 def test_downloader_initialization_default_months(

@@ -51,8 +51,9 @@ def base_args(tmp_path: Path) -> dict:
 # ----------------------------------
 # WeatherDownloader.__init__
 # ----------------------------------
-
 class TestInit:
+    """Tests for WeatherDownloader.__init__."""
+
     def test_attributes_are_set(self, base_args: dict) -> None:
         """Core attributes are assigned correctly from constructor arguments."""
         dl = _ConcreteDownloader(**base_args)
@@ -120,7 +121,9 @@ class TestInit:
         dl = _ConcreteDownloader(**base_args)
         assert dl.checkpoint == saved
 
-    def test_checkpoint_ignored_when_resume_false(self, tmp_path: Path, base_args: dict) -> None:
+    def test_checkpoint_ignored_when_resume_false(
+        self, tmp_path: Path, base_args: dict
+    ) -> None:
         """Existing checkpoint file is ignored when resume=False."""
         saved = {(2020, "01", "var_a"): 1}
         checkpoint_path = Path(tmp_path, "status.pickle")
@@ -134,8 +137,9 @@ class TestInit:
 # ----------------------------------
 # WeatherDownloader._save_checkpoint
 # ----------------------------------
-
 class TestSaveCheckpoint:
+    """Tests for WeatherDownloader._save_checkpoint."""
+
     def test_writes_checkpoint_to_disk(self, base_args: dict) -> None:
         """Checkpoint is persisted to disk after _save_checkpoint."""
         dl = _ConcreteDownloader(**base_args)
@@ -156,8 +160,9 @@ class TestSaveCheckpoint:
 # ----------------------------------
 # # WeatherDownloader.download_data
 # ----------------------------------
-
 class TestDownloadData:
+    """Tests for WeatherDownloader.download_data."""
+
     def test_calls_download_task_for_each_task(self, base_args: dict) -> None:
         """_download_task is called once per task returned by _get_tasks."""
         tasks = [(2020, "01", "var_a"), (2020, "02", "var_a")]
@@ -222,8 +227,9 @@ class TestDownloadData:
 # ----------------------------------
 # WeatherDownloader — ABC enforcement
 # ----------------------------------
-
 class TestAbstractMethods:
+    """Tests for WeatherDownloader ABC enforcement."""
+
     def test_cannot_instantiate_abc_directly(self) -> None:
         """WeatherDownloader itself cannot be instantiated (abstract)."""
         with pytest.raises(TypeError):
@@ -238,11 +244,14 @@ class TestAbstractMethods:
 
     def test_subclass_missing_abstract_method_raises(self) -> None:
         """A subclass that omits an abstract method cannot be instantiated."""
+
         class Incomplete(WeatherDownloader):
             def _get_tasks(self) -> list[tuple]:
                 return []
+
             def _download_task(self, task: tuple) -> int:
                 return 1
+
             # _validate_variables intentionally omitted
 
         with pytest.raises(TypeError):
@@ -259,8 +268,9 @@ class TestAbstractMethods:
 # ----------------------------------
 # download_file_streaming
 # ----------------------------------
-
 class TestDownloadFileStreaming:
+    """Tests for download_file_streaming."""
+
     def test_successful_download_returns_1(self, tmp_path: Path) -> None:
         """Returns 1 and writes file content on a successful download."""
         output_file = Path(tmp_path, "output.nc")
@@ -286,7 +296,9 @@ class TestDownloadFileStreaming:
         mock_response.iter_content.return_value = iter([])
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
-            download_file_streaming("https://opendata.dwd.de/weather/icon/data.nc", output_file, "test")
+            download_file_streaming(
+                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+            )
 
         assert output_file.parent.is_dir()
 
@@ -298,7 +310,9 @@ class TestDownloadFileStreaming:
             "rbc.weather.utils.requests.get",
             side_effect=requests.exceptions.RequestException("network error"),
         ):
-            result = download_file_streaming("https://opendata.dwd.de/weather/icon/data.nc", output_file, "test")
+            result = download_file_streaming(
+                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+            )
 
         assert result == 0
 
@@ -311,7 +325,9 @@ class TestDownloadFileStreaming:
         mock_response.iter_content.side_effect = Exception("mid-stream failure")
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
-            result = download_file_streaming("https://opendata.dwd.de/weather/icon/data.nc", output_file, "test")
+            result = download_file_streaming(
+                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+            )
 
         assert result == 0
         assert not output_file.exists()
@@ -321,9 +337,13 @@ class TestDownloadFileStreaming:
         output_file = Path(tmp_path, "output.nc")
 
         mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404")
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "404"
+        )
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
-            result = download_file_streaming("https://opendata.dwd.de/weather/icon/data.nc", output_file, "test")
+            result = download_file_streaming(
+                "https://opendata.dwd.de/weather/icon/data.nc", output_file, "test"
+            )
 
         assert result == 0
