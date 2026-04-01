@@ -374,7 +374,7 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None
 def test_get_from_old_source_structure_changed(
     downloader: IesoDownloader, task: DownloadTask
 ) -> None:
-    """Failure path for "_get_from_new_source" method when the URL is unavailable.
+    """Failure path for "_get_from_old_source" method when the dates aren't datetime-like.
 
     Args:
         downloader (IesoDownloader): Instance of IesoDownloader class.
