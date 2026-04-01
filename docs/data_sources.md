@@ -16,7 +16,7 @@ RenewBench-Crawler package.
 | **Canada<br> (Alberta)** | AESO     | downloader &check; | hourly/5 min; per plant  | `box` API token   | [Website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/), [Data hosting](https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5/folder/196731538687), <br> [API how-to](https://developer.box.com/guides/authentication/tokens/developer-tokens) (s. details!) |
 | **Canada<br> (Ontario)** | IESO     | downloader &check; | hourly; per plant        | public            | [Website](https://www.ieso.ca/power-data/data-directory)                                                                                                                                                                                                                                                               |
 | **Chile**                | CEN      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
-| **Brazil**               | ONS      | planned            | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
+| **Brazil**               | ONS      | downloader &check; | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
 | **Uruguay**              | ADME     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
@@ -220,31 +220,31 @@ RenewBench-Crawler package.
 - Downloadable files: 1 `.csv` (or `.xlsx`) per year (before 2022), 1 `.csv` (or `.xlsx`) per
   month (from 2022 onwards)
 - Files saved as **raw**: 1 `.csv` per month
-- Columns saved as **raw**:
+- Columns saved as **raw**: (translated from Portuguese)
 
-  `din_instante` - reference timestamp (YYYY-MM-DD HH:MM:SS), hourly resolution
+  `datetime` - reference timestamp (YYYY-MM-DD HH:MM:SS), hourly resolution
 
-  `id_subsistema` - subsystem identifier (3-character code for Brazilian grid subsystem)
+  `subsystem_id` - subsystem identifier (3-character code for Brazilian grid subsystem)
 
-  `nom_subsistema` - name of the subsystem
+  `subsystem_name` - name of the subsystem
 
-  `id_estado` - state identifier (2-character code for Brazilian state)
+  `state_id` - state identifier (2-character code for Brazilian state)
 
-  `nom_estado` - name of the state where the plant is located
+  `state_name` - name of the state where the plant is located
 
-  `cod_modalidadeoperacao` - plant operation mode (e.g. type of operational dispatch)
+  `operation_mode` - plant operation mode (e.g. type of operational dispatch)
 
-  `nom_tipousina` - plant type (e.g. hydro, thermal, wind, solar)
+  `plant_type` - plant type (e.g. hydro, thermal, wind, solar)
 
-  `nom_tipocombustivel` - fuel type used by the plant
+  `fuel_type` - fuel type used by the plant
 
-  `nom_usina` - name of the power plant
+  `plant_name` - name of the power plant
 
-  `id_ons` - unique identifier assigned by ONS (National System Operator)
+  `ons_id` - unique identifier assigned by ONS (National System Operator)
 
-  `ceg` - unique generation project identifier assigned by ANEEL (Brazilian regulator)
+  `generation_project_code` - unique generation project identifier assigned by ANEEL (Brazilian regulator)
 
-  `val_geracao` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
+  `generation_MWmed` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
 
 </details>
 
