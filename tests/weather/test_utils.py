@@ -296,9 +296,7 @@ class TestDownloadFileStreaming:
         mock_response.iter_content.return_value = iter([])
 
         with patch("rbc.weather.utils.requests.get", return_value=mock_response):
-            download_file_streaming(
-                "http://example.com/file.nc", output_file, "test"
-            )
+            download_file_streaming("http://example.com/file.nc", output_file, "test")
 
         assert output_file.parent.is_dir()
 
