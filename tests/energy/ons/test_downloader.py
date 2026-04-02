@@ -10,7 +10,7 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.ons import OnsDownloader
-from rbc.energy.ons.downloader import EXPECTED_COLS, MIN_YEAR, URL_BASE
+from rbc.energy.ons.downloader import EXPECTED_COLS_MAPPING, MIN_YEAR, URL_BASE
 from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
 
@@ -72,11 +72,11 @@ def get_mock_df(spec_task: DownloadTask) -> pd.DataFrame:
     Returns:
         pandas.DataFrame: Mock dataframe.
     """
-    row: dict[str, object] = {c: ["A"] for c in EXPECTED_COLS.keys()}
+    row: dict[str, object] = {c: ["A"] for c in EXPECTED_COLS_MAPPING.keys()}
     row.update(
         {
             c: f"{spec_task.date}-01 00:00:00"
-            for c in EXPECTED_COLS.keys()
+            for c in EXPECTED_COLS_MAPPING.keys()
             if "din_instante" in c
         }
     )
@@ -215,7 +215,7 @@ def test_get_task_data_no_data_for_old_year(downloader: OnsDownloader) -> None:
         downloader (OnsDownloader): Instance of OnsDownloader class.
     """
     old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
-    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
+    mock_df = pd.DataFrame(columns=EXPECTED_COLS_MAPPING)
 
     with patch.object(downloader, "_get_from_yearly_csv", return_value=mock_df):
         with patch.object(downloader, "_get_from_monthly_csv", return_value=mock_df):
@@ -232,7 +232,7 @@ def test_get_task_data_no_generation_data(
         downloader (OnsDownloader): Instance of OnsDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
+    mock_df = pd.DataFrame(columns=EXPECTED_COLS_MAPPING)
 
     with patch.object(downloader, "_get_from_yearly_csv", return_value=mock_df):
         with patch.object(downloader, "_get_from_monthly_csv", return_value=mock_df):
