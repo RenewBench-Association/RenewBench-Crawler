@@ -160,7 +160,12 @@ class DownloadTask:
 
 
 class EnergyDownloader(ABC):
-    """Abstract base class for parallelized daily energy downloader classes.
+    """Abstract base class for parallelized energy downloader classes.
+
+    This class coordinates and parallelizes the energy data crawling task execution.
+    Subclasses must all overwrite the abstract `_get_task_data` method.
+    Error catching in downloading, checkpoint loading/saving, and common attributes are
+    handled here.
 
     Attributes:
         RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
@@ -306,24 +311,20 @@ class EnergyDownloader(ABC):
         """Load checkpoint from checkpoint path depending on resume logic.
 
         Returns:
-            dict: Loaded checkpoint.
+            dict: Loaded checkpoint or empty dict (if no checkpoint exists).
         """
         if self.resume and self.checkpoint_path.is_file():
-            logger.info(f"Loading checkpoint from '{self.checkpoint_path}'")
+            logger.info(f"Resuming from checkpoint: '{self.checkpoint_path}'")
 
             try:
                 with open(self.checkpoint_path, "rb") as f:
                     return pickle.load(f)
             except (EOFError, pickle.UnpicklingError):
-                logger.warning(
-                    f"Checkpoint '{self.checkpoint_path}' is corrupted. Starting fresh."
-                )
+                logger.warning("Checkpoint file is corrupted. Starting fresh.")
                 return {}
-        else:
-            logger.info(
-                "No checkpoint loading (first run or resume=False). Starting fresh."
-            )
-            return {}
+
+        logger.info("No checkpoint (first run or resume=False). Starting fresh.")
+        return {}
 
     def _save_checkpoint(self) -> None:
         """Save checkpoint safely (ensure abrupt terminations don't corrupt the file)."""
