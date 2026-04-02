@@ -87,8 +87,10 @@ class IconDreamDownloader(WeatherDownloader):
             resume (bool, optional): If True, resume from checkpoint. Defaults to True.
 
         Raises:
-            ValueError: If invalid parameters are provided.
-            ConnectionError: If the DWD server is unreachable.
+            ValueError: If the model is not defined in the model configuration.
+            ValueError: If any requested variable is not in the known variable mapping or
+                is not available on the DWD server.
+            ConnectionError: If the DWD server is unreachable during variable discovery.
         """
         self.model = _normalize_model(model)
         self.model_config = _get_model_config(self.model)
@@ -129,87 +131,6 @@ class IconDreamDownloader(WeatherDownloader):
         )
 
         self._validate_variables()
-
-    def _discover_available_variables(self) -> set[str]:
-        """Discover available variables from DWD open data portal.
-
-        Returns:
-            set[str]: Set of available variable codes (e.g., {'T', 'U', 'V', 'T_2M', ...}).
-
-        Raises:
-            ConnectionError: If the DWD server is unreachable.
-        """
-        try:
-            # List directory to find available variables
-            response = requests.get(self.model_config["base_url"], timeout=30)
-            response.raise_for_status()
-
-            # Extract variable folder names from HTML directory listing
-            # Looking for links like: <a href="T/">T/</a>
-            pattern = r'href="([A-Z0-9_]+)/"'
-            matches = re.findall(pattern, response.text)
-            # Filter out parent directory (..)
-            variables = set(m for m in matches if m != "..")
-
-            if not variables:
-                logger.warning("No variables found in DWD directory, using defaults")
-                return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
-
-            logger.info(f"Discovered {len(variables)} available variables from DWD")
-            return variables
-
-        except requests.exceptions.ConnectionError as e:
-            logger.error("Initialization ICON-DREAM connectivity check failed!")
-            raise ConnectionError(f"DWD server unreachable: {e}")
-        except Exception as e:
-            logger.warning(f"Error discovering variables: {e}, using defaults")
-            return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
-
-    def _validate_variables(self) -> None:
-        """Validate that all requested variables are available.
-
-        Raises:
-            ValueError: If any requested variable is not available.
-        """
-        # Check that all requested variables exist in our mapping
-        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_DWD_PARAM]
-
-        if invalid_vars:
-            raise ValueError(
-                f"Invalid variables: {', '.join(invalid_vars)}. \n"
-                f"Run 'python scripts/weather/icon_dream_download.py --list-variables --model {self.model}' to see available variables."
-            )
-
-        # Check that the DWD codes are available on the server
-        unavailable_vars = [
-            v
-            for v in self.variables
-            if self._get_dwd_param(v) not in self.available_variables
-        ]
-
-        if unavailable_vars:
-            dwd_codes = [self._get_dwd_param(v) for v in unavailable_vars]
-            raise ValueError(
-                f"Variables not available on DWD server: {', '.join(unavailable_vars)} "
-                f"(DWD codes: {', '.join(dwd_codes)})"
-            )
-
-        logger.info(f"All {len(self.variables)} requested variables are available.")
-
-    @staticmethod
-    def _get_dwd_param(variable: str) -> str:
-        """Convert variable name to DWD parameter code.
-
-        Args:
-            variable (str): ICON-DREAM variable name
-
-        Returns:
-            str: DWD parameter code
-        """
-        if variable in VARIABLE_TO_DWD_PARAM:
-            return VARIABLE_TO_DWD_PARAM[variable]
-        # Fallback: use variable name directly
-        return variable
 
     def _get_tasks(self) -> list[tuple]:
         """Return all download tasks as (year, month, variable) tuples.
@@ -331,6 +252,90 @@ class IconDreamDownloader(WeatherDownloader):
                 logger.error(f"Metadata: Download failed for {description}")
 
         logger.info("Metadata download completed!")
+
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
+    def _validate_variables(self) -> None:
+        """Validate that all requested variables are available.
+
+        Raises:
+            ValueError: If any requested variable is not available.
+        """
+        # Check that all requested variables exist in our mapping
+        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_DWD_PARAM]
+
+        if invalid_vars:
+            raise ValueError(
+                f"Invalid variables: {', '.join(invalid_vars)}. \n"
+                f"Run 'python scripts/weather/icon_dream_download.py --list-variables --model {self.model}' to see available variables."
+            )
+
+        # Check that the DWD codes are available on the server
+        unavailable_vars = [
+            v
+            for v in self.variables
+            if self._get_dwd_param(v) not in self.available_variables
+        ]
+
+        if unavailable_vars:
+            dwd_codes = [self._get_dwd_param(v) for v in unavailable_vars]
+            raise ValueError(
+                f"Variables not available on DWD server: {', '.join(unavailable_vars)} "
+                f"(DWD codes: {', '.join(dwd_codes)})"
+            )
+
+        logger.info(f"All {len(self.variables)} requested variables are available.")
+
+    def _discover_available_variables(self) -> set[str]:
+        """Discover available variables from DWD open data portal.
+
+        Returns:
+            set[str]: Set of available variable codes (e.g., {'T', 'U', 'V', 'T_2M', ...}).
+
+        Raises:
+            ConnectionError: If the DWD server is unreachable.
+        """
+        try:
+            # List directory to find available variables
+            response = requests.get(self.model_config["base_url"], timeout=30)
+            response.raise_for_status()
+
+            # Extract variable folder names from HTML directory listing
+            # Looking for links like: <a href="T/">T/</a>
+            pattern = r'href="([A-Z0-9_]+)/"'
+            matches = re.findall(pattern, response.text)
+            # Filter out parent directory (..)
+            variables = set(m for m in matches if m != "..")
+
+            if not variables:
+                logger.warning("No variables found in DWD directory, using defaults")
+                return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
+
+            logger.info(f"Discovered {len(variables)} available variables from DWD")
+            return variables
+
+        except requests.exceptions.ConnectionError as e:
+            logger.error("Initialization ICON-DREAM connectivity check failed!")
+            raise ConnectionError(f"DWD server unreachable: {e}")
+        except Exception as e:
+            logger.warning(f"Error discovering variables: {e}, using defaults")
+            return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
+
+    @staticmethod
+    def _get_dwd_param(variable: str) -> str:
+        """Convert variable name to DWD parameter code.
+
+        Args:
+            variable (str): ICON-DREAM variable name
+
+        Returns:
+            str: DWD parameter code
+        """
+        if variable in VARIABLE_TO_DWD_PARAM:
+            return VARIABLE_TO_DWD_PARAM[variable]
+        # Fallback: use variable name directly
+        return variable
 
     @staticmethod
     def print_available_variables(model: str = "global") -> None:

@@ -15,20 +15,50 @@ from rbc.weather.utils import WeatherDownloader, download_file_streaming
 # Minimal concrete subclass for testing
 # ----------------------------------
 class _ConcreteDownloader(WeatherDownloader):
-    """Minimal concrete implementation used only in tests."""
+    """Minimal concrete implementation of WeatherDownloader used only in tests.
+
+    Stores a fixed task list and a mapping of pre-configured return values so
+    tests can control download outcomes without using the network.
+
+    Attributes:
+        _tasks (list[tuple]): Task list returned by _get_tasks.
+        _download_results (dict[tuple, int]): Maps task tuples to fixed return
+            values (1 = success, 0 = failure). Defaults to 1 for unknown tasks.
+    """
 
     def __init__(self, tasks: list[tuple] | None = None, **kwargs) -> None:
+        """Initialise the downloader with a fixed task list.
+
+        Args:
+            tasks (list[tuple] | None): Task tuples returned by _get_tasks.
+                Defaults to an empty list when None.
+            **kwargs: Forwarded to WeatherDownloader.__init__.
+        """
         self._tasks = tasks or []
         self._download_results: dict[tuple, int] = {}
         super().__init__(**kwargs)
 
     def _get_tasks(self) -> list[tuple]:
+        """Return the pre-defined task list supplied at construction time.
+
+        Returns:
+            list[tuple]: Task tuples passed in at initialisation.
+        """
         return self._tasks
 
     def _download_task(self, task: tuple) -> int:
+        """Return the pre-configured result for a task.
+
+        Args:
+            task (tuple): Task tuple to look up in _download_results.
+
+        Returns:
+            int: 1 (success) by default, or the value stored in _download_results.
+        """
         return self._download_results.get(task, 1)
 
     def _validate_variables(self) -> None:
+        """No-op implementation, variable validation is not exercised here."""
         pass
 
 
@@ -37,7 +67,14 @@ class _ConcreteDownloader(WeatherDownloader):
 # ----------------------------------
 @pytest.fixture
 def base_args(tmp_path: Path) -> dict:
-    """Minimal valid kwargs for _ConcreteDownloader."""
+    """Provide minimal valid keyword arguments for _ConcreteDownloader.
+
+    Args:
+        tmp_path (Path): Pytest-provided temporary directory used as output_path.
+
+    Returns:
+        dict: Keyword arguments passed directly to _ConcreteDownloader.
+    """
     return {
         "output_path": tmp_path,
         "years": [2020],
@@ -52,7 +89,11 @@ def base_args(tmp_path: Path) -> dict:
 # WeatherDownloader.__init__
 # ----------------------------------
 class TestInit:
-    """Tests for WeatherDownloader.__init__."""
+    """Tests for WeatherDownloader.__init__.
+
+    Covers attribute assignment, output_path creation, checkpoint initialisation,
+    and year filtering by start_year.
+    """
 
     def test_attributes_are_set(self, base_args: dict) -> None:
         """Core attributes are assigned correctly from constructor arguments."""
@@ -133,12 +174,27 @@ class TestInit:
         dl = _ConcreteDownloader(**base_args)  # resume=False
         assert dl.checkpoint == {}
 
+    def test_corrupted_checkpoint_starts_fresh(
+        self, tmp_path: Path, base_args: dict
+    ) -> None:
+        """Corrupted checkpoint file is discarded and a fresh checkpoint is returned."""
+        checkpoint_path = Path(tmp_path, "status.pickle")
+        checkpoint_path.write_bytes(b"not-valid-pickle-data")
+
+        base_args["resume"] = True
+        dl = _ConcreteDownloader(**base_args)
+        assert dl.checkpoint == {}
+
 
 # ----------------------------------
 # WeatherDownloader._save_checkpoint
 # ----------------------------------
 class TestSaveCheckpoint:
-    """Tests for WeatherDownloader._save_checkpoint."""
+    """Tests for WeatherDownloader._save_checkpoint.
+
+    Verifies that the checkpoint is written to disk and that no temporary
+    artefacts are left behind after a successful save.
+    """
 
     def test_writes_checkpoint_to_disk(self, base_args: dict) -> None:
         """Checkpoint is persisted to disk after _save_checkpoint."""
@@ -161,7 +217,11 @@ class TestSaveCheckpoint:
 # # WeatherDownloader.download_data
 # ----------------------------------
 class TestDownloadData:
-    """Tests for WeatherDownloader.download_data."""
+    """Tests for WeatherDownloader.download_data.
+
+    Covers task iteration, checkpoint skipping on resume, checkpoint persistence
+    after each task, failure recording, and dry-run behaviour.
+    """
 
     def test_calls_download_task_for_each_task(self, base_args: dict) -> None:
         """_download_task is called once per task returned by _get_tasks."""
@@ -228,7 +288,11 @@ class TestDownloadData:
 # WeatherDownloader — ABC enforcement
 # ----------------------------------
 class TestAbstractMethods:
-    """Tests for WeatherDownloader ABC enforcement."""
+    """Tests for WeatherDownloader ABC enforcement.
+
+    Verifies that the abstract base class cannot be instantiated directly and
+    that subclasses missing any abstract method raise TypeError.
+    """
 
     def test_cannot_instantiate_abc_directly(self) -> None:
         """WeatherDownloader itself cannot be instantiated (abstract)."""
@@ -269,7 +333,11 @@ class TestAbstractMethods:
 # download_file_streaming
 # ----------------------------------
 class TestDownloadFileStreaming:
-    """Tests for download_file_streaming."""
+    """Tests for download_file_streaming.
+
+    Covers successful file downloads, parent-directory creation, HTTP error
+    handling, partial-file cleanup on failure, and network exception handling.
+    """
 
     def test_successful_download_returns_1(self, tmp_path: Path) -> None:
         """Returns 1 and writes file content on a successful download."""

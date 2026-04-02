@@ -14,7 +14,7 @@ from rbc.weather.icon_dream import IconDreamDownloader
 # Fixtures
 # ----------------------------------
 @pytest.fixture
-def basic_args(tmp_path: Path) -> dict:
+def init_args(tmp_path: Path) -> dict:
     """Creates a basic setup with a temporary directory.
 
     Args:
@@ -34,11 +34,11 @@ def basic_args(tmp_path: Path) -> dict:
 
 
 @pytest.fixture
-def downloader(basic_args: dict) -> IconDreamDownloader:
+def downloader(init_args: dict) -> IconDreamDownloader:
     """Returns an instantiated IconDreamDownloader with mocked requests.
 
     Args:
-        basic_args (dict): Basic initialization arguments.
+        init_args (dict): Initialization arguments for IconDreamDownloader.
 
     Returns:
         IconDreamDownloader: Instance of IconDreamDownloader class.
@@ -50,36 +50,36 @@ def downloader(basic_args: dict) -> IconDreamDownloader:
         mock_get.return_value = mock_response
 
         with patch("rbc.weather.icon_dream.downloader.requests.head"):
-            dl = IconDreamDownloader(model="global", **basic_args)
+            dl = IconDreamDownloader(model="global", **init_args)
     return dl
 
 
 # ----------------------------------
 # Tests - Initialization & Configuration
 # ----------------------------------
-def test_downloader_initialization(basic_args: dict) -> None:
+def test_downloader_initialization(init_args: dict) -> None:
     """Happy path for class initialization.
 
     Check that IconDreamDownloader sets up paths and checkpoint correctly.
 
     Args:
-        basic_args (dict): Initialization arguments for IconDreamDownloader.
+        init_args (dict): Initialization arguments for IconDreamDownloader.
     """
     with patch("rbc.weather.icon_dream.downloader.requests.get") as mock_get:
         mock_response = MagicMock()
         mock_response.text = '<a href="/hourly/T/">T</a>'
         mock_get.return_value = mock_response
 
-        downloader = IconDreamDownloader(model="global", **basic_args)
+        downloader = IconDreamDownloader(model="global", **init_args)
 
-        assert downloader.years == basic_args["years"]
-        assert downloader.months == basic_args["months"]
-        assert downloader.variables == basic_args["variables"]
-        assert downloader.dry_run == basic_args["dry_run"]
-        assert downloader.resume == basic_args["resume"]
-        assert downloader.output_path == Path(basic_args["output_path"], "global")
+        assert downloader.years == init_args["years"]
+        assert downloader.months == init_args["months"]
+        assert downloader.variables == init_args["variables"]
+        assert downloader.dry_run == init_args["dry_run"]
+        assert downloader.resume == init_args["resume"]
+        assert downloader.output_path == Path(init_args["output_path"], "global")
         assert downloader.checkpoint_path == Path(
-            basic_args["output_path"], "global", "status.pickle"
+            init_args["output_path"], "global", "status.pickle"
         )
 
 

@@ -78,28 +78,6 @@ class WeatherDownloader(ABC):
 
         self.checkpoint: dict = self._load_checkpoint()
 
-    def _load_checkpoint(self) -> dict:
-        """Load checkpoint from disk if resuming, otherwise return empty dict.
-
-        Returns:
-            dict: Loaded checkpoint or empty dict.
-        """
-        if self.resume and self.checkpoint_path.is_file():
-            with open(self.checkpoint_path, "rb") as f:
-                checkpoint = pickle.load(f)
-            logger.info(f"Resuming from checkpoint: {self.checkpoint_path}")
-            return checkpoint
-
-        logger.info("Starting fresh download (no checkpoint found).")
-        return {}
-
-    def _save_checkpoint(self) -> None:
-        """Save checkpoint to disk atomically."""
-        temp_path = self.checkpoint_path.with_suffix(".tmp")
-        with open(temp_path, "wb") as f:
-            pickle.dump(self.checkpoint, f)
-        temp_path.replace(self.checkpoint_path)
-
     def download_data(self) -> None:
         """Download all tasks, skipping completed ones and checkpointing each result."""
         for task in self._get_tasks():
@@ -141,6 +119,34 @@ class WeatherDownloader(ABC):
         Raises:
             ValueError: If any variable is invalid or unavailable.
         """
+
+    # ----------------------------------------------------------------
+    # Checkpoint helpers
+    # ----------------------------------------------------------------
+    def _load_checkpoint(self) -> dict:
+        """Load checkpoint from disk if resuming, otherwise return empty dict.
+
+        Returns:
+            dict: Loaded checkpoint or empty dict.
+        """
+        if self.resume and self.checkpoint_path.is_file():
+            logger.info(f"Resuming from checkpoint: '{self.checkpoint_path}'")
+            try:
+                with open(self.checkpoint_path, "rb") as f:
+                    return pickle.load(f)
+            except (EOFError, pickle.UnpicklingError):
+                logger.warning("Checkpoint file is corrupted. Starting fresh.")
+                return {}
+
+        logger.info("No checkpoint (first run or resume=False). Starting fresh.")
+        return {}
+
+    def _save_checkpoint(self) -> None:
+        """Save checkpoint to disk atomically."""
+        temp_path = self.checkpoint_path.with_suffix(".tmp")
+        with open(temp_path, "wb") as f:
+            pickle.dump(self.checkpoint, f)
+        temp_path.replace(self.checkpoint_path)
 
 
 def download_file_streaming(url: str, output_file: Path, description: str) -> int:

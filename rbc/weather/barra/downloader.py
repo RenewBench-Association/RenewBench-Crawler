@@ -174,6 +174,16 @@ class Barra2Downloader(WeatherDownloader):
         else:
             self.pressure_levels = []
 
+        try:
+            for url in [
+                self.model_config["catalog_url"],
+                self.model_config["invariant_catalog_url"],
+            ]:
+                requests.head(url, timeout=10).raise_for_status()
+        except Exception as e:
+            logger.error("Initialization BARRA2 connectivity check failed!")
+            raise ConnectionError(f"One or more BARRA2 endpoints are unreachable: {e}")
+
         super().__init__(
             output_path=resolved_output_path,
             years=years,
@@ -195,15 +205,129 @@ class Barra2Downloader(WeatherDownloader):
 
         self._validate_variables()
 
-        try:
-            for url in [
-                self.model_config["catalog_url"],
-                self.model_config["invariant_catalog_url"],
-            ]:
-                requests.head(url, timeout=10).raise_for_status()
-        except Exception as e:
-            logger.error("Initialization BARRA2 connectivity check failed!")
-            raise ConnectionError(f"One or more BARRA2 endpoints are unreachable: {e}")
+    def _get_tasks(self) -> list[tuple]:
+        """Return all download tasks: invariant variables first, then temporal.
+
+        Invariant tasks use the sentinel key ("fx", "fx", variable).
+        Temporal tasks use (year, month, variable).
+
+        Returns:
+            list[tuple]: Ordered list of task tuples.
+        """
+        logger.info(
+            f"Starting BARRA2 {self.model_config['label']} download "
+            f"({self.temporal_res} frequency)"
+        )
+
+        invariant_tasks: list[tuple] = [
+            ("fx", "fx", v)
+            for v in self.variables
+            if self._get_barra2_param(v) in INVARIANT_VARIABLES
+        ]
+        temporal_tasks: list[tuple] = [
+            (year, month, v)
+            for year in self.years
+            for month in self.months
+            for v in self.variables
+            if self._get_barra2_param(v) not in INVARIANT_VARIABLES
+        ]
+        return invariant_tasks + temporal_tasks
+
+    def _download_task(self, task: tuple) -> int:
+        """Download a single BARRA2 data file.
+
+        Args:
+            task (tuple): Task tuple of (year, month, variable).
+                Invariant variables use ("fx", "fx", variable).
+
+        Returns:
+            int: 1 if successful, 0 if failed.
+        """
+        year, month, variable = task
+        return self._download_variables(year=year, month=month, variable=variable)
+
+    def _download_variables(self, year: int | str, month: str, variable: str) -> int:
+        """Download a single BARRA2 data file.
+
+        Args:
+            year (int | str): Year to download, or "fx" for invariant variables.
+            month (str): Month to download (format: '01' to '12'), or "fx" for invariant variables.
+            variable (str): Variable name (e.g., 'temperature', '10m_u_component_of_wind').
+
+        Returns:
+            int: 1 if successful, 0 if failed.
+        """
+        url = self._build_opendap_url(year, month, variable)
+        output_file = self._construct_file_path(year, month, variable)
+        description = f"{year}-{month} ({variable})"
+
+        if output_file.exists():
+            logger.info(f"{description}: File already exists locally, skipping")
+            return 1
+
+        if self.dry_run:
+            logger.info(f"{description}: DRY RUN - Would download from {url}")
+            return 1
+
+        logger.info(f"{description}: Downloading {output_file.name}...")
+        return download_file_streaming(
+            url=url, output_file=output_file, description=description
+        )
+
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
+    def _build_opendap_url(self, year: int | str, month: str, variable: str) -> str:
+        """Build OPeNDAP URL for a specific file on the NCI THREDDS server.
+
+        The URL structure follows the NCI THREDDS catalog layout for BARRA2 data.
+
+        Args:
+            year (int | str): Year as integer, or "fx" for invariant variables.
+            month (str): Month as string (01-12), or "fx" for invariant variables.
+            variable (str): Variable name.
+
+        Returns:
+            str: Full OPeNDAP URL for accessing the file.
+        """
+        base_url = self.model_config["opendap_url"].replace("/dodsC/", "/fileServer/")
+        barra2_code = self._get_barra2_param(variable)
+        grid = self.model_config["grid"]
+        dataset_label = self.model_config["label"]
+
+        if barra2_code in INVARIANT_VARIABLES:
+            invariant_path = self.model_config.get("invariant_path", "fx")
+            dataset_file = (
+                f"{barra2_code}_{grid}_ERA5_historical_hres_BOM_{dataset_label}_v1.nc"
+            )
+            url = f"{base_url}/{invariant_path}/{barra2_code}/latest/{dataset_file}"
+        else:
+            year_month = f"{year}{month}"
+            dataset_file = (
+                f"{barra2_code}_{grid}_ERA5_historical_hres_BOM_"
+                f"{dataset_label}_v1_{self.temporal_res}_{year_month}-{year_month}.nc"
+            )
+            url = f"{base_url}/{self.temporal_res}/{barra2_code}/latest/{dataset_file}"
+        return url
+
+    def _construct_file_path(self, year: int | str, month: str, variable: str) -> Path:
+        """Construct the local file path for a BARRA2 data file.
+
+        Args:
+            year (int | str): Year as integer, or "fx" for invariant variables.
+            month (str): Month as string (01-12), or "fx" for invariant variables.
+            variable (str): Variable name.
+
+        Returns:
+            Path: Full local file path for the data file.
+        """
+        barra2_code = self._get_barra2_param(variable)
+        if barra2_code in INVARIANT_VARIABLES:
+            filename = f"barra2_{self.model}_fx_{barra2_code}.nc"
+            return Path(self.invariant_output_path, filename)
+        else:
+            filename = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_{barra2_code}.nc"
+            return Path(self.output_path, filename)
 
     @staticmethod
     def _get_barra2_param(variable: str) -> str:
@@ -260,114 +384,6 @@ class Barra2Downloader(WeatherDownloader):
                 f"--list-variables --model {self.model}' to see available variables."
             )
         logger.info(f"All {len(self.variables)} requested variables are available.")
-
-    def _get_tasks(self) -> list[tuple]:
-        """Return all download tasks: invariant variables first, then temporal.
-
-        Invariant tasks use the sentinel key ("fx", "fx", variable).
-        Temporal tasks use (year, month, variable).
-
-        Returns:
-            list[tuple]: Ordered list of task tuples.
-        """
-        logger.info(
-            f"Starting BARRA2 {self.model_config['label']} download "
-            f"({self.temporal_res} frequency)"
-        )
-
-        invariant_tasks: list[tuple] = [
-            ("fx", "fx", v)
-            for v in self.variables
-            if self._get_barra2_param(v) in INVARIANT_VARIABLES
-        ]
-        temporal_tasks: list[tuple] = [
-            (year, month, v)
-            for year in self.years
-            for month in self.months
-            for v in self.variables
-            if self._get_barra2_param(v) not in INVARIANT_VARIABLES
-        ]
-        return invariant_tasks + temporal_tasks
-
-    def _download_task(self, task: tuple) -> int:
-        """Download a single BARRA2 data file.
-
-        Args:
-            task (tuple): Task tuple of (year, month, variable).
-                Invariant variables use ("fx", "fx", variable).
-
-        Returns:
-            int: 1 if successful, 0 if failed.
-        """
-        year, month, variable = task
-        url = self._build_opendap_url(year, month, variable)
-        output_file = self._construct_file_path(year, month, variable)
-        description = f"{year}-{month} ({variable})"
-
-        if output_file.exists():
-            logger.info(f"{description}: File already exists locally, skipping")
-            return 1
-
-        if self.dry_run:
-            logger.info(f"{description}: DRY RUN - Would download from {url}")
-            return 1
-
-        logger.info(f"{description}: Downloading {output_file.name}...")
-        return download_file_streaming(
-            url=url, output_file=output_file, description=description
-        )
-
-    def _build_opendap_url(self, year: int, month: str, variable: str) -> str:
-        """Build OPeNDAP URL for a specific file on the NCI THREDDS server.
-
-        The URL structure follows the NCI THREDDS catalog layout for BARRA2 data.
-
-        Args:
-            year (int): Year as integer.
-            month (str): Month as string (01-12).
-            variable (str): Variable name.
-
-        Returns:
-            str: Full OPeNDAP URL for accessing the file.
-        """
-        base_url = self.model_config["opendap_url"].replace("/dodsC/", "/fileServer/")
-        barra2_code = self._get_barra2_param(variable)
-        grid = self.model_config["grid"]
-        dataset_label = self.model_config["label"]
-
-        if barra2_code in INVARIANT_VARIABLES:
-            invariant_path = self.model_config.get("invariant_path", "fx")
-            dataset_file = (
-                f"{barra2_code}_{grid}_ERA5_historical_hres_BOM_{dataset_label}_v1.nc"
-            )
-            url = f"{base_url}/{invariant_path}/{barra2_code}/latest/{dataset_file}"
-        else:
-            year_month = f"{year}{month}"
-            dataset_file = (
-                f"{barra2_code}_{grid}_ERA5_historical_hres_BOM_"
-                f"{dataset_label}_v1_{self.temporal_res}_{year_month}-{year_month}.nc"
-            )
-            url = f"{base_url}/{self.temporal_res}/{barra2_code}/latest/{dataset_file}"
-        return url
-
-    def _construct_file_path(self, year: int, month: str, variable: str) -> Path:
-        """Construct the local file path for a BARRA2 data file.
-
-        Args:
-            year (int): Year as integer.
-            month (str): Month as string (01-12).
-            variable (str): Variable name.
-
-        Returns:
-            Path: Full local file path for the data file.
-        """
-        barra2_code = self._get_barra2_param(variable)
-        if barra2_code in INVARIANT_VARIABLES:
-            filename = f"barra2_{self.model}_fx_{barra2_code}.nc"
-            return Path(self.invariant_output_path, filename)
-        else:
-            filename = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_{barra2_code}.nc"
-            return Path(self.output_path, filename)
 
     @staticmethod
     def print_available_variables(model: str = "R2") -> None:

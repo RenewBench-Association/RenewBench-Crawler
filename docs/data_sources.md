@@ -441,6 +441,23 @@ BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology
 
 </details>
 
+### Saving Structure
+
+The downloaded, raw weather data is saved into the following structure per data source
+`<source>`. Values in `()` are optional. For example, ICON DREAM has a `<model>` name of either 'global' or 'eu'.
+
+```text
+raw/weather
+└── <source>
+    ├── logs
+    │    └── <YYYY-MM-DD_HHMMSS>.log
+    └── (<model>)
+        ├── status.pickle
+        ├── <source_(model_)(temporal_resolution_)YYYYMM_variable_name>.nc/.grib
+        └── (invariant)
+            └── (invariant_variable.nc)
+```
+
 # Excluded Data Sources
 This section lists energy and meteorological sources that are currently ineligible for integration or fall outside the functional scope of the RenewBench-Crawler package.
 

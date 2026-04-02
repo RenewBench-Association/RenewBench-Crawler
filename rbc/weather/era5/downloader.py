@@ -147,72 +147,6 @@ class Era5Downloader(WeatherDownloader):
 
         self._validate_variables()
 
-    def _validate_variables(self) -> None:
-        """Validate that all requested variables are available in ERA5.
-
-        Raises:
-            ValueError: If any requested variable is not available.
-        """
-        unrecognized_variables: list[str] = []
-        invalid_pressure_level: list[str] = []
-        invalid_model_level: list[str] = []
-
-        for variable in self.variables:
-            is_single_level = variable in ALL_SINGLE_LEVEL_VARIABLES
-
-            if is_single_level:
-                # Single-level variable is valid
-                pass
-            else:
-                # Check if 3D variable is available
-                if (
-                    variable not in ALL_PRESSURE_LEVEL_VARIABLES
-                    and variable not in ALL_MODEL_LEVEL_VARIABLES
-                ):
-                    unrecognized_variables.append(variable)
-                else:
-                    # Check against specific level types if requested
-                    if (
-                        self.pressure_levels is not None
-                        and variable not in ALL_PRESSURE_LEVEL_VARIABLES
-                    ):
-                        invalid_pressure_level.append(
-                            f"{variable} (not available at pressure levels)"
-                        )
-                    if (
-                        self.model_levels is not None
-                        and variable not in ALL_MODEL_LEVEL_VARIABLES
-                    ):
-                        invalid_model_level.append(
-                            f"{variable} (not available at model levels)"
-                        )
-
-        # Compile error messages
-        error_messages = []
-
-        if unrecognized_variables:
-            error_messages.append(
-                f"Unrecognized variables: {', '.join(unrecognized_variables)}\n"
-                f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
-            )
-
-        if invalid_pressure_level:
-            error_messages.append(
-                f"Invalid pressure-level variables: {', '.join(invalid_pressure_level)}\n"
-                f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
-            )
-
-        if invalid_model_level:
-            error_messages.append(
-                f"Invalid model-level variables: {', '.join(invalid_model_level)}\n"
-                f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
-            )
-
-        if error_messages:
-            raise ValueError("\n".join(error_messages))
-
-        logger.info(f"All {len(self.variables)} requested variables are available.")
-
     def _get_tasks(self) -> list[tuple]:
         """Return all download tasks as (year, month, level_type) tuples.
 
@@ -351,6 +285,75 @@ class Era5Downloader(WeatherDownloader):
             all_success = False
 
         return 1 if all_success else 0
+
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
+    def _validate_variables(self) -> None:
+        """Validate that all requested variables are available in ERA5.
+
+        Raises:
+            ValueError: If any requested variable is not available.
+        """
+        unrecognized_variables: list[str] = []
+        invalid_pressure_level: list[str] = []
+        invalid_model_level: list[str] = []
+
+        for variable in self.variables:
+            is_single_level = variable in ALL_SINGLE_LEVEL_VARIABLES
+
+            if is_single_level:
+                # Single-level variable is valid
+                pass
+            else:
+                # Check if 3D variable is available
+                if (
+                    variable not in ALL_PRESSURE_LEVEL_VARIABLES
+                    and variable not in ALL_MODEL_LEVEL_VARIABLES
+                ):
+                    unrecognized_variables.append(variable)
+                else:
+                    # Check against specific level types if requested
+                    if (
+                        self.pressure_levels is not None
+                        and variable not in ALL_PRESSURE_LEVEL_VARIABLES
+                    ):
+                        invalid_pressure_level.append(
+                            f"{variable} (not available at pressure levels)"
+                        )
+                    if (
+                        self.model_levels is not None
+                        and variable not in ALL_MODEL_LEVEL_VARIABLES
+                    ):
+                        invalid_model_level.append(
+                            f"{variable} (not available at model levels)"
+                        )
+
+        # Compile error messages
+        error_messages = []
+
+        if unrecognized_variables:
+            error_messages.append(
+                f"Unrecognized variables: {', '.join(unrecognized_variables)}\n"
+                f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
+            )
+
+        if invalid_pressure_level:
+            error_messages.append(
+                f"Invalid pressure-level variables: {', '.join(invalid_pressure_level)}\n"
+                f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
+            )
+
+        if invalid_model_level:
+            error_messages.append(
+                f"Invalid model-level variables: {', '.join(invalid_model_level)}\n"
+                f"Run 'python scripts/weather/era5_download.py --list-variables' to see available variables."
+            )
+
+        if error_messages:
+            raise ValueError("\n".join(error_messages))
+
+        logger.info(f"All {len(self.variables)} requested variables are available.")
 
     def _get_mars_param(self, variable: str) -> str:
         """Convert variable name to MARS parameter code.

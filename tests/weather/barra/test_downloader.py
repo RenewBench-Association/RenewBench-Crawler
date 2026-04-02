@@ -27,7 +27,7 @@ def mock_connectivity_check() -> Iterator[None]:
 
 
 @pytest.fixture
-def basic_args(tmp_path: Path) -> dict:
+def init_args(tmp_path: Path) -> dict:
     """Creates a basic setup with a temporary directory.
 
     Args:
@@ -48,69 +48,69 @@ def basic_args(tmp_path: Path) -> dict:
 
 
 @pytest.fixture
-def downloader(basic_args: dict) -> Barra2Downloader:
+def downloader(init_args: dict) -> Barra2Downloader:
     """Returns an instantiated Barra2Downloader.
 
     Args:
-        basic_args (dict): Basic initialization arguments.
+        init_args (dict): Initialization arguments for Barra2Downloader.
 
     Returns:
         Barra2Downloader: Instance of Barra2Downloader class.
     """
-    return Barra2Downloader(**basic_args)
+    return Barra2Downloader(**init_args)
 
 
 # ----------------------------------
 # Tests - Initialization
 # ----------------------------------
-def test_downloader_initialization(basic_args: dict) -> None:
+def test_downloader_initialization(init_args: dict) -> None:
     """Happy path for class initialization.
 
     Check that the Barra2Downloader sets up paths and checkpoint correctly.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    downloader = Barra2Downloader(**basic_args)
+    downloader = Barra2Downloader(**init_args)
 
     assert downloader.model == "R2"
-    assert downloader.years == basic_args["years"]
-    assert downloader.months == basic_args["months"]
-    assert downloader.variables == basic_args["variables"]
-    assert downloader.dry_run == basic_args["dry_run"]
-    assert downloader.output_path == Path(basic_args["output_path"], "R2")
+    assert downloader.years == init_args["years"]
+    assert downloader.months == init_args["months"]
+    assert downloader.variables == init_args["variables"]
+    assert downloader.dry_run == init_args["dry_run"]
+    assert downloader.output_path == Path(init_args["output_path"], "R2")
     assert downloader.output_path.exists()
     assert downloader.checkpoint_path == Path(
-        basic_args["output_path"], "R2", "status.pickle"
+        init_args["output_path"], "R2", "status.pickle"
     )
     assert isinstance(downloader.checkpoint, dict)
     assert downloader.checkpoint == {}
 
 
-def test_connectivity_check_failure(basic_args: dict) -> None:
+def test_connectivity_check_failure(init_args: dict) -> None:
     """Test that ConnectionError is raised when a BARRA2 endpoint is unreachable.
 
     The autouse mock_connectivity_check fixture is overridden here so that
     raise_for_status raises an exception, triggering the connection-error branch.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
     with patch("rbc.weather.barra.downloader.requests.head") as mock_head:
         mock_head.return_value.raise_for_status.side_effect = Exception("timeout")
         with pytest.raises(ConnectionError, match="BARRA2 endpoints are unreachable"):
-            Barra2Downloader(**basic_args)
+            Barra2Downloader(**init_args)
 
 
-def test_downloader_initialization_pre_suffixed_output_path(basic_args: dict) -> None:
+def test_downloader_initialization_pre_suffixed_output_path(init_args: dict) -> None:
     """Test that passing an output path already ending in the model name is handled correctly.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    pre_suffixed = basic_args["output_path"] / "R2"
-    basic_args["output_path"] = pre_suffixed
-    downloader = Barra2Downloader(**basic_args)
+    pre_suffixed = init_args["output_path"] / "R2"
+    init_args["output_path"] = pre_suffixed
+    downloader = Barra2Downloader(**init_args)
     # Path should not be doubled to .../R2/R2
     assert downloader.output_path == pre_suffixed
 
@@ -170,31 +170,31 @@ def test_downloader_init_model_configs(
     ],
 )
 def test_initialization_validation_errors(
-    basic_args: dict,
+    init_args: dict,
     kwargs: dict,
     error_match: str,
 ) -> None:
     """Different failure paths for class initialization.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
         kwargs (dict): Arguments to override in the default args dict.
         error_match (str): Expected error message pattern.
     """
-    basic_args.update(kwargs)
+    init_args.update(kwargs)
 
     with pytest.raises(ValueError, match=error_match):
-        Barra2Downloader(**basic_args)
+        Barra2Downloader(**init_args)
 
 
-def test_invalid_years_are_filtered_out(basic_args: dict) -> None:
+def test_invalid_years_are_filtered_out(init_args: dict) -> None:
     """Years outside the valid range are silently filtered out, not raised.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    basic_args["years"] = [1800, 2020, 9999]
-    downloader = Barra2Downloader(**basic_args)
+    init_args["years"] = [1800, 2020, 9999]
+    downloader = Barra2Downloader(**init_args)
     assert downloader.years == [2020]
 
 
@@ -242,25 +242,25 @@ def test_downloader_initialization_optional_args(tmp_path: Path) -> None:
     ],
 )
 def test_checkpoint_resume_behavior(
-    basic_args: dict,
+    init_args: dict,
     resume: bool,
     exp_checkpoint: dict,
 ) -> None:
     """Happy and skip paths for checkpoint resume behavior.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
         resume (bool): Whether to resume from checkpoint.
         exp_checkpoint (dict): Expected checkpoint state after initialization.
     """
     checkpoint = {(2020, "01", "1.5m_temperature"): 1}
-    checkpoint_path = Path(basic_args["output_path"], "R2", "status.pickle")
+    checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
-    basic_args["resume"] = resume
-    downloader = Barra2Downloader(**basic_args)
+    init_args["resume"] = resume
+    downloader = Barra2Downloader(**init_args)
     assert downloader.checkpoint == exp_checkpoint
 
 
@@ -451,29 +451,29 @@ def test_temporal_res_in_opendap_url(tmp_path: Path) -> None:
 # ----------------------------------
 # Tests - Download data
 # ----------------------------------
-def test_dry_run_flag(basic_args: dict) -> None:
+def test_dry_run_flag(init_args: dict) -> None:
     """Test dry_run flag setting.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    basic_args["dry_run"] = True
-    dl_dry = Barra2Downloader(**basic_args)
+    init_args["dry_run"] = True
+    dl_dry = Barra2Downloader(**init_args)
     assert dl_dry.dry_run is True
 
-    basic_args["dry_run"] = False
-    dl_normal = Barra2Downloader(**basic_args)
+    init_args["dry_run"] = False
+    dl_normal = Barra2Downloader(**init_args)
     assert dl_normal.dry_run is False
 
 
-def test_dry_run_completes_without_error(basic_args: dict) -> None:
+def test_dry_run_completes_without_error(init_args: dict) -> None:
     """Test that a dry run workflow completes without errors.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    basic_args["dry_run"] = True
-    downloader = Barra2Downloader(**basic_args)
+    init_args["dry_run"] = True
+    downloader = Barra2Downloader(**init_args)
     downloader.download_data()
 
     # Dry run must not write to checkpoint
@@ -481,73 +481,73 @@ def test_dry_run_completes_without_error(basic_args: dict) -> None:
     assert not downloader.checkpoint_path.exists()
 
 
-def test_download_data_skips_completed(basic_args: dict) -> None:
+def test_download_data_skips_completed(init_args: dict) -> None:
     """Test that download_data skips tasks already in checkpoint.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
     # Save a fake checkpoint marking all tasks as done
     checkpoint = {
         (2020, "01", "1.5m_temperature"): 1,
         (2020, "01", "total_precipitation"): 1,
     }
-    checkpoint_path = Path(basic_args["output_path"], "R2", "status.pickle")
+    checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
-    basic_args["resume"] = True
-    downloader = Barra2Downloader(**basic_args)
+    init_args["resume"] = True
+    downloader = Barra2Downloader(**init_args)
 
     with patch.object(downloader, "_download_task") as mock_dl:
         downloader.download_data()
         mock_dl.assert_not_called()
 
 
-def test_download_data_calls_download_variable(basic_args: dict) -> None:
+def test_download_data_calls_download_variable(init_args: dict) -> None:
     """Test that download_data calls _download_variable for pending tasks.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    basic_args["variables"] = ["1.5m_temperature"]
-    downloader = Barra2Downloader(**basic_args)
+    init_args["variables"] = ["1.5m_temperature"]
+    downloader = Barra2Downloader(**init_args)
 
     with patch.object(downloader, "_download_task", return_value=1) as mock_dl:
         downloader.download_data()
         mock_dl.assert_called_once_with((2020, "01", "1.5m_temperature"))
 
 
-def test_download_data_calls_download_variable_for_invariant(basic_args: dict) -> None:
+def test_download_data_calls_download_variable_for_invariant(init_args: dict) -> None:
     """Test that download_data calls _download_variable with fx sentinels for invariants.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    basic_args["variables"] = ["orography"]
-    downloader = Barra2Downloader(**basic_args)
+    init_args["variables"] = ["orography"]
+    downloader = Barra2Downloader(**init_args)
 
     with patch.object(downloader, "_download_task", return_value=1) as mock_dl:
         downloader.download_data()
         mock_dl.assert_called_once_with(("fx", "fx", "orography"))
 
 
-def test_download_data_skips_completed_invariant(basic_args: dict) -> None:
+def test_download_data_skips_completed_invariant(init_args: dict) -> None:
     """Test that download_data skips an invariant already marked in the checkpoint.
 
     Args:
-        basic_args (dict): Initialization arguments for Barra2Downloader.
+        init_args (dict): Initialization arguments for Barra2Downloader.
     """
     checkpoint: dict = {("fx", "fx", "orography"): 1}
-    checkpoint_path = Path(basic_args["output_path"], "R2", "status.pickle")
+    checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 
-    basic_args["variables"] = ["orography"]
-    basic_args["resume"] = True
-    downloader = Barra2Downloader(**basic_args)
+    init_args["variables"] = ["orography"]
+    init_args["resume"] = True
+    downloader = Barra2Downloader(**init_args)
 
     with patch.object(downloader, "_download_task") as mock_dl:
         downloader.download_data()
