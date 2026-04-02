@@ -54,7 +54,9 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             ConnectionError: If the base URLs aren't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self._download_lock = threading.Lock()
         self._check_connection(
             lambda: requests.head(URL_BASE_NEW, timeout=10), "IESO (new)"
@@ -97,11 +99,6 @@ class IesoDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         if task.year < 2019 or (task.year == 2019 and task.month <= 4):
             df = self._get_from_old_source(task)
         else:

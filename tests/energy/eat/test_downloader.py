@@ -10,7 +10,7 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.eat import EatDownloader
-from rbc.energy.eat.downloader import EXPECTED_COLS, MIN_YEAR
+from rbc.energy.eat.downloader import EXPECTED_COLS
 from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
 
@@ -25,7 +25,7 @@ def init_args(tmp_path: Path) -> dict:
         tmp_path (Path): Path to the temporary directory.
 
     Returns:
-        dict: Initialisation arguments.
+        dict: initialization arguments.
     """
     return {
         "output_path": tmp_path,
@@ -192,20 +192,6 @@ def test_get_task_data(downloader: EatDownloader, task: DownloadTask) -> None:
     assert df.iloc[0]["site_code"] == "mock_value"
     assert df.iloc[0]["tp1"] == "10"
     assert mock_load.call_count == 1
-
-
-def test_get_task_data_no_data_for_old_year(downloader: EatDownloader) -> None:
-    """Failure path for "_get_task_data" method when a task before MIN_YEAR is provided.
-
-    Args:
-        downloader (EatDownloader): Instance of EatDownloader class.
-    """
-    old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
-    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
-
-    with patch("rbc.energy.eat.downloader.load_df_from_file", return_value=mock_df):
-        with pytest.raises(MissingDataError, match="No energy data for year"):
-            downloader._get_task_data(old_year_task)
 
 
 def test_get_task_data_no_generation_data(

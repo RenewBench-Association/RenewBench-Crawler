@@ -74,7 +74,9 @@ class EpiasDownloader(EnergyDownloader):
         Raises:
             InvalidError: If login credentials are incorrect.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
 
         try:
             self.eptr = EPTR2(username=username, password=password)
@@ -107,11 +109,6 @@ class EpiasDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         # get power-plants   # ['id', 'name', 'eic', 'shortName']
         start = task.date
         end = (task.dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")

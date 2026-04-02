@@ -14,7 +14,7 @@ from entsoe.query.decorators import ServiceUnavailableError
 from entsoe.utils import add_timestamps, extract_records
 from loguru import logger
 
-from rbc.energy.entsoe.mappings import ACTIVE_ZONES, ACTIVE_ZONES_METADATA
+from rbc.energy.entsoe.mappings import ACTIVE_ZONES, ACTIVE_ZONES_METADATA, MIN_YEAR
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
@@ -66,7 +66,9 @@ class EntsoeDownloader(EnergyDownloader):
         Raises:
             InvalidError: If bidding zone is unsupported or token is invalid.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self.bidding_zones = list(bidding_zones)
 
         for bz in self.bidding_zones:

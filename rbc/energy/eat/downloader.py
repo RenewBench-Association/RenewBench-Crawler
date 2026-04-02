@@ -57,7 +57,9 @@ class EatDownloader(EnergyDownloader):
         Raises:
             ConnectionError: If the base URL isn't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self._check_connection(lambda: requests.head(URL_BASE, timeout=10), "EAT")
 
         logger.info(f"EAT Downloader initialized for:\n- years:\t\t{years}")
@@ -92,11 +94,6 @@ class EatDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         url = f"{URL_BASE}/{task.year}{str(task.month).zfill(2)}_Generation_MD.csv"
         df = load_df_from_file(url, index_col=False)
 

@@ -12,7 +12,6 @@ from requests import exceptions
 from rbc.energy.ieso import IesoDownloader
 from rbc.energy.ieso.downloader import (
     EXPECTED_COLS,
-    MIN_YEAR,
     URL_BASE_NEW,
     URL_BASE_OLD,
 )
@@ -30,7 +29,7 @@ def init_args(tmp_path: Path) -> dict:
         tmp_path (Path): Path to the temporary directory.
 
     Returns:
-        dict: Initialisation arguments.
+        dict: initialization arguments.
     """
     return {
         "output_path": tmp_path,
@@ -213,21 +212,6 @@ def test_get_task_data(
     assert df.iloc[0]["Hour 1"] == "10"
     assert mock_old.call_count == expect_old
     assert mock_new.call_count == expect_new
-
-
-def test_get_task_data_no_data_for_old_year(downloader: IesoDownloader) -> None:
-    """Failure path for "_get_task_data" method when a task before MIN_YEAR is provided.
-
-    Args:
-        downloader (IesoDownloader): Instance of IesoDownloader class.
-    """
-    old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
-    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
-
-    with patch.object(downloader, "_get_from_old_source", return_value=mock_df):
-        with patch.object(downloader, "_get_from_new_source", return_value=mock_df):
-            with pytest.raises(MissingDataError, match="No energy data for year"):
-                downloader._get_task_data(old_year_task)
 
 
 def test_get_task_data_no_generation_data(

@@ -63,7 +63,9 @@ class EiaDownloader(EnergyDownloader):
         Raises:
             InvalidError: If token is invalid or basic API call fails.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self.token = token
         self._check_connection(
             lambda: requests.get(URL_ROOT, params={"api_key": self.token}, timeout=10),
@@ -108,11 +110,6 @@ class EiaDownloader(EnergyDownloader):
                 relevant columns to be missed (this will cause the entire run to be killed).
             MissingDataError: If the loaded dataframe is empty.
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         start = task.dt.strftime("%Y-%m-%dT00")
         end = pd.Period((task.dt + pd.Timedelta(days=1)), freq="D").strftime(
             "%Y-%m-%dT00"

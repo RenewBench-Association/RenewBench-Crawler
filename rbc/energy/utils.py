@@ -170,32 +170,52 @@ class EnergyDownloader(ABC):
     Attributes:
         RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
         output_path (Path): Path to the output directory.
-        years (list[int]): List of years to get data for.
         resume (bool, optional): Whether to resume from a previous download (True) or
             start from scratch (False). Defaults to True.
         _lock (threading.Lock): Threading lock to ensure thread-safe checkpoint updates.
         checkpoint_path (Path): Path to the checkpoint file for resuming.
         checkpoint (dict): Dict of 0 and 1 values for resuming.
+        today (pd.Timestamp): Timestamp for today's date.
+        years (list[int]): List of years to get data for.
     """
 
     RETRY_ERRORS = RETRY_ERRORS
 
-    def __init__(self, output_path: Path, years: list[int], resume: bool = True):
+    def __init__(
+        self,
+        output_path: Path,
+        years: list[int],
+        start_year: int | None = None,
+        resume: bool = True,
+    ) -> None:
         """Initializes the instance.
 
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
+            start_year (int | None): Earliest valid year for this data source. If provided,
+                years before this value are silently filtered out and a warning is logged.
             resume (bool, optional): Whether to resume from a previous download (True)
                 or start from scratch (False). Defaults to True.
         """
         self.output_path = output_path
-        self.years = years
         self.resume = resume
         self._lock = threading.Lock()
-
         self.checkpoint_path = Path(self.output_path, "status.pickle")
         self.checkpoint = self._load_checkpoint()
+        self.today = pd.Timestamp.now()
+
+        if start_year is not None:
+            filtered_years = [y for y in years if start_year <= y <= self.today.year]
+            invalid_years = [y for y in years if y not in filtered_years]
+            if invalid_years:
+                logger.info(
+                    f"Filtering out {len(invalid_years)} year(s) outside the valid range "
+                    f"[{start_year}, {self.today.year}]: {invalid_years}"
+                )
+            years = filtered_years
+
+        self.years = years
 
     def _threading_wrapper(self, task: DownloadTask) -> None:
         """Thread-safe wrapper for one download task (download and checkpoint reading/saving).
@@ -421,9 +441,9 @@ class EnergyDownloader(ABC):
         Returns:
             list[str]: List of all valid dates, formatted as YYYY-MM-DD.
         """
-        yesterday = (pd.Timestamp.now() - pd.Timedelta(days=1)).normalize()
-
+        yesterday = (self.today - pd.Timedelta(days=1)).normalize()
         all_dates = []
+
         for year in self.years:
             year_start = pd.Timestamp(f"{year}-01-01")
             year_end = pd.Timestamp(f"{year}-12-31")
@@ -440,7 +460,9 @@ class EnergyDownloader(ABC):
             )
 
         if not all_dates:
-            raise InvalidError(f"Provided years '{self.years}' lie in the future!")
+            raise InvalidError(
+                f"No valid dates for year(s) {self.years} (only up to {yesterday.date()})."
+            )
 
         return all_dates
 

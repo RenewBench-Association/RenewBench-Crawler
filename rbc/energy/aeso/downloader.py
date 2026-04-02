@@ -78,7 +78,9 @@ class AesoDownloader(EnergyDownloader):
             InvalidError: If provided temporal_resolutions are invalid (not 1h &/ 5min).
             ConnectionError: If the AESO box endpoint isn't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self.temporal_resolutions = temporal_resolutions
 
         invalid_t_res = set(temporal_resolutions) - set(FOLDER_ID_DICT.keys())

@@ -50,11 +50,12 @@ def init_args(tmp_path: Path) -> dict:
         tmp_path (Path): Path to the temporary directory.
 
     Returns:
-        dict: Initialisation arguments.
+        dict: initialization arguments.
     """
     return {
         "output_path": tmp_path,
         "years": [2020],
+        "start_year": 2015,
     }
 
 
@@ -68,9 +69,7 @@ def downloader(init_args: dict) -> EnergyDownloader:
     Returns:
         EnergyDownloader: Instance of the mock EnergyDownloader child class.
     """
-    return MockDownloader(
-        output_path=init_args["output_path"], years=init_args["years"]
-    )
+    return MockDownloader(**init_args)
 
 
 # ----------------------------------
@@ -83,10 +82,25 @@ def test_initialization(downloader: EnergyDownloader, init_args: dict) -> None:
         downloader (EnergyDownloader): Instance of EnergyDownloader class.
         init_args (dict): Arguments used to initialize an EnergyDownloader instance.
     """
-    assert downloader.years == init_args["years"]
     assert downloader.output_path == init_args["output_path"]
     assert downloader.checkpoint_path == Path(init_args["output_path"], "status.pickle")
     assert downloader.checkpoint == {}
+    assert downloader.years == init_args["years"]
+
+
+def test_initialization_filter_invalid_years(tmp_path: Path) -> None:
+    """Happy path for EnergyDownloader initialization for year filtering.
+
+    Args:
+        tmp_path (Path): Path to temporary directory.
+    """
+    current_year = pd.Timestamp.now().year
+    min_year = current_year - 1
+    years = [min_year - 1, min_year, current_year, current_year + 1]
+
+    downloader = MockDownloader(output_path=tmp_path, years=years, start_year=min_year)
+
+    assert downloader.years == [min_year, current_year]
 
 
 @pytest.mark.parametrize(
@@ -366,7 +380,7 @@ def test_get_date_list_current_year(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    with patch("pandas.Timestamp.now", return_value=pd.Timestamp("2025-02-01")):
+    with patch.object(downloader, "today", pd.Timestamp("2025-02-01")):
         downloader.years = [2025]
         dates = downloader._get_date_list()
 
@@ -380,9 +394,9 @@ def test_get_date_list_future_years(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    downloader.years = [pd.Timestamp.now().year + 1]
+    downloader.years = [downloader.today.year + 1]
 
-    with pytest.raises(InvalidError, match="lie in the future"):
+    with pytest.raises(InvalidError, match="No valid dates for year"):
         downloader._get_date_list()
 
 
@@ -392,7 +406,7 @@ def test_get_month_list_current_year(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    with patch("pandas.Timestamp.now", return_value=pd.Timestamp("2025-02-01")):
+    with patch.object(downloader, "today", pd.Timestamp("2025-02-01")):
         downloader.years = [2025]
         months = downloader._get_month_list()
 
@@ -406,7 +420,7 @@ def test_get_year_list_current_year(downloader: MockDownloader) -> None:
     Args:
         downloader (MockDownloader): Instance of the MockDownloader class.
     """
-    with patch("pandas.Timestamp.now", return_value=pd.Timestamp("2025-02-01")):
+    with patch.object(downloader, "today", pd.Timestamp("2025-02-01")):
         downloader.years = [2025]
         years = downloader._get_year_list()
 
@@ -421,8 +435,8 @@ def test_get_year_list_current_year(downloader: MockDownloader) -> None:
     "tres, bz",
     [(None, None), ("5min", None), (None, "ZONE_A"), ("5min", "ZONE_A")],
 )
-def test_downloadtask_initialise(tres: str | None, bz: str | None) -> None:
-    """Happy path for initialising a DownloadTask instance.
+def test_downloadtask_initialize(tres: str | None, bz: str | None) -> None:
+    """Happy path for initializing a DownloadTask instance.
 
     Args:
         tres (str): Valid temporal resolution.
@@ -453,8 +467,8 @@ def test_downloadtask_initialise(tres: str | None, bz: str | None) -> None:
 
 
 @pytest.mark.parametrize("invalid_date", ["20200101", "invalid", "", "2020-02-31"])
-def test_downloadtask_initialise_with_invalid_date(invalid_date: str) -> None:
-    """Failure path for initialising a DownloadTask instance.
+def test_downloadtask_initialize_with_invalid_date(invalid_date: str) -> None:
+    """Failure path for initializing a DownloadTask instance.
 
     Args:
         invalid_date (str): Invalid date.
@@ -464,8 +478,8 @@ def test_downloadtask_initialise_with_invalid_date(invalid_date: str) -> None:
 
 
 @pytest.mark.parametrize("invalid_tres", ["5days", "invalid", ""])
-def test_downloadtask_initialise_with_invalid_tres(invalid_tres: str) -> None:
-    """Failure path for initialising a DownloadTask instance.
+def test_downloadtask_initialize_with_invalid_tres(invalid_tres: str) -> None:
+    """Failure path for initializing a DownloadTask instance.
 
     Args:
         invalid_tres (str): Invalid temporal resolution.

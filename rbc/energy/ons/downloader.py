@@ -64,7 +64,9 @@ class OnsDownloader(EnergyDownloader):
         Raises:
             ConnectionError: If the base URL isn't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self._download_lock = threading.Lock()
         self._check_connection(lambda: requests.head(URL_BASE, timeout=10), "ONS")
 
@@ -100,11 +102,6 @@ class OnsDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         if task.year < 2022:
             df = self._get_from_yearly_csv(task)
         else:
