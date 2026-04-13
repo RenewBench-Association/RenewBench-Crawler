@@ -238,3 +238,15 @@ VARIABLE_TO_MARS_PARAM = {
     "specific_cloud_liquid_water_content": "clwc",
     "ozone_mass_mixing_ratio": "o3",
 }
+
+MODEL_CONFIG = {
+    "url": "https://cds.climate.copernicus.eu/api",
+    "mars_class": "ea",
+    "mars_stream": "oper",
+    "mars_type": "an",
+    "mars_expver": "1",
+    "levtype_single": "sfc",
+    "levtype_pressure": "pl",
+    "levtype_model": "ml",
+    "start_year": "1940",
+}
