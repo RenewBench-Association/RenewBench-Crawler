@@ -1,0 +1,50 @@
+Traceback (most recent call last):
+  File "C:\Users\xt6024\Desktop\renewBench\geo\run.py", line 83, in <module>
+    located_data[['lat', 'lon']] = located_data[['lat', 'lon']].combine_first(osm_locations[['lat', 'lon']])
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 4304, in __setitem__
+    self._setitem_array(key, value)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 4348, in _setitem_array
+    self[k1] = value[k2]
+    ~~~~^^^^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 4316, in __setitem__
+    self._set_item(key, value)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 4529, in _set_item
+    value, refs = self._sanitize_column(value)
+                  ~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 5270, in _sanitize_column
+    return _reindex_for_setitem(value, self.index)
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 12699, in _reindex_for_setitem
+    raise err
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py", line 12694, in _reindex_for_setitem
+    reindexed_value = value.reindex(index)._values
+                      ~~~~~~~~~~~~~^^^^^^^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\series.py", line 5164, in reindex
+    return super().reindex(
+           ~~~~~~~~~~~~~~~^
+        index=index,
+        ^^^^^^^^^^^^
+    ...<5 lines>...
+        tolerance=tolerance,
+        ^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\generic.py", line 5629, in reindex
+    return self._reindex_axes(
+           ~~~~~~~~~~~~~~~~~~^
+        axes, level, limit, tolerance, method, fill_value, copy
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ).__finalize__(self, method="reindex")
+    ^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\generic.py", line 5652, in _reindex_axes
+    new_index, indexer = ax.reindex(
+                         ~~~~~~~~~~^
+        labels, level=level, limit=limit, tolerance=tolerance, method=method
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\xt6024\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\indexes\base.py", line 4436, in reindex
+    raise ValueError("cannot reindex on an axis with duplicate labels")
+ValueError: cannot reindex on an axis with duplicate labels

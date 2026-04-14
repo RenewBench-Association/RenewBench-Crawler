@@ -1,0 +1,33 @@
+Attempting to download from: https://data.open-power-system-data.org/conventional_power_plants/2020-10-01/conventional_power_plants_EU.csv
+Download successful. Now parsing CSV data...
+Successfully loaded CSV into a DataFrame.
+Columns found: ['name', 'company', 'street', 'postcode', 'city', 'country', 'capacity', 'energy_source', 'technology', 'chp', 'commissioned', 'type', 'lat', 'lon', 'eic_code', 'energy_source_level_1', 'energy_source_level_2', 'energy_source_level_3', 'additional_info', 'comment', 'source']
+Total rows: 6093
+Downloading JRC database...
+--- Master Map Statistics ---
+Units from JRC: 4715
+Units from OPSD: 686
+Total Unique Units in Master Map: 3461
+number of located rows is : 5481
+Number of unlocated rows is: 2649
+Downloading OSM data for DE
+Querying OSM for (ISO: DE)...
+Downloading OSM data for ES
+Querying OSM for (ISO: ES)...
+Error fetching data for ES: 504 Server Error: Gateway Timeout for url: https://overpass-api.de/api/interpreter?data=%0A++++%5Bout%3Ajson%5D%5Btimeout%3A300%5D%3B%0A++++area%5B%22ISO3166-1%22%3D%22ES%22%5D%5B%22admin_level%22%3D%222%22%5D-%3E.searchArea%3B%0A++++%28%0A++++++node%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++way%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++relation%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++%29%3B%0A++++out+center%3B%0A++++
+Downloading OSM data for FR
+Querying OSM for (ISO: FR)...
+Downloading OSM data for GR
+Querying OSM for (ISO: GR)...
+Error fetching data for GR: 504 Server Error: Gateway Timeout for url: https://overpass-api.de/api/interpreter?data=%0A++++%5Bout%3Ajson%5D%5Btimeout%3A300%5D%3B%0A++++area%5B%22ISO3166-1%22%3D%22GR%22%5D%5B%22admin_level%22%3D%222%22%5D-%3E.searchArea%3B%0A++++%28%0A++++++node%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++way%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++relation%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++%29%3B%0A++++out+center%3B%0A++++
+Downloading OSM data for IE
+Querying OSM for (ISO: IE)...
+Downloading OSM data for IT
+Querying OSM for (ISO: IT)...
+Error fetching data for IT: 429 Client Error: Too Many Requests for url: https://overpass-api.de/api/interpreter?data=%0A++++%5Bout%3Ajson%5D%5Btimeout%3A300%5D%3B%0A++++area%5B%22ISO3166-1%22%3D%22IT%22%5D%5B%22admin_level%22%3D%222%22%5D-%3E.searchArea%3B%0A++++%28%0A++++++node%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++way%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++relation%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++%29%3B%0A++++out+center%3B%0A++++
+Downloading OSM data for PL
+Querying OSM for (ISO: PL)...
+Error fetching data for PL: 429 Client Error: Too Many Requests for url: https://overpass-api.de/api/interpreter?data=%0A++++%5Bout%3Ajson%5D%5Btimeout%3A300%5D%3B%0A++++area%5B%22ISO3166-1%22%3D%22PL%22%5D%5B%22admin_level%22%3D%222%22%5D-%3E.searchArea%3B%0A++++%28%0A++++++node%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++way%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++relation%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++%29%3B%0A++++out+center%3B%0A++++
+Downloading OSM data for RO
+Querying OSM for (ISO: RO)...
+Error fetching data for RO: 429 Client Error: Too Many Requests for url: https://overpass-api.de/api/interpreter?data=%0A++++%5Bout%3Ajson%5D%5Btimeout%3A300%5D%3B%0A++++area%5B%22ISO3166-1%22%3D%22RO%22%5D%5B%22admin_level%22%3D%222%22%5D-%3E.searchArea%3B%0A++++%28%0A++++++node%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++way%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++++relation%5B%22power%22%3D%22plant%22%5D%28area.searchArea%29%3B%0A++++%29%3B%0A++++out+center%3B%0A++++
