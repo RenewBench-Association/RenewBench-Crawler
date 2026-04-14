@@ -158,8 +158,9 @@ class OnsDownloader(EnergyDownloader):
         df_month = df_year[month_mask].copy()
         return df_month
 
-    @lru_cache(maxsize=1)
-    def _load_yearly_csv(self, url: str) -> pd.DataFrame:
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def _load_yearly_csv(url: str) -> pd.DataFrame:
         """Downloads the yearly CSV and ensures datetime column has datetime-like values.
 
         Args:

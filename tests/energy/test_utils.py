@@ -303,7 +303,11 @@ class TestEnergyDownloaderConnection:
         [exceptions.ConnectionError(), exceptions.Timeout()],
     )
     def test_check_connection_network_error(self, side_effect) -> None:
-        """Failure path for _check_connection when endpoint is unreachable (NetworkError)."""
+        """Failure path for _check_connection when endpoint is unreachable (NetworkError).
+
+        Args:
+            side_effect (Exception): Exception to raise on NetworkError.
+        """
         mock_func = MagicMock(side_effect=side_effect)
 
         with pytest.raises(ConnectionError, match="unreachable"):
