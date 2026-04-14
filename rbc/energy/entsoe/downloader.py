@@ -14,7 +14,7 @@ from entsoe.query.decorators import ServiceUnavailableError
 from entsoe.utils import add_timestamps, extract_records
 from loguru import logger
 
-from rbc.energy.entsoe.mappings import ACTIVE_ZONES, ACTIVE_ZONES_METADATA
+from rbc.energy.entsoe.mappings import ACTIVE_ZONES, ACTIVE_ZONES_METADATA, MIN_YEAR
 from rbc.energy.utils import (
     WORKERS,
     DataStructureError,
@@ -66,24 +66,26 @@ class EntsoeDownloader(EnergyDownloader):
         Raises:
             InvalidError: If bidding zone is unsupported or token is invalid.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self.bidding_zones = list(bidding_zones)
 
         for bz in self.bidding_zones:
             if bz not in ACTIVE_ZONES:
                 raise InvalidError(f"Bidding zone '{bz}' is not supported.")
 
-        logger.info(
-            f"Entsoe-E Downloader initialized for:"
-            f"\n- bidding zones:\t{bidding_zones}"
-            f"\n- years:\t\t{years}"
-        )
-
         set_config(security_token=token)
         if get_config().security_token is None:
             raise InvalidError(
                 f"Entsoe-apy failed to successfully configure token '{token}'!"
             )
+
+        logger.info(
+            f"Entsoe-E Downloader initialized for:"
+            f"\n- bidding zones:\t{bidding_zones}"
+            f"\n- years:\t\t{years}"
+        )
 
     def download_data(self) -> None:
         """Parse data for all given years and zones from ENTSO-E Platform and save to CSV."""

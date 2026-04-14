@@ -29,7 +29,7 @@ def init_args(tmp_path: Path) -> dict:
         tmp_path (Path): Path to the temporary directory.
 
     Returns:
-        dict: Initialisation arguments.
+        dict: initialization arguments.
     """
     return {
         "token": "fake_token",
@@ -105,7 +105,7 @@ def test_downloader_initialization(init_args: dict, bz: str, valid: bool) -> Non
         assert downloader.checkpoint == {}
 
 
-def test_downloader_initialization_invalid_config(init_args: dict) -> None:
+def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
     """Failure path for class initialization with invalid API configuration.
 
     Args:

@@ -149,6 +149,7 @@ venv.bak/
 
 # General stuff
 outputs*/
+.DS_Store
 
 # Spyder project settings
 .spyderproject

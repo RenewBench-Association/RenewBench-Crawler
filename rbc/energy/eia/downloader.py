@@ -18,13 +18,12 @@ from rbc.energy.utils import (
     DataStructureError,
     DownloadTask,
     EnergyDownloader,
-    InvalidError,
     MissingDataError,
     RateLimitError,
 )
 
 URL_ROOT = "https://api.eia.gov/v2/"
-URL = "https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
+URL_BASE = f"{URL_ROOT}electricity/rto/fuel-type-data/data/"
 
 MIN_YEAR = 2019
 EXPECTED_COLS = [
@@ -64,22 +63,18 @@ class EiaDownloader(EnergyDownloader):
         Raises:
             InvalidError: If token is invalid or basic API call fails.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self.token = token
+        self._check_connection(
+            lambda: requests.get(URL_ROOT, params={"api_key": self.token}, timeout=10),
+            "EIA",
+        )
 
         logger.info(f"EIA Downloader initialized for:\n- years:\t\t{years}")
 
-        try:
-            response = requests.get(URL_ROOT, params={"api_key": self.token})
-            if response.status_code != 200:
-                logger.info(f"Failed: {response.json().get('error', {}).get('code')}")
-                raise InvalidError(f"Provided API token {token} incorrect.")
-
-        except Exception as e:
-            logger.info(f"Failed: {e}")
-            raise InvalidError(f"Provided API token {token} incorrect.")
-
-    def download_data(self):
+    def download_data(self) -> None:
         """Parse data for all given years from EIA site and save to CSV."""
         tasks = [DownloadTask(date=d) for d in self._get_date_list()]
 
@@ -115,11 +110,6 @@ class EiaDownloader(EnergyDownloader):
                 relevant columns to be missed (this will cause the entire run to be killed).
             MissingDataError: If the loaded dataframe is empty.
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         start = task.dt.strftime("%Y-%m-%dT00")
         end = pd.Period((task.dt + pd.Timedelta(days=1)), freq="D").strftime(
             "%Y-%m-%dT00"
@@ -142,7 +132,7 @@ class EiaDownloader(EnergyDownloader):
 
         while True:
             try:
-                response = requests.get(URL, params=params, timeout=30)
+                response = requests.get(URL_BASE, params=params, timeout=30)
             except (exceptions.ConnectionError, exceptions.Timeout) as e:
                 raise type(e)(f"API request failed: {e}") from e  # dynamically reraise
 
@@ -177,7 +167,7 @@ class EiaDownloader(EnergyDownloader):
             except (requests.exceptions.JSONDecodeError, KeyError, ValueError) as e:
                 raise DataStructureError(
                     f"EIA structure change detected for '{task.identifier}'! "
-                    f"Failed parsing of data from {URL} with parameters {params}: "
+                    f"Failed parsing of data from {URL_BASE} with parameters {params}: "
                     f"{type(e).__name__}!"
                 )
 

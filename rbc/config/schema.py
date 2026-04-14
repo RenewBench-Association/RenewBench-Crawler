@@ -194,6 +194,18 @@ class IesoConfig(PathValidation, BaseModel):
     paths: Paths
 
 
+class OnsConfig(PathValidation, BaseModel):
+    """Configuration schema for the ONS energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["ons"] = "ons"
+    paths: Paths
+
+
 # ----------------------------------
 # Per-source schemas - WEATHER
 # ----------------------------------
@@ -257,6 +269,7 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "entsoe": EntsoeConfig,
     "epias": EpiasConfig,
     "ieso": IesoConfig,
+    "ons": OnsConfig,
     "barra2": Barra2Config,
     "era5": Era5Config,
     "icon_dream_eu": IconDreamEuConfig,

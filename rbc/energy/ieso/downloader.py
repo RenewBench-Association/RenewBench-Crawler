@@ -21,8 +21,9 @@ from rbc.energy.utils import (
     load_df_from_file,
 )
 
-URL_NEW_BASE = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
-URL_OLD_BASE = "https://www.ieso.ca"
+URL_BASE_NEW = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
+URL_BASE_OLD = "https://www.ieso.ca"
+
 MIN_YEAR = 2010
 EXPECTED_COLS = ["Delivery Date", "Generator", "Fuel Type", "Measurement"] + [
     f"Hour {i}" for i in range(1, 25)
@@ -53,18 +54,18 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             ConnectionError: If the base URLs aren't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self._download_lock = threading.Lock()
+        self._check_connection(
+            lambda: requests.head(URL_BASE_NEW, timeout=10), "IESO (new)"
+        )
+        self._check_connection(
+            lambda: requests.head(URL_BASE_OLD, timeout=10), "IESO (old)"
+        )
 
         logger.info(f"IESO Downloader initialized for:\n- years:\t\t{years}")
-
-        try:
-            for url in [URL_NEW_BASE, URL_OLD_BASE]:
-                requests.head(url, timeout=10).raise_for_status()
-
-        except Exception as e:
-            logger.error("Initialization IESO connectivity check failed!")
-            raise ConnectionError(f"One or more IESO endpoints are unreachable: {e}")
 
     def download_data(self) -> None:
         """Parse data for all given years from IESO site and save to CSV."""
@@ -98,15 +99,10 @@ class IesoDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         if task.year < 2019 or (task.year == 2019 and task.month <= 4):
-            df = self._get_from_old_source(task.year, task.month)
+            df = self._get_from_old_source(task)
         else:
-            df = self._get_from_new_source(task.year, task.month)
+            df = self._get_from_new_source(task)
 
         if df.empty:
             raise MissingDataError(
@@ -123,21 +119,19 @@ class IesoDownloader(EnergyDownloader):
         return df
 
     @staticmethod
-    def _get_from_new_source(year: int, month: int) -> pd.DataFrame:
+    def _get_from_new_source(task: DownloadTask) -> pd.DataFrame:
         """Extract data from post-04-2019 (new) source for a given month.
 
         Args:
-            year (int): Year to extract data for.
-            month (int): Month to extract data for.
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
 
         Raises:
-            RETRY_ERRORS / InvalidError: If loading data from the URL fails.
             DataStructureError: If downloaded data does not have the 'Measurement' column.
         """
-        url = f"{URL_NEW_BASE}/PUB_GenOutputCapabilityMonth_{year}{str(month).zfill(2)}.csv"
+        url = f"{URL_BASE_NEW}/PUB_GenOutputCapabilityMonth_{task.year}{str(task.month).zfill(2)}.csv"
         df = load_df_from_file(url, header=3, index_col=False)
 
         try:
@@ -149,29 +143,28 @@ class IesoDownloader(EnergyDownloader):
             )
         return df
 
-    def _get_from_old_source(self, year: int, month: int) -> pd.DataFrame:
+    def _get_from_old_source(self, task: DownloadTask) -> pd.DataFrame:
         """Extract data from pre-04-2019 (old) source for a given month using the year's Excel.
 
         Args:
-            year (int): Year to extract data for.
-            month (int): Month to extract data for.
+            task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
 
         Raises:
-            DataStructureError: If downloaded data does not have the 'Measurement' column.
+            DataStructureError: If 'Delivery Date' column data is not datetime-like.
         """
-        url = f"{URL_OLD_BASE}/-/media/Files/IESO/Power-Data/data-directory/GOC-{year}"
-        url += "-Jan-April.xlsx" if year == 2019 else ".xlsx"
+        url = f"{URL_BASE_OLD}/-/media/Files/IESO/Power-Data/data-directory/GOC-{task.year}"
+        url += "-Jan-April.xlsx" if task.year == 2019 else ".xlsx"
 
         with self._download_lock:
             df_year = self._load_yearly_excel(url)
 
         # filter for the specific month
         try:
-            month_mask = (df_year["Delivery Date"].dt.year == year) & (
-                df_year["Delivery Date"].dt.month == month
+            month_mask = (df_year["Delivery Date"].dt.year == task.year) & (
+                df_year["Delivery Date"].dt.month == task.month
             )
         except AttributeError as e:
             raise DataStructureError(
@@ -193,7 +186,6 @@ class IesoDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for the desired year.
 
         Raises:
-            RETRY_ERRORS / InvalidError: If loading data from the URL fails.
             DataStructureError: If downloaded data does not have capacity values.
         """
         # 1. get generation ('Output') data and standardize
@@ -231,7 +223,7 @@ class IesoDownloader(EnergyDownloader):
     # --------------------------------------------
     @staticmethod
     def standardize_old_data(df: pd.DataFrame, measurement_type: str) -> pd.DataFrame:
-        """Standardize old (pre-2019) dataframes to match the newer CSV format.
+        """Standardize old dataframes (before 04-2019) to match the newer CSV format.
 
         From:   DATE | HOUR | Unnamed: 2 | Generator 1 | Generator 2 | ...
         → to:   Delivery Date | Generator | Fuel Type | Measurement | Hour 1 | Hour 2 | ...

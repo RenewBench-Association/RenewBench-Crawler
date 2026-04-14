@@ -20,6 +20,7 @@ from rbc.energy.utils import (
 )
 
 URL_BASE = "https://emidatasets.blob.core.windows.net/publicdata/Datasets/Wholesale/Generation/Generation_MD"
+
 MIN_YEAR = 1997
 EXPECTED_COLS = [
     c.lower()
@@ -33,7 +34,7 @@ EXPECTED_COLS = [
         "Trading_date",
     ]
     + [f"TP{i}" for i in range(1, 51)]
-]  # make lower case because column capitalisation changes across the years in EAT data
+]  # make lower case because column capitalization changes across the years in EAT data
 
 
 class EatDownloader(EnergyDownloader):
@@ -54,17 +55,14 @@ class EatDownloader(EnergyDownloader):
                 or start from scratch (False). Defaults to True.
 
         Raises:
-            ConnectionError: If the base URLs aren't reachable.
+            ConnectionError: If the base URL isn't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
+        self._check_connection(lambda: requests.head(URL_BASE, timeout=10), "EAT")
+
         logger.info(f"EAT Downloader initialized for:\n- years:\t\t{years}")
-
-        try:
-            requests.head(URL_BASE, timeout=10).raise_for_status()
-
-        except Exception as e:
-            logger.error("Initialization EAT connectivity check failed!")
-            raise ConnectionError(f"EAT endpoint is unreachable: {e}")
 
     def download_data(self) -> None:
         """Parse data for all given years from EAT site and save to CSV."""
@@ -96,11 +94,6 @@ class EatDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        if task.year < MIN_YEAR:
-            raise MissingDataError(
-                f"No energy data for year {task.year} (it's before {MIN_YEAR}). Skipping..."
-            )
-
         url = f"{URL_BASE}/{task.year}{str(task.month).zfill(2)}_Generation_MD.csv"
         df = load_df_from_file(url, index_col=False)
 

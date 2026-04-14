@@ -12,6 +12,7 @@ import urllib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import requests
@@ -159,37 +160,62 @@ class DownloadTask:
 
 
 class EnergyDownloader(ABC):
-    """Abstract base class for parallelized daily energy downloader classes.
+    """Abstract base class for parallelized energy downloader classes.
+
+    This class coordinates and parallelizes the energy data crawling task execution.
+    Subclasses must all overwrite the abstract `_get_task_data` method.
+    Error catching in downloading, checkpoint loading/saving, and common attributes are
+    handled here.
 
     Attributes:
         RETRY_ERRORS (tuple): Tuple of exceptions that may be raised when retrying calls.
         output_path (Path): Path to the output directory.
-        years (list[int]): List of years to get data for.
         resume (bool, optional): Whether to resume from a previous download (True) or
             start from scratch (False). Defaults to True.
         _lock (threading.Lock): Threading lock to ensure thread-safe checkpoint updates.
         checkpoint_path (Path): Path to the checkpoint file for resuming.
         checkpoint (dict): Dict of 0 and 1 values for resuming.
+        today (pd.Timestamp): Timestamp for today's date.
+        years (list[int]): List of years to get data for.
     """
 
     RETRY_ERRORS = RETRY_ERRORS
 
-    def __init__(self, output_path: Path, years: list[int], resume: bool = True):
+    def __init__(
+        self,
+        output_path: Path,
+        years: list[int],
+        start_year: int | None = None,
+        resume: bool = True,
+    ) -> None:
         """Initializes the instance.
 
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
+            start_year (int | None): Earliest valid year for this data source. If provided,
+                years before this value are silently filtered out and a warning is logged.
             resume (bool, optional): Whether to resume from a previous download (True)
                 or start from scratch (False). Defaults to True.
         """
         self.output_path = output_path
-        self.years = years
         self.resume = resume
         self._lock = threading.Lock()
-
         self.checkpoint_path = Path(self.output_path, "status.pickle")
         self.checkpoint = self._load_checkpoint()
+        self.today = pd.Timestamp.now()
+
+        if start_year is not None:
+            filtered_years = [y for y in years if start_year <= y <= self.today.year]
+            invalid_years = [y for y in years if y not in filtered_years]
+            if invalid_years:
+                logger.info(
+                    f"Filtering out {len(invalid_years)} year(s) outside the valid range "
+                    f"[{start_year}, {self.today.year}]: {invalid_years}"
+                )
+            years = filtered_years
+
+        self.years = years
 
     def _threading_wrapper(self, task: DownloadTask) -> None:
         """Thread-safe wrapper for one download task (download and checkpoint reading/saving).
@@ -305,24 +331,20 @@ class EnergyDownloader(ABC):
         """Load checkpoint from checkpoint path depending on resume logic.
 
         Returns:
-            dict: Loaded checkpoint.
+            dict: Loaded checkpoint or empty dict (if no checkpoint exists).
         """
         if self.resume and self.checkpoint_path.is_file():
-            logger.info(f"Loading checkpoint from '{self.checkpoint_path}'")
+            logger.info(f"Resuming from checkpoint: '{self.checkpoint_path}'")
 
             try:
                 with open(self.checkpoint_path, "rb") as f:
                     return pickle.load(f)
             except (EOFError, pickle.UnpicklingError):
-                logger.warning(
-                    f"Checkpoint '{self.checkpoint_path}' is corrupted. Starting fresh."
-                )
+                logger.warning("Checkpoint file is corrupted. Starting fresh.")
                 return {}
-        else:
-            logger.info(
-                "No checkpoint loading (first run or resume=False). Starting fresh."
-            )
-            return {}
+
+        logger.info("No checkpoint (first run or resume=False). Starting fresh.")
+        return {}
 
     def _save_checkpoint(self) -> None:
         """Save checkpoint safely (ensure abrupt terminations don't corrupt the file)."""
@@ -355,6 +377,46 @@ class EnergyDownloader(ABC):
     # General helper methods
     # --------------------------------------------
     @staticmethod
+    def _check_connection(
+        requests_func: Callable[[], requests.Response], source: str
+    ) -> None:
+        """Check API/URL connection to a remote endpoint with a generic wrapper using requests.
+
+        Args:
+            requests_func (Callable): Function to check the requests call response.
+            source (str): Name of the data source (for error messages).
+
+        Raises:
+            ConnectionError: If access to remote site failed or remote site is unreachable.
+        """
+        try:
+            response = requests_func()
+            response.raise_for_status()
+
+        except requests.exceptions.HTTPError as e:  # catch 4xx/5xx status codes
+            if response.content:
+                try:
+                    reason = (
+                        response.json().get("error", {}).get("code", "Unknown Error")
+                    )
+                except (requests.exceptions.JSONDecodeError, ValueError):
+                    reason = response.text[:100]  # fallback to raw text snippet
+                error_msg = f"status {response.status_code} ({reason})"
+            elif response.reason:
+                error_msg = f"status {response.status_code} ({response.reason})"
+            else:
+                error_msg = f"status {response.status_code} (Empty Response)"
+
+            logger.error(f"{source} API/URL request failed with {error_msg}")
+            raise ConnectionError(
+                f"{source} API/URL access failed with {error_msg}"
+            ) from e
+
+        except requests.exceptions.RequestException as e:  # catch connection/timeout/..
+            logger.error(f"{source} initialization connectivity check failed!")
+            raise ConnectionError(f"{source} API/URL unreachable: {e}") from e
+
+    @staticmethod
     def _get_status_code(e: Exception) -> int | None:
         """Extracts HTTP status code from various library exceptions.
 
@@ -379,9 +441,9 @@ class EnergyDownloader(ABC):
         Returns:
             list[str]: List of all valid dates, formatted as YYYY-MM-DD.
         """
-        yesterday = (pd.Timestamp.now() - pd.Timedelta(days=1)).normalize()
-
+        yesterday = (self.today - pd.Timedelta(days=1)).normalize()
         all_dates = []
+
         for year in self.years:
             year_start = pd.Timestamp(f"{year}-01-01")
             year_end = pd.Timestamp(f"{year}-12-31")
@@ -398,7 +460,9 @@ class EnergyDownloader(ABC):
             )
 
         if not all_dates:
-            raise InvalidError(f"Provided years '{self.years}' lie in the future!")
+            raise InvalidError(
+                f"No valid dates for year(s) {self.years} (only up to {yesterday.date()})."
+            )
 
         return all_dates
 
