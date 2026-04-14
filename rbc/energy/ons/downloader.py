@@ -112,7 +112,7 @@ class OnsDownloader(EnergyDownloader):
                 f"No energy data available for {task.year}-{task.month}. Skipping..."
             )
 
-        missing_cols = [c for c in EXPECTED_COLS_MAPPING.keys() if c not in df.columns]
+        missing_cols = [c for c in EXPECTED_COLS_MAPPING if c not in df.columns]
         if missing_cols:
             raise DataStructureError(
                 f"ONS file structure change detected for '{task.identifier}'! "
