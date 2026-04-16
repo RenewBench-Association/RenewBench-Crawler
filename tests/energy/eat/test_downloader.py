@@ -119,15 +119,18 @@ def test_downloader_initialization_invalid_access(init_args: dict) -> None:
 def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
+    If all monthly tasks are already marked as done in the checkpoint, the
+    downloader should not attempt any downloads.
+
     Args:
         init_args (dict): Arguments used to initialize an EatDownloader instance.
     """
     args = init_args.copy()
-    y = args["years"][0]
 
     # save a fake checkpoint file
     checkpoint = {
         DownloadTask(date=d, temporal_resolution="30min").identifier: 1
+        for y in args["years"]
         for d in pd.date_range(start=f"{y}-01", end=f"{y}-12", freq="MS")
         .strftime("%Y-%m")
         .tolist()

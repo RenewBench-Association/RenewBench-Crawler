@@ -121,16 +121,19 @@ def test_downloader_initialization_invalid_credentials(init_args: dict) -> None:
 def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
+    If all daily tasks are already marked as done in the checkpoint, the
+    downloader should not attempt any downloads.
+
     Args:
         init_args (dict): Arguments used to initialize an EntsoeDownloader instance.
     """
     args = init_args.copy()
 
     # save a fake checkpoint file
-    bz = args["bidding_zones"][0]
-    y = args["years"][0]
     checkpoint = {
         DownloadTask(date=d, bidding_zone=bz).identifier: 1
+        for bz in args["bidding_zones"]
+        for y in args["years"]
         for d in pd.date_range(start=f"{y}-01-01", end=f"{y}-12-31").strftime(
             "%Y-%m-%d"
         )
