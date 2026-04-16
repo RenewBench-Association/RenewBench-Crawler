@@ -92,6 +92,10 @@ class AdmeDownloader(EnergyDownloader):
         storing in yearly Excel files (old) to monthly CSV and Excel files (new).
         When older data is requested, the structure is changed to mirror the columns
         in the newer data and stored per month as well.
+        ADME follows an End-of-Interval timestamp convention, meaning values for an hour
+        are saved on the dot of the next hour (i.e. "01:00" = data from 0-1 AM, not 1-2 AM).
+        This means for each month, data starts with hour 1 of Day 1 and hour 0 of Day 1
+        of the next month (i.e. start = "01-01-2018 01:00", end = "01-02-2018 00:00").
 
         Args:
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
@@ -144,30 +148,8 @@ class AdmeDownloader(EnergyDownloader):
         url = f"{URL_BASE_NEW}anod={task.year}&mesd={month}&periodo=1&fuente=0&tipo=1"
         df = load_df_from_file(url, ".csv", delimiter=";", header=[0, 1])
 
-        # filter to exclude irrelevant timestamps (i.e. hour 0 of day 1 of next month)
-        try:
-            df = self._redefine_time_column(df)
-            df[TIME_COL] = pd.to_datetime(df[TIME_COL], dayfirst=True)
-            month_mask = (df[TIME_COL].dt.year == task.year) & (
-                df[TIME_COL].dt.month == task.month
-            )
-            df = df[month_mask].copy()
-
-        except KeyError:
-            raise DataStructureError(
-                f"ADME file structure change detected in new csv '{url}'! "
-                f"Missing datetime column 'Fecha'"
-            )
-        except (
-            ValueError,
-            AttributeError,
-        ) as e:  # if to_datetime raises DateParseError
-            raise DataStructureError(
-                f"ADME file structure change detected in new csv '{url}'! "
-                f"'Fecha' is no longer datetimelike: {e}"
-            )
-
-        # filter to exclude anything beyond the required columns
+        # filter to exclude anything beyond the required columns (i.e. imported energy)
+        df = self._redefine_time_column(df)
         cutoff = next(
             (i for i, c in enumerate(df.columns) if c[0] not in EXPECTED_COLS_MAPPING),
             None,
@@ -177,6 +159,9 @@ class AdmeDownloader(EnergyDownloader):
 
     def _get_from_old_source(self, task: DownloadTask) -> pd.DataFrame:
         """Extract data from pre-2019 (old) source for a given month using the year's Excel.
+
+        To ensure ADME's End-of-Interval timestamp convention is adhered to, specific
+        masking is implemented. This ensures monthly data is stored as previously described.
 
         Args:
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
@@ -192,18 +177,22 @@ class AdmeDownloader(EnergyDownloader):
         with self._download_lock:
             df_year = self._load_yearly_excel(url)
 
-        # filter for the specific month
-        try:
-            month_mask = (df_year[TIME_COL].dt.year == task.year) & (
-                df_year[TIME_COL].dt.month == task.month
-            )
-        except AttributeError as e:
-            raise DataStructureError(
-                f"ADME file structure change detected in old excel '{url}'! "
-                f"'Fecha' is no longer datetimelike: {e}"
-            )
-
+        # filter for the specific month (taking the End-of-Interval convention into account!)
+        next_month = pd.Period(task.date, freq="M") + 1
+        month_mask = (
+            (df_year[TIME_COL].dt.year == task.year)
+            & (df_year[TIME_COL].dt.month == task.month)
+            & (~((df_year[TIME_COL].dt.day == 1) & (df_year[TIME_COL].dt.hour == 0)))
+        ) | (
+            (df_year[TIME_COL].dt.year == next_month.year)
+            & (df_year[TIME_COL].dt.month == next_month.month)
+            & (df_year[TIME_COL].dt.day == 1)
+            & (df_year[TIME_COL].dt.hour == 0)
+        )
         df_month = df_year[month_mask].copy()
+
+        # revert to original time format to be consistent with source and new (post-2019 CSVs)
+        df_month[TIME_COL] = df_month[TIME_COL].dt.strftime("%d-%m-%Y %H:%M")
         return df_month
 
     @lru_cache(maxsize=None)
@@ -217,8 +206,9 @@ class AdmeDownloader(EnergyDownloader):
             pd.DataFrame: Dataframe for the desired year.
 
         Raises:
-            DataStructureError: If downloaded data does not have required sheets or sheet
-                loading does not work as expected.
+            DataStructureError: If downloaded data does not have all required sheets, sheet
+                loading does not work as expected, or the 'Fecha' column data is not
+                datetime-like.
         """
         # 1. load excel once to then extract relevant sheets
         xlsx_file = load_excel_from_file(url)
@@ -267,7 +257,14 @@ class AdmeDownloader(EnergyDownloader):
 
         # 4. ensure df structure is as required for _get_from_old_source processing
         df = self._redefine_time_column(df)
-        df[TIME_COL] = pd.to_datetime(df[TIME_COL], dayfirst=True)
+        try:
+            df[TIME_COL] = pd.to_datetime(df[TIME_COL], dayfirst=True)
+
+        except ValueError as e:  # if to_datetime raises DateParseError
+            raise DataStructureError(
+                f"ADME file structure change detected for '{url}'! "
+                f"'Fecha' is no longer datetimelike: {e}"
+            )
 
         col_order = list(EXPECTED_COLS_MAPPING)
         df = df[
