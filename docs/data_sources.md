@@ -17,7 +17,7 @@ RenewBench-Crawler package.
 | **Canada<br> (Ontario)** | IESO     | downloader &check; | hourly; per plant        | public            | [Website](https://www.ieso.ca/power-data/data-directory)                                                                                                                                                                                                                                                               |
 | **Chile**                | CEN      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Brazil**               | ONS      | downloader &check; | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
-| **Uruguay**              | ADME     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
+| **Uruguay**              | ADME     | downloader &check; | hourly; per plant        | public            | [Website](https://www.adme.com.uy/controlpanel.php), Data hosting [old](https://www.adme.com.uy/gpf_historico.php) / [new](https://www.adme.com.uy/panelControl/gpf.php)                                                                                                                                               |
 | **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
 | **Japan**                | REI      | planned            | hourly; per region       |                   |                                                                                                                                                                                                                                                                                                                        |
@@ -41,7 +41,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per day and bidding zone
 - Columns saved as **raw**:
 
-  `timestamp` – timestamp start in UTC-aware (`+00:00`)
+  `timestamp` – timestamp start in UTC-aware ISO 8601 (`YYYY-MM-DDTHH:MM:SS+00:00`)
 
   `Unit_Name` – name of the generating unit
 
@@ -76,7 +76,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per day
 - Columns saved as **raw**:
 
-  `date` – timestamp start in UTC-aware (`+03:00`)
+  `date` – timestamp start in UTC-aware ISO 8601 (`YYYY-MM-DDTHH:MM:SS+03:00`)
 
   `hour` – hour
 
@@ -105,7 +105,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per day
 - Columns saved as **raw**:
 
-  `period` - timestamp start in UTC
+  `period` - timestamp start in UTC naive ISO 8601 (`YYYY-MM-DDTHH`)
 
   `respondent` - abbreviation for respondent (company) name
 
@@ -146,7 +146,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per month
 - Columns saved as **raw**:
 
-  `Date (MST)` - timestamp start in Mountain Standard Time
+  `Date (MST)` - timestamp start in Mountain Standard Time in local format (`YYYY-MM-DD HH:MM:SS`)
 
   `Date (MPT)` - timestamp start in Mountain Prevailing Time (i.e. MST or MDT, as appropriate)
 
@@ -190,7 +190,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per month
 - Columns saved as **raw**:
 
-  `Delivery Date` – date in local format (probably ET)
+  `Delivery Date` – date in local format (`YYYY-MM-DD`)
 
   `Generator` – generator name
 
@@ -222,7 +222,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per month
 - Columns saved as **raw**: (translated from Portuguese)
 
-  `datetime` - reference timestamp (YYYY-MM-DD HH:MM:SS), hourly resolution
+  `datetime` - timestamp start in local format (`YYYY-MM-DD HH:MM:SS`)
 
   `subsystem_id` - subsystem identifier (3-character code for Brazilian grid subsystem)
 
@@ -247,6 +247,37 @@ RenewBench-Crawler package.
   `generation_MWmed` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
 
 </details>
+
+
+<details>
+<summary><b>ADME (Uruguay)</b></summary>
+
+**Access**
+- Website: [ADME Website](https://www.adme.com.uy/controlpanel.php), generation data hosting
+  [archive (= "old")](https://www.adme.com.uy/gpf_historico.php) and [current (= "new")](https://www.adme.com.uy/panelControl/gpf.php)
+- Requirements: public, no authentication needed
+
+**Download & data structure**
+- Spatial resolution: per plant
+- Temporal resolution: hourly
+- Available data timespan: 2009 to now
+- Downloadable files: 1 `.xlsx` per year (before 2019), 1 `.csv` (or `.xlsx`) per
+  month (from 2019 onwards)
+- Files saved as **raw**: 1 `.csv` per month
+- Columns saved as **raw**: (only structural column (= time) translated from Spanish)
+
+  `(/, Fecha)` – timestamp end (!) in local format (`DD-MM-YYYY HH:MM`)
+
+  `(Hidráulico, <unit_name>)`, `(Biomasa, <unit_name>)`, `(Térmico, <unit_name>)`,
+  `(Eólico, <unit_name>)`, `(Solar, <unit_name>)` - generation per plant and source
+
+> **PLEASE NOTE:**
+>
+> The times are stored in an End-of-Interval format that will require conversion! Also,
+> the data is stored with a MultiIndex (double) column header!
+
+</details>
+
 
 <details>
 <summary><b>EAT (New Zealand)</b></summary>
@@ -276,7 +307,7 @@ RenewBench-Crawler package.
 
   `tech_code` – the plant technology
 
-  `trading_date` – the date on which the injections occurred
+  `trading_date` – the date on which the injections occurred (YYYY-MM-DD)
 
   `tp1`, `tp2`, …, `tp50` – generation values in kWh (!) per trading period, starting at
   midnight in half hour intervals. **NOTE:** Daylight saving is applied (46 TP = on
@@ -308,7 +339,7 @@ RenewBench-Crawler package.
 - Files saved as **raw**: 1 `.csv` per snapshot timestamp
 - Columns saved as **raw**:
 
-  `datetime` – timestamp in UTC-aware fixed-offset ISO 8601 (`+08:00`)
+  `datetime` – timestamp start in UTC-aware ISO 8601 (`YYYY-MM-DDTHH:MM:SS+08:00`)
 
   `fueltype` – fuel type (e.g. `COAL`, `GAS`, `NUCLEAR`, `HYDRO`, `PV`)
 
