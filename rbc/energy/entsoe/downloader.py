@@ -25,17 +25,17 @@ from rbc.energy.utils import (
     write_df_to_csv,
 )
 
-EXPECTED_COLS_MAPPING = {
-    "timestamp": "timestamp",
-    "time_series.mkt_psrtype.power_system_resources.name": "Unit_Name",
-    "time_series.mkt_psrtype.power_system_resources.m_rid.value": "Unit_Code",
-    "time_series.mkt_psrtype.psr_type": "PSR_Type",
-    "time_series.mkt_psrtype.power_system_resources.nominal_p": "Capacity",
-    "time_series.period.point.quantity": "Generation_MW",
-    "time_series.period.point.secondary_quantity": "Consumption_MW",
-    "time_series.quantity_measure_unit_name": "Measurement_Unit",
-    "time_series.period.resolution": "Temporal_Resolution",
-}
+EXPECTED_COLS = [
+    "timestamp",
+    "time_series.mkt_psrtype.power_system_resources.name",  # Unit name
+    "time_series.mkt_psrtype.power_system_resources.m_rid.value",  # Unit code
+    "time_series.mkt_psrtype.psr_type",  # PSR type (= fuel type)
+    "time_series.mkt_psrtype.power_system_resources.nominal_p",  # Capacity
+    "time_series.period.point.quantity",  # Generation in MW
+    "time_series.period.point.secondary_quantity",  # Consumption in MW
+    "time_series.quantity_measure_unit_name",  # Measurement unit
+    "time_series.period.resolution",  # Temporal resolution
+]
 
 
 class EntsoeDownloader(EnergyDownloader):
@@ -154,20 +154,27 @@ class EntsoeDownloader(EnergyDownloader):
 
         try:
             # Columns names are made to match those on the Entso-E Transparency Platform
-            df = df.loc[:, list(EXPECTED_COLS_MAPPING.keys())].rename(
-                columns=EXPECTED_COLS_MAPPING
-            )
+            df = df.loc[:, EXPECTED_COLS]
         except KeyError as e:
             raise DataStructureError(
                 f"Entsoe-E structure change detected for '{task.identifier}'! "
                 f"Relevant columns are missing: {e}"
             )
 
-        # Drop rows that have no PSR_Type and neither Unit_Name nor Unit_Code values
-        df = df.dropna(subset=["PSR_Type"])
-        df = df.dropna(subset=["Unit_Name", "Unit_Code"], how="all")
+        # Drop rows that have no PSR type and neither Unit Name nor Unit Code values
+        df = df.dropna(subset=["time_series.mkt_psrtype.psr_type"])
+        df = df.dropna(
+            subset=[
+                "time_series.mkt_psrtype.power_system_resources.name",
+                "time_series.mkt_psrtype.power_system_resources.m_rid.value",
+            ],
+            how="all",
+        )
 
-        df = df.sort_values(by=["timestamp", "Unit_Name"], ascending=[True, True])
+        df = df.sort_values(
+            by=["timestamp", "time_series.mkt_psrtype.power_system_resources.name"],
+            ascending=[True, True],
+        )
         return df
 
     def _save_task_data(self, task: DownloadTask, df: pd.DataFrame) -> None:
@@ -180,13 +187,15 @@ class EntsoeDownloader(EnergyDownloader):
             task (DownloadTask): The metadata for the task that was downloaded.
             df (pd.DataFrame): Downloaded dataframe for the task.
         """
-        df_full = df.dropna(subset=["Temporal_Resolution"])
+        df_full = df.dropna(subset=["time_series.period.resolution"])
         if len(df_full) != len(df):
             logger.warning(
                 "Some rows are missing temporal resolution values! Removing those rows."
             )
 
-        for t_res, df_t_res in df_full.groupby("Temporal_Resolution", sort=True):
+        for t_res, df_t_res in df_full.groupby(
+            "time_series.period.resolution", sort=True
+        ):
             updated_task = task.update(
                 temporal_resolution=self._normalize_temporal_resolution(str(t_res))
             )

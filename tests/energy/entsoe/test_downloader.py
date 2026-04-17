@@ -167,7 +167,12 @@ def test_download_day_data(downloader: EntsoeDownloader, task: DownloadTask) -> 
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    mock_df = pd.DataFrame({"Generation_MW": [16.2], "Temporal_Resolution": ["PT60M"]})
+    mock_df = pd.DataFrame(
+        {
+            "time_series.period.point.quantity": [16.2],
+            "time_series.period.resolution": ["PT60M"],
+        }
+    )
 
     with patch.object(downloader, "_get_task_data", return_value=mock_df):
         status = downloader._download_task_data(task)
@@ -177,7 +182,7 @@ def test_download_day_data(downloader: EntsoeDownloader, task: DownloadTask) -> 
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
-        assert saved_df.iloc[0]["Generation_MW"] == 16.2
+        assert saved_df.iloc[0]["time_series.period.point.quantity"] == 16.2
 
 
 def test_get_task_data(downloader: EntsoeDownloader, task: DownloadTask) -> None:
@@ -214,9 +219,9 @@ def test_get_task_data(downloader: EntsoeDownloader, task: DownloadTask) -> None
     assert not df.empty
     assert len(df) == 1
     assert "timestamp" in df.columns
-    assert "Generation_MW" in df.columns
+    assert "time_series.period.point.quantity" in df.columns
     assert df.iloc[0]["timestamp"] == timestamp
-    assert df.iloc[0]["Generation_MW"] == 100
+    assert df.iloc[0]["time_series.period.point.quantity"] == 100
     assert mock_extract.call_count == 1
 
 
@@ -325,8 +330,8 @@ def test_save_task_data_single_tres(
     """
     df = pd.DataFrame(
         {
-            "Generation_MW": [10.0, 20.0],
-            "Temporal_Resolution": ["PT60M", None],
+            "time_series.period.point.quantity": [10.0, 20.0],
+            "time_series.period.resolution": ["PT60M", None],
         }
     )
     downloader._save_task_data(task, df)
@@ -336,7 +341,7 @@ def test_save_task_data_single_tres(
 
     saved_df = pd.read_csv(expected_file)
     assert len(saved_df) == 1  # row with missing temporal resolution value removed
-    assert saved_df.iloc[0]["Generation_MW"] == 10.0
+    assert saved_df.iloc[0]["time_series.period.point.quantity"] == 10.0
 
 
 def test_save_task_data_two_tres(
@@ -350,8 +355,8 @@ def test_save_task_data_two_tres(
     """
     df = pd.DataFrame(
         {
-            "Generation_MW": [10.0, 20.0],
-            "Temporal_Resolution": ["PT60M", "PT20M"],
+            "time_series.period.point.quantity": [10.0, 20.0],
+            "time_series.period.resolution": ["PT60M", "PT20M"],
         }
     )
     downloader._save_task_data(task, df)
@@ -367,8 +372,8 @@ def test_save_task_data_two_tres(
 
     assert len(df_1h) == 1
     assert len(df_20min) == 1
-    assert df_1h.iloc[0]["Generation_MW"] == 10.0
-    assert df_20min.iloc[0]["Generation_MW"] == 20.0
+    assert df_1h.iloc[0]["time_series.period.point.quantity"] == 10.0
+    assert df_20min.iloc[0]["time_series.period.point.quantity"] == 20.0
 
 
 def test_save_task_data_invalid_tres(
@@ -378,8 +383,8 @@ def test_save_task_data_invalid_tres(
     df = pd.DataFrame(
         {
             "timestamp": [f"{task.date}T00:00:00+00:00"],
-            "Generation_MW": [16.2],
-            "Temporal_Resolution": ["INVALID"],
+            "time_series.period.point.quantity": [16.2],
+            "time_series.period.resolution": ["INVALID"],
         }
     )
     with pytest.raises(DataStructureError, match="Unknown ENTSO-E temporal resolution"):
