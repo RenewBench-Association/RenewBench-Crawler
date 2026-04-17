@@ -373,6 +373,7 @@ MODEL_CONFIG = {
         "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1",
         "invariant_path": "fx",
+        "start_year": "1979",
     },
     "C2": {
         "label": "BARRA-C2",
@@ -385,6 +386,7 @@ MODEL_CONFIG = {
         "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
         "invariant_path": "fx",
+        "start_year": "1979",
     },
     "C2_20min": {
         "label": "BARRA-C2",
@@ -397,5 +399,6 @@ MODEL_CONFIG = {
         "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
         "invariant_path": "fx",
+        "start_year": "1979",
     },
 }

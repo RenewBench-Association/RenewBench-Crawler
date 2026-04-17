@@ -24,10 +24,12 @@ from rbc.energy.utils import (
     MissingDataError,
 )
 
+URL_ROOT = "https://api.box.com/2.0/folders/196731538687/items"
 URL_BASE = "https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5"
 BOXAPI = f"shared_link={URL_BASE}"
-ROOT_ID = "196731538687"
+
 FOLDER_ID_DICT = {"1h": "196178549071", "5min": "196706124680"}
+
 MIN_YEAR = 2015
 EXPECTED_COLS = [
     "Date (MST)",
@@ -76,41 +78,40 @@ class AesoDownloader(EnergyDownloader):
             InvalidError: If provided temporal_resolutions are invalid (not 1h &/ 5min).
             ConnectionError: If the AESO box endpoint isn't reachable.
         """
-        super().__init__(output_path=output_path, years=years, resume=resume)
-
+        super().__init__(
+            output_path=output_path, years=years, start_year=MIN_YEAR, resume=resume
+        )
         self.temporal_resolutions = temporal_resolutions
+
         invalid_t_res = set(temporal_resolutions) - set(FOLDER_ID_DICT.keys())
         if invalid_t_res:
             raise InvalidError(
                 f"Invalid temporal resolution(s): {sorted(invalid_t_res)}"
             )
 
-        logger.info(
-            f"AESO Downloader initialized for:"
-            f"\n- years:\t\t{years}"
-            f"\n- temporal resolutions:\t{temporal_resolutions}"
-        )
-
-        try:
-            requests.get(
-                f"https://api.box.com/2.0/folders/{ROOT_ID}/items",
+        self._check_connection(
+            lambda: requests.get(
+                URL_ROOT,
                 headers={
                     "Authorization": f"Bearer {token}",
                     "boxapi": BOXAPI,
                 },
                 params={"limit": 1},
                 timeout=10,
-            ).raise_for_status()
+            ),
+            "AESO",
+        )
 
-        except (requests.exceptions.HTTPError, requests.exceptions.Timeout) as e:
-            logger.error("Initialization AESO connectivity check failed!")
-            raise ConnectionError(f"AESO box cloud storage is unreachable: {e}")
-
-        # API setup
+        # API setup and source lookup
         auth = BoxDeveloperTokenAuth(token=token)
         self.client = BoxClient(auth=auth)
-
         self._source_lookup = self._build_source_lookup()
+
+        logger.info(
+            f"AESO Downloader initialized for:"
+            f"\n- years:\t\t{years}"
+            f"\n- temporal resolutions:\t{temporal_resolutions}"
+        )
 
     def download_data(self) -> None:
         """Parse data for all given years from AESO site and save to CSV."""

@@ -10,12 +10,10 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.eia import EiaDownloader
-from rbc.energy.eia.downloader import EXPECTED_COLS, MIN_YEAR
 from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
     DataStructureError,
     DownloadTask,
-    InvalidError,
     MissingDataError,
     RateLimitError,
 )
@@ -32,7 +30,7 @@ def init_args(tmp_path: Path) -> dict:
         tmp_path (Path): Path to the temporary directory.
 
     Returns:
-        dict: Initialisation arguments.
+        dict: initialization arguments.
     """
     return {
         "token": "fake_token",
@@ -127,16 +125,16 @@ def test_downloader_initialization(downloader: EiaDownloader, init_args: dict) -
     assert downloader.checkpoint == {}
 
 
-def test_downloader_initialization_invalid_token(init_args: dict) -> None:
+def test_downloader_initialization_invalid_access(init_args: dict) -> None:
     """Failure path for class initialization with invalid token.
 
     Args:
         init_args (dict): Arguments used to initialize an EiaDownloader instance.
     """
     with patch("rbc.energy.eia.downloader.requests.get") as mock_get:
-        mock_get.return_value = MagicMock(status_code=400)
+        mock_get.return_value.raise_for_status.side_effect = exceptions.HTTPError(404)
 
-        with pytest.raises(InvalidError, match="incorrect"):
+        with pytest.raises(ConnectionError, match="EIA API/URL access failed"):
             EiaDownloader(**init_args)
 
 
@@ -319,20 +317,6 @@ def test_get_task_data_incomplete_download(
 
         with pytest.raises(ConnectionError, match="Incomplete download"):
             downloader._get_task_data(task)
-
-
-def test_get_task_data_no_data_for_old_year(downloader: EiaDownloader) -> None:
-    """Failure path for "_get_task_data" method when a task before MIN_YEAR is provided.
-
-    Args:
-        downloader (EiaDownloader): Instance of EiaDownloader class.
-    """
-    old_year_task = DownloadTask(date=f"{MIN_YEAR - 1}-01")
-    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
-
-    with patch("rbc.energy.eat.downloader.load_df_from_file", return_value=mock_df):
-        with pytest.raises(MissingDataError, match="No energy data for year"):
-            downloader._get_task_data(old_year_task)
 
 
 def test_get_task_data_no_generation_data(

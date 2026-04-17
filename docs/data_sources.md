@@ -16,7 +16,7 @@ RenewBench-Crawler package.
 | **Canada<br> (Alberta)** | AESO     | downloader &check; | hourly/5 min; per plant  | `box` API token   | [Website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/), [Data hosting](https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5/folder/196731538687), <br> [API how-to](https://developer.box.com/guides/authentication/tokens/developer-tokens) (s. details!) |
 | **Canada<br> (Ontario)** | IESO     | downloader &check; | hourly; per plant        | public            | [Website](https://www.ieso.ca/power-data/data-directory)                                                                                                                                                                                                                                                               |
 | **Chile**                | CEN      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
-| **Brazil**               | ONS      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
+| **Brazil**               | ONS      | downloader &check; | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
 | **Uruguay**              | ADME     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
@@ -80,7 +80,7 @@ RenewBench-Crawler package.
 
   `hour` – hour
 
-  `total` – total generation of the power plant (MWh)
+  `total` – total generation of the power plant in MWh
 
   `powerPlantName` – name of the power plant
 
@@ -185,7 +185,8 @@ RenewBench-Crawler package.
 - Spatial resolution: per plant
 - Temporal resolution: hourly
 - Available data timespan: 2010-01 to now
-- Downloadable files: 1 `.xlsx` per year (pre-April-2019), 1 `.csv` per month (post-April-2019)
+- Downloadable files: 1 `.xlsx` per year (before April-2019), 1 `.csv` per month
+  (from April-2019 onwards)
 - Files saved as **raw**: 1 `.csv` per month
 - Columns saved as **raw**:
 
@@ -196,7 +197,7 @@ RenewBench-Crawler package.
   `Fuel Type` – fuel type (not given in `.xlsx` so `=NaN`; to be filled in during processing)
 
   `Measurement` – type of measurement:
-  - `Output`: generation (MW)
+  - `Output`: generation in MW
   - `Capability`: available capacity
 
   `Hour 1`, `Hour 2`, …, `Hour 24` – ending hour intervals (i.e. `00:00 - 01:00` to `23:00 to
@@ -204,6 +205,48 @@ RenewBench-Crawler package.
 
 </details>
 
+
+<details>
+<summary><b>ONS (Brazil)</b></summary>
+
+**Access**
+- Website: [ONS generation data](https://dados.ons.org.br/dataset/geracao-usina-2)
+- Requirements: public, no authentication needed (CC Attribution License)
+
+**Download & data structure**
+- Spatial resolution: per plant
+- Temporal resolution: hourly
+- Available data timespan: 2000 to now
+- Downloadable files: 1 `.csv` (or `.xlsx`) per year (before 2022), 1 `.csv` (or `.xlsx`) per
+  month (from 2022 onwards)
+- Files saved as **raw**: 1 `.csv` per month
+- Columns saved as **raw**: (translated from Portuguese)
+
+  `datetime` - reference timestamp (YYYY-MM-DD HH:MM:SS), hourly resolution
+
+  `subsystem_id` - subsystem identifier (3-character code for Brazilian grid subsystem)
+
+  `subsystem_name` - name of the subsystem
+
+  `state_id` - state identifier (2-character code for Brazilian state)
+
+  `state_name` - name of the state where the plant is located
+
+  `operation_mode` - plant operation mode (e.g. type of operational dispatch)
+
+  `plant_type` - plant type (e.g. hydro, thermal, wind, solar)
+
+  `fuel_type` - fuel type used by the plant
+
+  `plant_name` - name of the power plant
+
+  `ons_id` - unique identifier assigned by ONS (National System Operator)
+
+  `generation_project_code` - unique generation project identifier assigned by ANEEL (Brazilian regulator)
+
+  `generation_MWmed` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
+
+</details>
 
 <details>
 <summary><b>EAT (New Zealand)</b></summary>
@@ -235,7 +278,7 @@ RenewBench-Crawler package.
 
   `trading_date` – the date on which the injections occurred
 
-  `tp1`, `tp2`, …, `tp50` – generation values (in kWh) per trading period, starting at
+  `tp1`, `tp2`, …, `tp50` – generation values in kWh (!) per trading period, starting at
   midnight in half hour intervals. **NOTE:** Daylight saving is applied (46 TP = on
   the day saving starts, 50 TP = on the day it ends)
 
@@ -441,6 +484,23 @@ BARRA2 is a regional reanalysis produced by the Australian Bureau of Meteorology
 
 </details>
 
+### Saving Structure
+
+The downloaded, raw weather data is saved into the following structure per data source
+`<source>`. Values in `()` are optional. For example, ICON DREAM has a `<model>` name of either 'global' or 'eu'.
+
+```text
+raw/weather
+└── <source>
+    ├── logs
+    │    └── <YYYY-MM-DD_HHMMSS>.log
+    └── (<model>)
+        ├── status.pickle
+        ├── <source_(model_)(temporal_resolution_)YYYYMM_variable_name>.nc/.grib
+        └── (invariant)
+            └── (invariant_variable.nc)
+```
+
 # Excluded Data Sources
 This section lists energy and meteorological sources that are currently ineligible for integration or fall outside the functional scope of the RenewBench-Crawler package.
 
@@ -453,16 +513,26 @@ An energy data source is excluded if it fails to meet **any** of the following c
 3. Data based on actual historical observations (not purely simulated generation)
 4. Publicly accessible without restrictive publication prohibitions
 
-| Region       | Source  | Status                                                 | Resolution                             | Data availability | Source                                                                                              |
-|--------------| ------- |--------------------------------------------------------| -------------------------------------- | ----------------- |-----------------------------------------------------------------------------------------------------|
-| World        | IEA     | Spatial and temporal resolutions too low, inaccessible | per country; **yearly**                | 2000 – 2024       | [Platform](https://www.iea.org/data-and-statistics/data-tools/renewable-energy-progress-tracker)    |
-| World        | IRENA   | Spatial and temporal resolutions too low               | per country; **yearly**                | 2000 – 2024       | [Data hosting](https://www.irena.org/Data/Downloads/IRENASTAT)                                      |
-| India        | CEA     | Spatial and temporal resolutions too low               | per state (<=350,000 km²); **monthly** | 2019 – now        | [Dashboard](https://cea.nic.in/dashboard/?lang=en)                                                  |
-| Paraguay     | ANDE    | Spatial and temporal resolutions too low               | per country (~400,000 km²); **yearly** | 1996 – 2019       | [Report](https://ande.gov.py/documentos_contables/706/ande_-_compilacion_estadistica_1999-2019.pdf) |
-| Mexico       | CENACE  | Spatial resolution too low                             | per country (~2,000,000 km²); hourly   | 2016 – now        | [Platform](https://www.cenace.gob.mx/Paginas/SIM/Reportes/EnergiaGeneradaTipoTec.aspx)              |
-| South Africa | Eskom   | Spatial resolution too low                             | per country (~1,000,000 km²); hourly   | 2021 – now        | [Dashboard](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)   |
-| South Korea  | KPX     | Spatial resolution too low                             | per country (~100,000 km²); 5 min      | 2022 – now        | [Website](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)     |
-| Europe       | EMHIRES | Spatial resolution too low, simulated data!            | per country; hourly                    | 2006 – now        | [Dataset](https://new.kpx.or.kr/powerSource.es?mid=a10606030000&device=chart)                       |
+| Region          | Source      | Status                                                 | Resolution                            | Data availability | Source                                                                                                                    |
+|-----------------|-------------|--------------------------------------------------------|---------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------------------|
+| World           | IEA         | Spatial and temporal resolutions too low, inaccessible | Per country; **yearly**               | 2000 – 2024       | [Platform](https://www.iea.org/data-and-statistics/data-tools/renewable-energy-progress-tracker)                          |
+| World           | IRENA       | Spatial and temporal resolutions too low               | Per country; **yearly**               | 2000 – 2024       | [Data hosting](https://www.irena.org/Data/Downloads/IRENASTAT)                                                            |
+| India           | CEA         | Spatial and temporal resolutions too low               | Per state (<=350,000 km²); **monthly** | 2019 – now        | [Dashboard](https://cea.nic.in/dashboard/?lang=en)                                                                        |
+| Paraguay        | ANDE        | Spatial and temporal resolutions too low               | Per country (~400,000 km²); **yearly** | 1996 – 2019       | [Report](https://ande.gov.py/documentos_contables/706/ande_-_compilacion_estadistica_1999-2019.pdf)                       |
+| Mexico          | CENACE      | Spatial resolution too low                             | Per country (~2,000,000 km²); hourly  | 2016 – now        | [Platform](https://www.cenace.gob.mx/Paginas/SIM/Reportes/EnergiaGeneradaTipoTec.aspx)                                    |
+| South Africa    | Eskom       | Spatial resolution too low                             | Per country (~1,000,000 km²); hourly  | 2021 – now        | [Dashboard](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)                         |
+| South Korea     | KPX         | Spatial resolution too low                             | Per country (~100,000 km²); 5 min     | 2022 – now        | [Website](https://www.eskom.co.za/dataportal/supply-side/station-build-up-for-the-last-7-days/)                           |
+| Europe          | EMHIRES     | Spatial resolution too low, simulated data!            | Per country; hourly                   | 2006 – now        | [Dataset](https://new.kpx.or.kr/powerSource.es?mid=a10606030000&device=chart)                                             |
+| Canada (Quebec) | hydroquebec | Spatial resolution too low, only hydro data            | Per state (~500 km²); hourly           | 2018 – now        | [Dataset](https://donnees.hydroquebec.com/explore/dataset/historique-production-consommation-proxy-horaire/information/)  |
+| Israel          | NOGA        | Unknown (site inaccessible from Europe / via VPN)      | Unknown                               | Unknown           | [Website](https://www.noga.co.il/)                                                                                        |
+
+### Regions lacking data
+- Africa: [All countries except South Africa](https://ember-energy.org/app/uploads/2024/10/African-Electricity-Data-Transparency.pdf)
+- Middle East: Saudi Arabia, Bahrain, Qatar
+- Asia: China, Indonesia, Philippines
+
+### Geopolitical exclusions (data trustworthiness)
+- Russia
 
 ## Weather
 

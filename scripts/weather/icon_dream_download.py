@@ -96,8 +96,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "-o",
         "--cfg-options",
-        type=str,
-        nargs="+",
+        action="append",
         help="Override YAML config values (supports nested keys). "
         "Example: -o paths.dst_dir_raw=/your/path/",
     )

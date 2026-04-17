@@ -98,6 +98,7 @@ MODEL_CONFIG = {
                 "ICON-DREAM Global grid connectivity information",
             ),
         },
+        "start_year": "2010",
     },
     "eu": {
         "label": "ICON-DREAM-EU",
@@ -114,5 +115,6 @@ MODEL_CONFIG = {
                 "ICON-DREAM EU grid connectivity information",
             ),
         },
+        "start_year": "2010",
     },
 }
