@@ -220,31 +220,31 @@ RenewBench-Crawler package.
 - Downloadable files: 1 `.csv` (or `.xlsx`) per year (before 2022), 1 `.csv` (or `.xlsx`) per
   month (from 2022 onwards)
 - Files saved as **raw**: 1 `.csv` per month
-- Columns saved as **raw**: (translated from Portuguese)
+- Columns saved as **raw**:
 
-  `datetime` - timestamp start in local format (`YYYY-MM-DD HH:MM:SS`)
+  `din_instante` - timestamp start in local format (`YYYY-MM-DD HH:MM:SS`)
 
-  `subsystem_id` - subsystem identifier (3-character code for Brazilian grid subsystem)
+  `id_subsistema` - subsystem identifier (3-character code for Brazilian grid subsystem)
 
-  `subsystem_name` - name of the subsystem
+  `nom_subsistema` - name of the subsystem
 
-  `state_id` - state identifier (2-character code for Brazilian state)
+  `id_estado` - state identifier (2-character code for Brazilian state)
 
-  `state_name` - name of the state where the plant is located
+  `nom_estado` - name of the state where the plant is located
 
-  `operation_mode` - plant operation mode (e.g. type of operational dispatch)
+  `cod_modalidadeoperacao` - plant operation mode (e.g. type of operational dispatch)
 
-  `plant_type` - plant type (e.g. hydro, thermal, wind, solar)
+  `nom_tipousina` - plant type (e.g. hydro, thermal, wind, solar)
 
-  `fuel_type` - fuel type used by the plant
+  `nom_tipocombustivel` - fuel type used by the plant
 
-  `plant_name` - name of the power plant
+  `nom_usina` - name of the power plant
 
-  `ons_id` - unique identifier assigned by ONS (National System Operator)
+  `id_ons` - unique identifier assigned by ONS (National System Operator)
 
-  `generation_project_code` - unique generation project identifier assigned by ANEEL (Brazilian regulator)
+  `ceg` - unique generation project identifier assigned by ANEEL (Brazilian regulator)
 
-  `generation_MWmed` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
+  `val_geracao` - generation in MWmed (average MW over the time interval; equivalent to MWh for hourly data)
 
 </details>
 
@@ -264,12 +264,12 @@ RenewBench-Crawler package.
 - Downloadable files: 1 `.xlsx` per year (before 2019), 1 `.csv` (or `.xlsx`) per
   month (from 2019 onwards)
 - Files saved as **raw**: 1 `.csv` per month
-- Columns saved as **raw**: (only structural column (= time) translated from Spanish)
+- Columns saved as **raw**:
 
   `(/, Fecha)` – timestamp end (!) in local format (`DD-MM-YYYY HH:MM`)
 
   `(Hidráulico, <unit_name>)`, `(Biomasa, <unit_name>)`, `(Térmico, <unit_name>)`,
-  `(Eólico, <unit_name>)`, `(Solar, <unit_name>)` - generation per plant and source
+  `(Eólico, <unit_name>)`, `(Solar, <unit_name>)` - generation per plant and source in MWh
 
 > **PLEASE NOTE:**
 >
