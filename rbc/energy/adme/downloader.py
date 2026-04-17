@@ -28,17 +28,9 @@ URL_ROOT_OLD = "https://www.adme.com.uy/gpf_historico.php"
 URL_BASE_OLD = "https://www.adme.com.uy/db-docs/Docs_secciones/nid_1418/"
 
 MIN_YEAR = 2009
-EXPECTED_COLS_MAPPING = {
-    "Fecha": "Datetime",
-    "Hidráulico": "Hydro",
-    "Biomasa": "Biomass",
-    "Térmico": "Thermal",
-    "Eólico": "Wind",
-    "Solar": "Solar",
-}
-
-EXPECTED_SHEETS = ("GPF", "Eólica", "Solar", "Térmica", "Biomasa")
-TIME_COL = ("Fecha", "/")
+EXPECTED_COLS = ["/", "Hidráulico", "Biomasa", "Térmico", "Eólico", "Solar"]
+TIME_COL = ("/", "Fecha")
+EXPECTED_OLD_SHEETS = ("GPF", "Eólica", "Solar", "Térmica", "Biomasa")
 
 
 class AdmeDownloader(EnergyDownloader):
@@ -101,8 +93,7 @@ class AdmeDownloader(EnergyDownloader):
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
-            pd.DataFrame: Dataframe for specific date with the columns as per EXPECTED_COLS_MAPPING
-                (English translated versions as column headers).
+            pd.DataFrame: Dataframe for specific date with the columns as per EXPECTED_COLS.
 
         Raises:
             MissingDataError: If an earlier year was provided than data exists for or if the
@@ -121,7 +112,7 @@ class AdmeDownloader(EnergyDownloader):
             )
 
         missing_cols = [
-            c for c in EXPECTED_COLS_MAPPING if c not in df.columns.get_level_values(0)
+            c for c in EXPECTED_COLS if c not in df.columns.get_level_values(0)
         ]
         if missing_cols:
             raise DataStructureError(
@@ -129,13 +120,10 @@ class AdmeDownloader(EnergyDownloader):
                 f"Missing columns: {missing_cols}"
             )
 
-        # translate double column headers to English
-        df.columns = pd.MultiIndex.from_tuples(
-            [(EXPECTED_COLS_MAPPING.get(c[0], c[0]), c[1]) for c in df.columns]
-        )
         return df
 
-    def _get_from_new_source(self, task: DownloadTask) -> pd.DataFrame:
+    @staticmethod
+    def _get_from_new_source(task: DownloadTask) -> pd.DataFrame:
         """Extract data from 2019 onwards (new) source for a given month.
 
         Args:
@@ -143,18 +131,24 @@ class AdmeDownloader(EnergyDownloader):
 
         Returns:
             pd.DataFrame: Dataframe for a desired month.
+
+        Raises:
+            DataStructureError: If the data structure changed and relevant columns are now
+                missing (this will cause the entire run to be killed).
         """
         month = str(task.month).zfill(2)
         url = f"{URL_BASE_NEW}anod={task.year}&mesd={month}&periodo=1&fuente=0&tipo=1"
         df = load_df_from_file(url, ".csv", delimiter=";", header=[0, 1])
 
         # filter to exclude anything beyond the required columns (i.e. imported energy)
-        df = self._redefine_time_column(df)
-        cutoff = next(
-            (i for i, c in enumerate(df.columns) if c[0] not in EXPECTED_COLS_MAPPING),
-            None,
-        )
-        df = df.iloc[:, :cutoff]
+        try:
+            df = df.loc[:, EXPECTED_COLS]
+        except KeyError as e:
+            raise DataStructureError(
+                f"ADME structure change detected for '{task.identifier}'! "
+                f"Relevant columns are missing: {e}"
+            )
+
         return df
 
     def _get_from_old_source(self, task: DownloadTask) -> pd.DataFrame:
@@ -213,16 +207,16 @@ class AdmeDownloader(EnergyDownloader):
         # 1. load excel once to then extract relevant sheets
         xlsx_file = load_excel_from_file(url)
 
-        if not set(EXPECTED_SHEETS).issubset(set(xlsx_file.sheet_names)):
+        if not set(EXPECTED_OLD_SHEETS).issubset(set(xlsx_file.sheet_names)):
             raise DataStructureError(
                 f"ADME file structure change detected in old excel '{url}'! "
-                f"Not all required sheets '{EXPECTED_SHEETS}' exist!"
+                f"Not all required sheets '{EXPECTED_OLD_SHEETS}' exist!"
             )
 
         # 2. get relevant sheets
         df_dict = {}
 
-        for sheet in EXPECTED_SHEETS:
+        for sheet in EXPECTED_OLD_SHEETS:
             try:
                 # get df per fuel type (wind, solar, etc)
                 df = pd.read_excel(xlsx_file, sheet_name=sheet, header=3)
@@ -230,7 +224,11 @@ class AdmeDownloader(EnergyDownloader):
                 # special case: extract df for hydro from general "GPF" sheet
                 if sheet == "GPF":
                     cutoff = next(
-                        (i for i, c in enumerate(df.columns) if c in EXPECTED_SHEETS),
+                        (
+                            i
+                            for i, c in enumerate(df.columns)
+                            if c in EXPECTED_OLD_SHEETS
+                        ),
                         None,
                     )
                     df = df.iloc[:, :cutoff]
@@ -256,8 +254,11 @@ class AdmeDownloader(EnergyDownloader):
         df = df.reset_index()
 
         # 4. ensure df structure is as required for _get_from_old_source processing
-        df = self._redefine_time_column(df)
         try:
+            # format the datetime column header and column values
+            df.columns = pd.MultiIndex.from_tuples(
+                [TIME_COL if c[0] == "Fecha" else c for c in df.columns]
+            )
             df[TIME_COL] = pd.to_datetime(df[TIME_COL], dayfirst=True)
 
         except ValueError as e:  # if to_datetime raises DateParseError
@@ -266,34 +267,15 @@ class AdmeDownloader(EnergyDownloader):
                 f"'Fecha' is no longer datetimelike: {e}"
             )
 
-        col_order = list(EXPECTED_COLS_MAPPING)
+        # sort cols to match new source dfs (cols not in EXPECTED_COLS will be at end)
         df = df[
             sorted(
                 df.columns,
                 key=lambda c: (
-                    col_order.index(c[0]) if c[0] in col_order else len(col_order)
+                    EXPECTED_COLS.index(c[0])
+                    if c[0] in EXPECTED_COLS
+                    else len(EXPECTED_COLS)
                 ),
             )
         ]
-        return df
-
-    # --------------------------------------------
-    # Helper methods
-    # --------------------------------------------
-    @staticmethod
-    def _redefine_time_column(df: pd.DataFrame) -> pd.DataFrame:
-        """Redefine the timestamp ("Fecha") double column header, aligning naming throughout.
-
-        Args:
-            df (pd.DataFrame): Dataframe with "Fecha" double column to be renamed.
-
-        Returns:
-            pd.DataFrame: adapted Dataframe.
-        """
-        df.columns = pd.MultiIndex.from_tuples(
-            [
-                TIME_COL if (c[0] == "Fecha" or c == ("/", "Fecha")) else c
-                for c in df.columns
-            ]
-        )
         return df
