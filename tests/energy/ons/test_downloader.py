@@ -3,6 +3,7 @@
 
 import pickle
 from pathlib import Path
+from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -82,6 +83,13 @@ def get_mock_df(spec_task: DownloadTask) -> pd.DataFrame:
     )
     row.update({"val_geracao": 10.0})
     return pd.DataFrame(row, index=[0])
+
+
+@pytest.fixture(autouse=True)
+def clear_cache() -> Generator[None, None, None]:
+    """Clear lru_cache after each test to avoid cache pollution."""
+    yield
+    OnsDownloader._load_yearly_csv.cache_clear()
 
 
 # ----------------------------------
@@ -316,8 +324,6 @@ def test_lru_cache_works(downloader: OnsDownloader, task: DownloadTask) -> None:
         }
     )
 
-    downloader._load_yearly_csv.cache_clear()
-
     with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
         mock_load.return_value = mock_df
 
@@ -335,8 +341,6 @@ def test_load_yearly_csv(downloader: OnsDownloader, task: DownloadTask) -> None:
         downloader (OnsDownloader): Instance of OnsDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    downloader._load_yearly_csv.cache_clear()
-
     with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
         mock_load.return_value = get_mock_df(task)
 
@@ -367,8 +371,6 @@ def test_load_yearly_csv_structure_changed(
         mock_df_dict (dict): Dictionary of mock dataframe columns.
         expected_match (str): Expected match string.
     """
-    downloader._load_yearly_csv.cache_clear()
-
     with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
         mock_load.return_value = pd.DataFrame(mock_df_dict)
 
