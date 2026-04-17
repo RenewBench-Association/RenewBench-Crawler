@@ -3,6 +3,7 @@
 
 import pickle
 from pathlib import Path
+from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -88,6 +89,13 @@ def get_mock_df(specific_task: DownloadTask) -> pd.DataFrame:
         },
         index=[0],
     )
+
+
+@pytest.fixture(autouse=True)
+def clear_cache() -> Generator[None, None, None]:
+    """Clear lru_cache after each test to avoid cache pollution."""
+    yield
+    IesoDownloader._load_yearly_excel.cache_clear()
 
 
 # ----------------------------------
@@ -347,8 +355,6 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None
     mock_df = pd.DataFrame(
         {"DATE": pd.to_datetime(f"{task.date}-01"), "HOUR": [1], "GEN_A": [10]}
     )
-
-    downloader._load_yearly_excel.cache_clear()
 
     with patch(
         "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
