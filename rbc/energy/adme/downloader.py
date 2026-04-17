@@ -189,8 +189,9 @@ class AdmeDownloader(EnergyDownloader):
         df_month[TIME_COL] = df_month[TIME_COL].dt.strftime("%d-%m-%Y %H:%M")
         return df_month
 
+    @staticmethod
     @lru_cache(maxsize=None)
-    def _load_yearly_excel(self, url: str) -> pd.DataFrame:
+    def _load_yearly_excel(url: str) -> pd.DataFrame:
         """Downloads the yearly Excel and concatenates into a standardized df once.
 
         Args:
