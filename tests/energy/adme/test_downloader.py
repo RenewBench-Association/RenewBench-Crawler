@@ -141,7 +141,7 @@ def test_downloader_initialization_invalid_access(init_args: dict) -> None:
         with pytest.raises(ConnectionError, match="API/URL access failed"):
             AdmeDownloader(**init_args)
 
-            assert mock_head.call_count == 2
+        assert mock_head.call_count == 2
 
 
 def test_download_data_resume(init_args: dict) -> None:
