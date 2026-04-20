@@ -349,7 +349,7 @@ def test_get_from_old_source(downloader: AdmeDownloader, task: DownloadTask) -> 
     assert len(df) == 2  # month filter means hour 1 of next month's day 1 is cut
     assert pd.to_datetime(df.loc[0, TIME_COL], dayfirst=True).month == task.month
     assert pd.to_datetime(df.loc[1, TIME_COL], dayfirst=True).month == task.month + 1
-    assert df[TIME_COL].dtype == object  # check TIME_COL has been formatted back to str
+    assert pd.api.types.is_string_dtype(df[TIME_COL])  # check TIME_COL are str again
 
 
 def test_load_yearly_excel(downloader: AdmeDownloader) -> None:
