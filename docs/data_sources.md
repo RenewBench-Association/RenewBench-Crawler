@@ -43,21 +43,21 @@ RenewBench-Crawler package.
 
   `timestamp` – timestamp start in UTC-aware ISO 8601 (`YYYY-MM-DDTHH:MM:SS+00:00`)
 
-  `Unit_Name` – name of the generating unit
+  `time_series.mkt_psrtype.power_system_resources.name` – name of the generating unit
 
-  `Unit_Code` – unique identifier (mRID) of the generating unit
+  `time_series.mkt_psrtype.power_system_resources.m_rid.value` – unique identifier (mRID) of the generating unit
 
-  `PSR_Type` – PSR code of fuel category
+  `time_series.mkt_psrtype.psr_type` – PSR code of fuel category
 
-  `Capacity` – nominal capacity of the generating unit
+  `time_series.mkt_psrtype.power_system_resources.nominal_p` – nominal capacity of the generating unit
 
-  `Generation_MW` – actual generation in MW
+  `time_series.period.point.quantity` – actual generation in MW
 
-  `Consumption_MW` – consumption in MW (if the unit is consuming, else `NaN`)
+  `time_series.period.point.secondary_quantity` – consumption in MW (if the unit is consuming, else `NaN`)
 
-  `Measurement_Unit` – physical unit of the reported quantities (usually `MAW`)
+  `time_series.quantity_measure_unit_name` – physical unit of the reported quantities (usually `MAW`)
 
-  `Temporal_Resolution` – string describing the time step (e.g. `PT15M`, `PT60M`)
+  `time_series.period.resolution` – string describing the time step (e.g. `PT15M`, `PT60M`)
 
 </details>
 
