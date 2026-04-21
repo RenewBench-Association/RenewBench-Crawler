@@ -42,6 +42,7 @@ The RenewBench-Crawler repository is structured as follows:
 │   │   ├── loader.py             # Load and validate configs
 │   │   └── schema.py             # Pydantic config models and registry
 │   ├── energy/                 # Energy data crawlers
+│   │   ├── adme/                 # ADME (Uruguay)
 │   │   ├── aeso/                 # AESO (Canada, Alberta)
 │   │   ├── eat/                  # EA Te Mana Hiko (New Zealand)
 │   │   ├── eia/                  # EIA (US)

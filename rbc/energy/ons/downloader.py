@@ -24,20 +24,20 @@ from rbc.energy.utils import (
 URL_BASE = "https://ons-aws-prod-opendata.s3.amazonaws.com/dataset/geracao_usina_2_ho/"
 
 MIN_YEAR = 2000
-EXPECTED_COLS_MAPPING = {
-    "din_instante": "datetime",
-    "id_subsistema": "subsystem_id",
-    "nom_subsistema": "subsystem_name",
-    "id_estado": "state_id",
-    "nom_estado": "state_name",
-    "cod_modalidadeoperacao": "operation_mode",
-    "nom_tipousina": "plant_type",
-    "nom_tipocombustivel": "fuel_type",
-    "nom_usina": "plant_name",
-    "id_ons": "ons_id",
-    "ceg": "generation_project_code",
-    "val_geracao": "generation_MWmed",
-}
+EXPECTED_COLS = [
+    "din_instante",
+    "id_subsistema",
+    "nom_subsistema",
+    "id_estado",
+    "nom_estado",
+    "cod_modalidadeoperacao",
+    "nom_tipousina",
+    "nom_tipocombustivel",
+    "nom_usina",
+    "id_ons",
+    "ceg",
+    "val_geracao",
+]
 
 
 class OnsDownloader(EnergyDownloader):
@@ -93,8 +93,7 @@ class OnsDownloader(EnergyDownloader):
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
-            pd.DataFrame: Dataframe for specific date with the columns as per EXPECTED_COLS_MAPPING
-                (English translated versions as column headers).
+            pd.DataFrame: Dataframe for specific date with the columns as per EXPECTED_COLS.
 
         Raises:
             MissingDataError: If an earlier year was provided than data exists for or if the
@@ -112,14 +111,13 @@ class OnsDownloader(EnergyDownloader):
                 f"No energy data available for {task.year}-{task.month}. Skipping..."
             )
 
-        missing_cols = [c for c in EXPECTED_COLS_MAPPING if c not in df.columns]
+        missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:
             raise DataStructureError(
                 f"ONS file structure change detected for '{task.identifier}'! "
                 f"Missing columns: {missing_cols}"
             )
 
-        df = df.rename(columns=EXPECTED_COLS_MAPPING)
         return df
 
     @staticmethod

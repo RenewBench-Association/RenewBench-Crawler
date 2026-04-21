@@ -9,10 +9,11 @@ import re
 import threading
 import time
 import urllib
+import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import pandas as pd
 import requests
@@ -500,13 +501,16 @@ def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> N
     logger.info(f"Successfully wrote dataframe to '{file_path}'")
 
 
-def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
+def load_df_from_file(
+    file_path: Path | str, file_type: Literal[".csv", ".xlsx"] | None = None, **args
+) -> pd.DataFrame:
     """Load pandas dataframe from a file such as an Excel or csv (file or URL directly).
 
     Args:
         file_path (Path | str): Path to the Excel file.
+        file_type (str | None): Manual file type definition for loading. Defaults to None.
         args (optional): Additional arguments to be passed to pandas loading
-        function, i.e. sheet_name for an Excel or index_col for a CSV.
+            function, i.e. sheet_name for an Excel or index_col for a CSV.
 
     Returns:
         pd.DataFrame: Pandas dataframe extracted from the provided file.
@@ -516,11 +520,13 @@ def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
             doesn't exist, if invalid arguments (args) were provided for loading with pandas.
         RETRY_ERRORS: If the file is a URL that is inaccessible for some reason.
     """
+    suffix = file_type or Path(file_path).suffix
+
     try:
-        if Path(file_path).suffix == ".xlsx":
+        if suffix == ".xlsx":
             df = pd.read_excel(str(file_path), **args)
 
-        elif Path(file_path).suffix == ".csv":
+        elif suffix == ".csv":
             df = pd.read_csv(str(file_path), **args)
 
         else:
@@ -539,3 +545,35 @@ def load_df_from_file(file_path: Path | str, **args) -> pd.DataFrame:
 
     logger.info(f"Successfully loaded dataframe from '{file_path}'")
     return df
+
+
+def load_excel_from_file(file_path: Path | str) -> pd.ExcelFile:
+    """Load an Excel file from the provided URL.
+
+    Args:
+        file_path (str): URL to download data from.
+
+    Returns:
+        pd.ExcelFile: Excel file extracted from the provided URL.
+
+    Raises:
+        InvalidError: If the file isn't an xlsx, if the file doesn't exist
+        RETRY_ERRORS: If the file is a URL that is inaccessible for some reason.
+    """
+    if Path(file_path).suffix != ".xlsx":
+        raise InvalidError(f"Invalid extension in '{file_path}' - not an xlsx!")
+
+    try:
+        xlsx_file = pd.ExcelFile(file_path)
+
+    except FileNotFoundError:
+        raise InvalidError(f"Invalid path - file '{file_path}' does not exist!")
+
+    except zipfile.BadZipFile:
+        raise InvalidError(f"Invalid file content - '{file_path}' is not a valid xlsx!")
+
+    except RETRY_ERRORS:  # these can occur when the file is a URL!
+        raise
+
+    logger.info(f"Successfully loaded excel from '{file_path}'")
+    return xlsx_file

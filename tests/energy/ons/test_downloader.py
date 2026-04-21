@@ -3,6 +3,7 @@
 
 import pickle
 from pathlib import Path
+from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -10,7 +11,7 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.ons import OnsDownloader
-from rbc.energy.ons.downloader import EXPECTED_COLS_MAPPING, URL_BASE
+from rbc.energy.ons.downloader import EXPECTED_COLS, URL_BASE
 from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
 
 
@@ -72,16 +73,23 @@ def get_mock_df(spec_task: DownloadTask) -> pd.DataFrame:
     Returns:
         pandas.DataFrame: Mock dataframe.
     """
-    row: dict[str, object] = {c: ["A"] for c in EXPECTED_COLS_MAPPING.keys()}
+    row: dict[str, object] = {c: ["A"] for c in EXPECTED_COLS}
     row.update(
         {
             c: f"{spec_task.date}-01 00:00:00"
-            for c in EXPECTED_COLS_MAPPING.keys()
+            for c in EXPECTED_COLS
             if "din_instante" in c
         }
     )
     row.update({"val_geracao": 10.0})
     return pd.DataFrame(row, index=[0])
+
+
+@pytest.fixture(autouse=True)
+def clear_cache() -> Generator[None, None, None]:
+    """Clear lru_cache after each test to avoid cache pollution."""
+    yield
+    OnsDownloader._load_yearly_csv.cache_clear()
 
 
 # ----------------------------------
@@ -118,15 +126,18 @@ def test_downloader_initialization_invalid_access(init_args: dict) -> None:
 def test_download_data_resume(init_args: dict) -> None:
     """Happy path for "download_data" method when resuming from checkpoint.
 
+    If all monthly tasks are already marked as done in the checkpoint, the
+    downloader should not attempt any downloads.
+
     Args:
         init_args (dict): Arguments used to initialize an OnsDownloader instance.
     """
     args = init_args.copy()
-    y = args["years"][0]
 
     # save a fake checkpoint file
     checkpoint = {
         DownloadTask(date=d).identifier: 1
+        for y in args["years"]
         for d in pd.date_range(start=f"{y}-01", end=f"{y}-12", freq="MS")
         .strftime("%Y-%m")
         .tolist()
@@ -201,9 +212,9 @@ def test_get_task_data(
 
     assert not df.empty
     assert len(df) == 1
-    assert df.iloc[0]["datetime"] == f"{task.date}-01 00:00:00"
-    assert df.iloc[0]["plant_name"] == "A"
-    assert df.iloc[0]["generation_MWmed"] == 10.0
+    assert df.iloc[0]["din_instante"] == f"{task.date}-01 00:00:00"
+    assert df.iloc[0]["nom_usina"] == "A"
+    assert df.iloc[0]["val_geracao"] == 10.0
     assert mock_old.call_count == expect_old
     assert mock_new.call_count == expect_new
 
@@ -217,7 +228,7 @@ def test_get_task_data_no_generation_data(
         downloader (OnsDownloader): Instance of OnsDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_df = pd.DataFrame(columns=EXPECTED_COLS_MAPPING)
+    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
 
     with patch.object(downloader, "_get_from_yearly_csv", return_value=mock_df):
         with patch.object(downloader, "_get_from_monthly_csv", return_value=mock_df):
@@ -313,8 +324,6 @@ def test_lru_cache_works(downloader: OnsDownloader, task: DownloadTask) -> None:
         }
     )
 
-    downloader._load_yearly_csv.cache_clear()
-
     with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
         mock_load.return_value = mock_df
 
@@ -332,8 +341,6 @@ def test_load_yearly_csv(downloader: OnsDownloader, task: DownloadTask) -> None:
         downloader (OnsDownloader): Instance of OnsDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    downloader._load_yearly_csv.cache_clear()
-
     with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
         mock_load.return_value = get_mock_df(task)
 
@@ -364,8 +371,6 @@ def test_load_yearly_csv_structure_changed(
         mock_df_dict (dict): Dictionary of mock dataframe columns.
         expected_match (str): Expected match string.
     """
-    downloader._load_yearly_csv.cache_clear()
-
     with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
         mock_load.return_value = pd.DataFrame(mock_df_dict)
 
