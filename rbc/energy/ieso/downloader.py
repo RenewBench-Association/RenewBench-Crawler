@@ -19,6 +19,7 @@ from rbc.energy.utils import (
     EnergyDownloader,
     MissingDataError,
     load_df_from_file,
+    load_excel_from_file,
 )
 
 URL_BASE_NEW = "https://reports-public.ieso.ca/public/GenOutputCapabilityMonth"
@@ -188,8 +189,11 @@ class IesoDownloader(EnergyDownloader):
         Raises:
             DataStructureError: If downloaded data does not have capacity values.
         """
-        # 1. get generation ('Output') data and standardize
-        df_gen = load_df_from_file(url, sheet_name="Output")
+        # 1. load excel once to then extract relevant sheets
+        xlsx_file = load_excel_from_file(url)
+
+        # 2. get generation ('Output') data and standardize
+        df_gen = pd.read_excel(xlsx_file, sheet_name="Output")
         df_gen = self.standardize_old_data(df_gen, "Output")
 
         # 2. get capacity ('Capability') data and standardize
@@ -200,7 +204,7 @@ class IesoDownloader(EnergyDownloader):
             "Capability",  # for 2010-2013 and 2019
         ]:
             try:
-                df_cap = load_df_from_file(url, sheet_name=sheet)
+                df_cap = pd.read_excel(xlsx_file, sheet_name=sheet)
                 break
             except ValueError:  # continue to next one if sheet does not exist
                 continue
