@@ -12,6 +12,8 @@ ALL_SINGLE_LEVEL_VARIABLES = {
     "100m_v_component_of_wind",
     "2m_dewpoint_temperature",
     "2m_temperature",
+    "2m_maximum_temperature",
+    "2m_minimum_temperature",
     "boundary_layer_height",
     "convective_available_potential_energy",
     "convective_precipitation",
@@ -124,20 +126,34 @@ ALL_MODEL_LEVEL_VARIABLES = {
 
 # Default: 13 variables (8 single-level surface + 5 pressure-level atmospheric)
 DEFAULT_VARIABLES = [
-    # 2D surface variables
+    # Single-level temperature, pressure and humidity
+    "2m_temperature",
+    "2m_maximum_temperature",
+    "2m_minimum_temperature",
+    "2m_dewpoint_temperature",
+    "surface_pressure",
+    "mean_sea_level_pressure",
+    "geopotential_at_surface",
+    "surface_specific_humidity"
+    # Single-level wind, precipitation and evaporation
     "10m_u_component_of_wind",
     "10m_v_component_of_wind",
     "100m_u_component_of_wind",
     "100m_v_component_of_wind",
-    "2m_temperature",
-    "surface_solar_radiation_downwards",
-    "surface_pressure",
+    "10m_maximum_wind_speed",
     "total_precipitation",
+    "evaporation",
+    # Single-level radiation and clouds
+    "total_cloud_cover",
+    "surface_solar_radiation_downwards",
     # 3D variables at pressure levels
     "temperature",
+    "specific_humidity",
+    "relative_humidity",
     "u_component_of_wind",
     "v_component_of_wind",
-    "relative_humidity",
+    "potential_vorticity",
+    "vorticity",
     "geopotential",
 ]
 
@@ -196,12 +212,16 @@ VARIABLE_TO_MARS_PARAM = {
     # Single-level variables
     "10m_u_component_of_wind": "10u",
     "10m_v_component_of_wind": "10v",
+    "10m_maximum_wind_speed": "vmax_10m",
     "100m_u_component_of_wind": "100u",
     "100m_v_component_of_wind": "100v",
     "2m_temperature": "2t",
+    "2m_maximum_temperature": "mx2t",
+    "2m_minimum_temperature": "mn2t",
     "2m_dewpoint_temperature": "2d",
     "surface_solar_radiation_downwards": "ssrd",
     "surface_pressure": "sp",
+    "surface_specific_humidity": "qv_2m",
     "total_precipitation": "tp",
     "mean_sea_level_pressure": "msl",
     "boundary_layer_height": "blh",
@@ -222,6 +242,7 @@ VARIABLE_TO_MARS_PARAM = {
     "top_net_solar_radiation": "tsr",
     "top_net_thermal_radiation": "ttr",
     "total_cloud_cover": "tcc",
+    "geopotential_at_surface": "z",
     # 3D variables (pressure/model levels)
     "temperature": "t",
     "u_component_of_wind": "u",

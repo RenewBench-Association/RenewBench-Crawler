@@ -37,19 +37,35 @@ ALL_SINGLE_LEVEL_VARIABLES = {
 
 # Default: 10 variables (6 single-level surface + 4 model-level atmospheric)
 DEFAULT_VARIABLES = [
-    # 2D surface variables
+    # Single-level temperature, pressure and humidity
+    "2m_temperature",
+    "2m_maximum_temperature",
+    "2m_minimum_temperature",
+    "2m_dewpoint_temperature",
+    "surface_pressure",
+    "mean_sea_level_pressure",
+    "surface_specific_humidity",
+    # Single-level wind, precipitation and evaporation
     "10m_u_component_of_wind",
     "10m_v_component_of_wind",
-    "2m_temperature",
-    "surface_pressure",
+    "10m_maximum_wind_speed",
+    "10m_wind_speed",
+    "surface_roughness_length",
+    "total_precipitation",
+    "evapotranspiration",
+    # Single-level radiation and clouds
+    "total_cloud_cover",
     "surface_solar_direct_radiation_downwards",
     "surface_solar_diffuse_radiation_downwards",
-    "total_precipitation",
     # 3D model-level variables
     "temperature",
+    "pressure",
+    "specific_humidity",
     "u_component_of_wind",
     "v_component_of_wind",
-    "specific_humidity",
+    "wind_speed",
+    "density_moist_air",
+    "turbulent_kinetic_energy"
 ]
 
 # Mapping of variable descriptions to DWD short codes
@@ -80,6 +96,7 @@ VARIABLE_TO_DWD_PARAM = {
     "turbulent_kinetic_energy": "TKE",
     "wind_speed": "WS",
     "density_moist_air": "DEN",
+    "evapotranspiration": "EVAPT",
 }
 
 MODEL_CONFIG = {
