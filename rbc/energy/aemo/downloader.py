@@ -201,7 +201,7 @@ class AemoDownloader(EnergyDownloader):
                     task_end = end.replace(tzinfo=self.units_lookup[unit]["timezone"])
 
                     if task_end < unit_start:
-                        logger.info(
+                        logger.debug(
                             f"No energy data for unit {unit} (it's before {unit_start}). "
                             f"Skipping..."
                         )  # don't raise error here or loop will be interrupted
@@ -296,6 +296,7 @@ class AemoDownloader(EnergyDownloader):
                     date_end=date_end,
                 )
                 # map the nested response back to a flat list of dicts
+                logger.debug(f"Energy data found for unit {unit_code}")
                 return [
                     {"timestamp": e.root[0], "unit_code": unit_code, "value": e.root[1]}
                     for s in response.data
@@ -308,7 +309,7 @@ class AemoDownloader(EnergyDownloader):
                 detail = e.detail
 
                 if status_code == 404:  # when data is permanently missing (404), skip!
-                    logger.info(
+                    logger.debug(
                         f"No energy data for unit {unit_code}. Skipping..."
                     )  # don't raise error here or loop will be interrupted
                     return []

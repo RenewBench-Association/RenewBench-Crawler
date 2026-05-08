@@ -49,6 +49,12 @@ def parse_arguments() -> Namespace:
     )
     parser.set_defaults(resume=True)
     parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Log with high verbosity (DEBUG) to include per-unit logging messages.",
+    )
+    parser.add_argument(
         "-o",
         "--cfg_options",
         action="append",
@@ -64,7 +70,7 @@ def main() -> None:
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
     cfg = load_config(source=SOURCE, overrides=overrides)
-    setup_logging(output_dir=cfg.paths.dst_dir_raw)
+    setup_logging(output_dir=cfg.paths.dst_dir_raw, verbose=args.verbose)
     logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
     logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
 
