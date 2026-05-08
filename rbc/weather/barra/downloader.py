@@ -71,6 +71,20 @@ def _get_available_codes(model_name: str) -> set[str]:
         return C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
 
 
+def _is_available_variable(variable: str, model_name: str) -> bool:
+    """Check if a variable is available for a given BARRA2 model.
+
+    Args:
+        variable (str): Variable name (descriptive or BARRA2 code).
+        model_name (str): Normalized model key ("R2", "C2", or "C2_20min").
+
+    Returns:
+        bool: True if the variable is available for the model, False otherwise.
+    """
+    barra2_code = VARIABLE_TO_BARRA2_PARAM.get(variable, variable)
+    return barra2_code in _get_available_codes(model_name)
+
+
 class Barra2Downloader(WeatherDownloader):
     """BARRA2 reanalysis data downloader.
 
@@ -150,7 +164,7 @@ class Barra2Downloader(WeatherDownloader):
 
         # Setup variables (use defaults if none provided)
         base_variables = (
-            list(variables) if variables is not None else list(DEFAULT_VARIABLES)
+            list(variables) if variables is not None else [v for v in DEFAULT_VARIABLES if _is_available_variable(v, self.model)]
         )
         if self.include_invariants:
             invariant_variable_names = sorted(

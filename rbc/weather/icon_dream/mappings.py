@@ -33,6 +33,7 @@ ALL_SINGLE_LEVEL_VARIABLES = {
     "VMAX_10M",
     "WS_10M",
     "Z0",
+    "EVAPT",
 }
 
 # Default: 10 variables (6 single-level surface + 4 model-level atmospheric)
@@ -65,7 +66,7 @@ DEFAULT_VARIABLES = [
     "v_component_of_wind",
     "wind_speed",
     "density_moist_air",
-    "turbulent_kinetic_energy"
+    "turbulent_kinetic_energy",
 ]
 
 # Mapping of variable descriptions to DWD short codes

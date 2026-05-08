@@ -5,6 +5,7 @@ Remote API access of ERA5 reanalysis data using the cdsapi package.
 
 from calendar import monthrange
 from pathlib import Path
+from typing import Any
 
 import cdsapi  # type: ignore[import-untyped]
 import requests
@@ -254,9 +255,7 @@ class Era5Downloader(WeatherDownloader):
                 logger.info(
                     f"{year}-{month} ({level_type}, {len(variables_to_download)} variables): Starting download..."
                 )
-                self.client.retrieve(
-                    dataset, request_params, str(output_file)
-                )
+                self.client.retrieve(dataset, request_params, str(output_file))
                 logger.info(
                     f"{year}-{month} ({level_type}): Downloaded and saved to {output_file}"
                 )
@@ -355,16 +354,16 @@ class Era5Downloader(WeatherDownloader):
 
     def _build_request_batch(
         self, variables: list[str], year: int, month: str, level_type: str = "single"
-    ) -> dict:
+    ) -> tuple[str, dict[str, Any]]:
         """Build a CDS / MARS format request for multiple variables combined.
 
-        Combines all variables into a single request. Combining variables into a single 
-        request is more efficient than making separate requests for each variable, especially 
-        when downloading multiple variables for the same year and month. 
-        The CDS API and MARS backend can optimize retrieval when multiple parameters 
+        Combines all variables into a single request. Combining variables into a single
+        request is more efficient than making separate requests for each variable, especially
+        when downloading multiple variables for the same year and month.
+        The CDS API and MARS backend can optimize retrieval when multiple parameters
         are requested together, reducing overhead and improving download speed.
-        For pressure and single level variables, the request is made through the CDS API 
-        endpoint which is faster than the MARS endpoint but do not offer model-level variables. 
+        For pressure and single level variables, the request is made through the CDS API
+        endpoint which is faster than the MARS endpoint but do not offer model-level variables.
         For model level variables, the request is made through the MARS endpoint.
 
         Args:
@@ -380,12 +379,18 @@ class Era5Downloader(WeatherDownloader):
         # Combine all parameter codes with "/"
         param_codes = [self._get_mars_param(var) for var in variables]
 
-        dataset = self.model_config["MARS"]["dataset"] if level_type == "model" else (
-            self.model_config["CDS"]["dataset"])
+        dataset_map = {
+            "model": self.model_config["MARS"]["dataset"],
+            "pressure": self.model_config["CDS"]["dataset_pl"],
+            "single": self.model_config["CDS"]["dataset_sl"],
+        }
+        dataset = dataset_map[level_type]
 
-        # The model-level request uses the MARS endpoint which has a different request format and 
-        # requires additional parameters ('class', 'stream', 'type', etc.) compared to the CDS API 
-        # endpoint used for single and pressure level variables. 
+        request: dict[str, Any]
+
+        # The model-level request uses the MARS endpoint which has a different request format and
+        # requires additional parameters ('class', 'stream', 'type', etc.) compared to the CDS API
+        # endpoint used for single and pressure level variables.
         if level_type == "model":
             date_range = f"{year}-{month}-01/to/{year}-{month}-{days_in_month:02d}"
 
@@ -397,6 +402,8 @@ class Era5Downloader(WeatherDownloader):
                 "class": self.model_config["MARS"]["mars_class"],
                 "date": date_range,
                 "expver": self.model_config["MARS"]["mars_expver"],
+                "levellist": "/".join(self.model_levels) if self.model_levels is not None else None,
+                "leveltype": self.model_config["MARS"]["levtype_model"],
                 "param": "/".join(param_codes),
                 "stream": self.model_config["MARS"]["mars_stream"],
                 "time": time_range,
@@ -406,23 +413,21 @@ class Era5Downloader(WeatherDownloader):
             # Add area if specified
             if self.area:
                 # Format area as N/W/S/E string
-                request["area"] = f"{self.area[0]}/{self.area[1]}/{self.area[2]}/{self.area[3]}"
+                request["area"] = (
+                    f"{self.area[0]}/{self.area[1]}/{self.area[2]}/{self.area[3]}"
+                )
 
-            request["levtype"] = self.model_config["MARS"]["levtype_model"]
-            if self.model_levels is not None:
-                request["levelist"] = "/".join(self.model_levels)
-        
-        # Pressure- and single level use the CDS API endpoint. 
+        # Pressure- and single level use the CDS API endpoint.
         else:
-            date_range = [f"{i:02d}" for i in range(1, days_in_month + 1)]
-            time_range = [f"{i:02d}:00" for i in range(24)]
+            date_list = [f"{i:02d}" for i in range(1, days_in_month + 1)]
+            time_list = [f"{i:02d}:00" for i in range(24)]
             request = {
                 "product_type": self.model_config["CDS"]["product_type"],
                 "variable": param_codes,
                 "year": [year],
                 "month": [month],
-                "day": date_range,
-                "time": time_range,
+                "day": date_list,
+                "time": time_list,
                 "data_format": self.model_config["CDS"]["data_format"],
                 "download_format": self.model_config["CDS"]["download_format"],
             }
@@ -431,12 +436,16 @@ class Era5Downloader(WeatherDownloader):
             if level_type == "pressure":
                 request["pressure_level"] = self.pressure_levels
 
-
             # Add area if specified
             if self.area:
                 # Format area as list N, W, S, E
-                request["area"] = [self.area[0], self.area[1], self.area[2], self.area[3]]
-            
+                request["area"] = [
+                    self.area[0],
+                    self.area[1],
+                    self.area[2],
+                    self.area[3],
+                ]
+
         return dataset, request
 
     @staticmethod

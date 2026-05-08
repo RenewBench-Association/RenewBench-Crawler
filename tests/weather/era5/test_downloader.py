@@ -99,6 +99,7 @@ def model_level_downloader(api_credentials: dict, tmp_path: Path) -> Era5Downloa
             variables=["temperature"],
             pressure_levels=None,
             model_levels=["135", "136", "137"],
+            area=[10.0, -10.0, -10.0, 10.0]
         )
     return dl
 
@@ -409,42 +410,46 @@ def test_get_mars_param_fallback_returns_variable_name(
     assert result == "custom_unmapped_variable"
 
 
-def test_build_mars_request_batch_single_level(downloader: Era5Downloader) -> None:
-    """Test MARS request building for single-level variables.
+def test_build_cds_request_batch_single_level(downloader: Era5Downloader) -> None:
+    """Test CDS request building for single-level variables.
 
     Args:
         downloader (Era5Downloader): Instance of Era5Downloader.
     """
-    request = downloader._build_request_batch(
+    dataset, request = downloader._build_request_batch(
         variables=["2m_temperature", "surface_pressure"],
         year=2020,
         month="01",
         level_type="single",
     )
 
-    assert request["class"] == "ea"
-    assert request["param"] == "2t/sp"  # Combined params
-    assert request["levtype"] == "sfc"
-    assert "levelist" not in request
-    assert request["date"] == "2020-01-01/to/2020-01-31"
+    assert dataset == downloader.model_config["CDS"]["dataset_sl"]
+    assert request["variable"] == ["2t", "sp"]  # Combined params
+    assert request["year"] == [2020]
+    assert request["month"] == ["01"]
+    assert request["day"] == [f"{i:02d}" for i in range(1, 32)]
+    assert request["time"] == [f"{i:02d}:00" for i in range(24)]
+    assert request["data_format"] == downloader.model_config["CDS"]["data_format"]
+    assert request["download_format"] == downloader.model_config["CDS"]["download_format"]  
+    assert "pressure_level" not in request
 
 
-def test_build_mars_request_batch_pressure_level(downloader: Era5Downloader) -> None:
-    """Test MARS request building for pressure-level variables.
+def test_build_cds_request_batch_pressure_level(downloader: Era5Downloader) -> None:
+    """Test CDS request building for pressure-level variables.
 
     Args:
         downloader (Era5Downloader): Instance of Era5Downloader.
     """
-    request = downloader._build_request_batch(
+    dataset, request = downloader._build_request_batch(
         variables=["temperature", "u_component_of_wind"],
         year=2020,
         month="01",
         level_type="pressure",
     )
 
-    assert request["param"] == "t/u"
-    assert request["levtype"] == "pl"
-    assert request["levelist"] == "1000/950"
+    assert dataset == downloader.model_config["CDS"]["dataset_pl"]
+    assert request["variable"] == ["t", "u"]  # Combined params
+    assert request["pressure_level"] == ["1000", "950"]
 
 
 def test_build_mars_request_batch_model_level(
@@ -455,16 +460,24 @@ def test_build_mars_request_batch_model_level(
     Args:
         model_level_downloader (Era5Downloader): Downloader configured with model levels.
     """
-    request = model_level_downloader._build_request_batch(
+    dataset, request = model_level_downloader._build_request_batch(
         variables=["temperature"],
         year=2020,
         month="01",
-        level_type="model",
+        level_type="model"
     )
 
+    assert dataset == model_level_downloader.model_config["MARS"]["dataset"]
+    assert request["class"] == model_level_downloader.model_config["MARS"]["mars_class"]
+    assert request["date"] == "2020-01-01/to/2020-01-31"
+    assert request["expver"] == model_level_downloader.model_config["MARS"]["mars_expver"]
+    assert request["levellist"] == "135/136/137"
+    assert request["leveltype"] == model_level_downloader.model_config["MARS"]["levtype_model"]
     assert request["param"] == "t"
-    assert request["levtype"] == "ml"
-    assert request["levelist"] == "135/136/137"
+    assert request["stream"] == model_level_downloader.model_config["MARS"]["mars_stream"]
+    assert request["time"] == "/".join([f"{i:02d}:00:00" for i in range(24)])
+    assert request["type"] == model_level_downloader.model_config["MARS"]["mars_type"]
+    assert request["area"] == "10.0/-10.0/-10.0/10.0"
 
 
 # ----------------------------------
@@ -517,9 +530,7 @@ def test_download_variables_already_exists(downloader: Era5Downloader) -> None:
     # The fixture has variables=["2m_temperature", "temperature"] and
     # pressure_levels=["1000","950"]. For level_type="single", only
     # 2m_temperature (param "2t") is downloaded, producing this filename:
-    existing_file = (
-        downloader.output_path / f"era5_2020_01_sl_2t.grib"
-    )
+    existing_file = downloader.output_path / "era5_2020_01_sl_2t.grib"
     existing_file.touch()
 
     with patch.object(downloader.client, "retrieve") as mock_retrieve:

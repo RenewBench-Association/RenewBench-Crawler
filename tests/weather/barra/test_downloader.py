@@ -10,6 +10,7 @@ import pytest
 import requests
 
 from rbc.weather.barra import Barra2Downloader
+from rbc.weather.barra.downloader import _is_available_variable
 from rbc.weather.barra.mappings import (
     DEFAULT_VARIABLES,
 )
@@ -148,7 +149,8 @@ def test_downloader_init_model_configs(
     )
 
     if variables is None:
-        assert downloader.variables == DEFAULT_VARIABLES
+        default_variables = [var for var in DEFAULT_VARIABLES if _is_available_variable(var, model)]
+        assert downloader.variables == default_variables
     assert exp_label in downloader.model_config["label"]
     assert exp_spatial_res in downloader.model_config["resolution"]
     assert exp_grid in downloader.model_config["grid"]
