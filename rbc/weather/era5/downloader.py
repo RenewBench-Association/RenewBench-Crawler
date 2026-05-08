@@ -402,7 +402,9 @@ class Era5Downloader(WeatherDownloader):
                 "class": self.model_config["MARS"]["mars_class"],
                 "date": date_range,
                 "expver": self.model_config["MARS"]["mars_expver"],
-                "levellist": "/".join(self.model_levels) if self.model_levels is not None else None,
+                "levellist": "/".join(self.model_levels)
+                if self.model_levels is not None
+                else None,
                 "leveltype": self.model_config["MARS"]["levtype_model"],
                 "param": "/".join(param_codes),
                 "stream": self.model_config["MARS"]["mars_stream"],

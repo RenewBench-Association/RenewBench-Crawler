@@ -164,7 +164,9 @@ class Barra2Downloader(WeatherDownloader):
 
         # Setup variables (use defaults if none provided)
         base_variables = (
-            list(variables) if variables is not None else [v for v in DEFAULT_VARIABLES if _is_available_variable(v, self.model)]
+            list(variables)
+            if variables is not None
+            else [v for v in DEFAULT_VARIABLES if _is_available_variable(v, self.model)]
         )
         if self.include_invariants:
             invariant_variable_names = sorted(

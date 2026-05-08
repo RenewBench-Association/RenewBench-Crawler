@@ -99,7 +99,7 @@ def model_level_downloader(api_credentials: dict, tmp_path: Path) -> Era5Downloa
             variables=["temperature"],
             pressure_levels=None,
             model_levels=["135", "136", "137"],
-            area=[10.0, -10.0, -10.0, 10.0]
+            area=[10.0, -10.0, -10.0, 10.0],
         )
     return dl
 
@@ -430,7 +430,9 @@ def test_build_cds_request_batch_single_level(downloader: Era5Downloader) -> Non
     assert request["day"] == [f"{i:02d}" for i in range(1, 32)]
     assert request["time"] == [f"{i:02d}:00" for i in range(24)]
     assert request["data_format"] == downloader.model_config["CDS"]["data_format"]
-    assert request["download_format"] == downloader.model_config["CDS"]["download_format"]  
+    assert (
+        request["download_format"] == downloader.model_config["CDS"]["download_format"]
+    )
     assert "pressure_level" not in request
 
 
@@ -461,20 +463,24 @@ def test_build_mars_request_batch_model_level(
         model_level_downloader (Era5Downloader): Downloader configured with model levels.
     """
     dataset, request = model_level_downloader._build_request_batch(
-        variables=["temperature"],
-        year=2020,
-        month="01",
-        level_type="model"
+        variables=["temperature"], year=2020, month="01", level_type="model"
     )
 
     assert dataset == model_level_downloader.model_config["MARS"]["dataset"]
     assert request["class"] == model_level_downloader.model_config["MARS"]["mars_class"]
     assert request["date"] == "2020-01-01/to/2020-01-31"
-    assert request["expver"] == model_level_downloader.model_config["MARS"]["mars_expver"]
+    assert (
+        request["expver"] == model_level_downloader.model_config["MARS"]["mars_expver"]
+    )
     assert request["levellist"] == "135/136/137"
-    assert request["leveltype"] == model_level_downloader.model_config["MARS"]["levtype_model"]
+    assert (
+        request["leveltype"]
+        == model_level_downloader.model_config["MARS"]["levtype_model"]
+    )
     assert request["param"] == "t"
-    assert request["stream"] == model_level_downloader.model_config["MARS"]["mars_stream"]
+    assert (
+        request["stream"] == model_level_downloader.model_config["MARS"]["mars_stream"]
+    )
     assert request["time"] == "/".join([f"{i:02d}:00:00" for i in range(24)])
     assert request["type"] == model_level_downloader.model_config["MARS"]["mars_type"]
     assert request["area"] == "10.0/-10.0/-10.0/10.0"

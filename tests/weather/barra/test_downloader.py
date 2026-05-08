@@ -149,7 +149,9 @@ def test_downloader_init_model_configs(
     )
 
     if variables is None:
-        default_variables = [var for var in DEFAULT_VARIABLES if _is_available_variable(var, model)]
+        default_variables = [
+            var for var in DEFAULT_VARIABLES if _is_available_variable(var, model)
+        ]
         assert downloader.variables == default_variables
     assert exp_label in downloader.model_config["label"]
     assert exp_spatial_res in downloader.model_config["resolution"]
