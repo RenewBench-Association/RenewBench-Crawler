@@ -1,6 +1,6 @@
 """ERA5 variable and level mappings.
 
-Constants for ERA5 variables, pressure levels, model levels, and MARS parameter codes.
+Constants for ERA5 variables, pressure levels, model levels, and CDS / MARS parameter codes.
 """
 
 # Surface and single-level variables
@@ -724,12 +724,20 @@ VARIABLE_TO_MARS_PARAM = {
 
 MODEL_CONFIG = {
     "url": "https://cds.climate.copernicus.eu/api",
-    "mars_class": "ea",
-    "mars_stream": "oper",
-    "mars_type": "an",
-    "mars_expver": "1",
-    "levtype_single": "sfc",
-    "levtype_pressure": "pl",
-    "levtype_model": "ml",
     "start_year": "1940",
+    "MARS": {
+        "dataset": "reanalysis-era5-complete",
+        "mars_class": "ea",
+        "mars_stream": "oper",
+        "mars_type": "an",
+        "mars_expver": "1",
+        "levtype_model": "ml",
+    },
+    "CDS": {
+        "product_type": ["reanalysis"],
+        "download_format": "unarchived",
+        "data_format": "grib",
+        "dataset_pl": "reanalysis-era5-pressure-levels",
+        "dataset_sl": "reanalysis-era5-single-levels",
+    }
 }

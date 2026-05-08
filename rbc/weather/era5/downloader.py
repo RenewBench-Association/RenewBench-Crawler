@@ -31,12 +31,9 @@ class Era5Downloader(WeatherDownloader):
     Attributes:
         area (list[float] | None): Bounding box [North, West, South, East] in degrees. None for world (all).
         client (cdsapi.Client): CDS API client for retrieving data.
-        file_extension (str): File extension based on file_format.
-        file_format (str): Output file format ("grib" or "netcdf").
         model_config (dict): Model-specific configuration from MODEL_CONFIG.
         model_levels (list[str] | None): List of model levels to download (for 3D variables).
         pressure_levels (list[str] | None): List of pressure levels to download (for 3D variables).
-        resolution (str): Grid resolution (e.g., "0.25/0.25").
     """
 
     def __init__(
@@ -47,10 +44,8 @@ class Era5Downloader(WeatherDownloader):
         months: list[str] | None = None,
         variables: list[str] | None = None,
         area: list[float] | None = None,
-        resolution: str = "0.25/0.25",
         pressure_levels: list[str] | None = None,
         model_levels: list[str] | None = None,
-        file_format: str = "grib",
         dry_run: bool = False,
         resume: bool = True,
     ) -> None:
@@ -63,27 +58,18 @@ class Era5Downloader(WeatherDownloader):
             months (list[str], optional): List of months (01-12). Defaults to all months.
             variables (list[str], optional): List of ERA5 variables. Defaults to common variables.
             area (list[float], optional): Bounding box [N, W, S, E]. Defaults to global (None).
-            resolution (str, optional): Grid resolution. Defaults to "0.25/0.25".
             pressure_levels (list[str], optional): Pressure levels (hPa). Defaults to default levels if None.
             model_levels (list[str], optional): Model levels (1-137). Defaults to default levels if None.
-            file_format (str, optional): Output file format ("grib" or "netcdf"). Defaults to "grib".
             dry_run (bool, optional): If True, print requests without submitting them. Defaults to False.
             resume (bool, optional): Whether to resume from a previous download. Defaults to True.
 
         Raises:
-            ValueError: If API credentials are invalid or invalid file_format.
+            ValueError: If API credentials are invalid.
             ConnectionError: If the CDS API endpoint is unreachable.
         """
         self.model_config = MODEL_CONFIG
-        if file_format.lower() not in ["grib", "netcdf"]:
-            raise ValueError(
-                f"file_format must be 'grib' or 'netcdf', got '{file_format}'"
-            )
 
         self.area = area  # If None, API downloads global data (area parameter omitted from request)
-        self.resolution = resolution
-        self.file_format = file_format.lower()
-        self.file_extension = "nc" if self.file_format == "netcdf" else "grib"
 
         # Determine which level types to download
         # If both are None, default to pressure levels
@@ -140,8 +126,6 @@ class Era5Downloader(WeatherDownloader):
             f"\n- months:\t\t{self.months}"
             f"\n- variables:\t\t{self.variables}"
             f"\n- area (N,W,S,E):\t{area_str}"
-            f"\n- resolution:\t\t{resolution}"
-            f"\n- file_format:\t\t{file_format}"
             f"\n- {'; '.join(level_info) if level_info else 'No levels specified'}"
         )
 
@@ -235,7 +219,7 @@ class Era5Downloader(WeatherDownloader):
         variables_str = "-".join(short_names)
         output_file = Path(
             self.output_path,
-            f"era5_{year}_{month}{level_suffix}_{variables_str}.{self.file_extension}",
+            f"era5_{year}_{month}{level_suffix}_{variables_str}.grib",
         )
 
         if output_file.exists():
@@ -246,7 +230,7 @@ class Era5Downloader(WeatherDownloader):
 
         try:
             # Build a single request with all variables combined
-            request_params = self._build_mars_request_batch(
+            dataset, request_params = self._build_request_batch(
                 variables=variables_to_download,
                 year=year,
                 month=month,
@@ -259,7 +243,7 @@ class Era5Downloader(WeatherDownloader):
                     f"\n{'=' * 80}"
                     f"\nDRY RUN: {year}-{month} ({level_type}, {len(variables_to_download)} variables)"
                     f"\n{'=' * 80}"
-                    f"\nDataset: reanalysis-era5-complete"
+                    f"\nDataset: {dataset}"
                     f"\nVariables: {', '.join(variables_to_download)}"
                     f"\nRequest parameters:\n{params_str}"
                     f"\nOutput file (would be): {output_file}"
@@ -271,7 +255,7 @@ class Era5Downloader(WeatherDownloader):
                     f"{year}-{month} ({level_type}, {len(variables_to_download)} variables): Starting download..."
                 )
                 self.client.retrieve(
-                    "reanalysis-era5-complete", request_params, str(output_file)
+                    dataset, request_params, str(output_file)
                 )
                 logger.info(
                     f"{year}-{month} ({level_type}): Downloaded and saved to {output_file}"
@@ -369,13 +353,19 @@ class Era5Downloader(WeatherDownloader):
         # Fallback: use variable name directly
         return variable
 
-    def _build_mars_request_batch(
+    def _build_request_batch(
         self, variables: list[str], year: int, month: str, level_type: str = "single"
     ) -> dict:
-        """Build a MARS format request for multiple variables combined.
+        """Build a CDS / MARS format request for multiple variables combined.
 
-        Combines all variables into a single request with param codes joined by "/".
-        This is more efficient for MARS backend processing.
+        Combines all variables into a single request. Combining variables into a single 
+        request is more efficient than making separate requests for each variable, especially 
+        when downloading multiple variables for the same year and month. 
+        The CDS API and MARS backend can optimize retrieval when multiple parameters 
+        are requested together, reducing overhead and improving download speed.
+        For pressure and single level variables, the request is made through the CDS API 
+        endpoint which is faster than the MARS endpoint but do not offer model-level variables. 
+        For model level variables, the request is made through the MARS endpoint.
 
         Args:
             variables (list[str]): List of ERA5 variable names
@@ -384,55 +374,70 @@ class Era5Downloader(WeatherDownloader):
             level_type (str): Type of levels ("single", "pressure", or "model")
 
         Returns:
-            dict: MARS format request parameters with combined param codes
+            tuple: Dataset name and CDS / MARS format request parameters with combined param codes
         """
         days_in_month = monthrange(year, int(month))[1]
-        date_range = f"{year}-{month}-01/to/{year}-{month}-{days_in_month:02d}"
-
-        # Format times as HH:MM:SS separated by slashes
-        times = "/".join([f"{i:02d}:00:00" for i in range(24)])
-
-        # Format area as N/W/S/E string
-        area_str = (
-            f"{self.area[0]}/{self.area[1]}/{self.area[2]}/{self.area[3]}"
-            if self.area
-            else None
-        )
-
         # Combine all parameter codes with "/"
         param_codes = [self._get_mars_param(var) for var in variables]
-        combined_params = "/".join(param_codes)
 
-        # Build base request
-        request = {
-            "class": self.model_config["mars_class"],
-            "date": date_range,
-            "expver": self.model_config["mars_expver"],
-            "grid": self.resolution,
-            "param": combined_params,
-            "stream": self.model_config["mars_stream"],
-            "time": times,
-            "type": self.model_config["mars_type"],
-        }
+        dataset = self.model_config["MARS"]["dataset"] if level_type == "model" else (
+            self.model_config["CDS"]["dataset"])
 
-        # Add area if specified
-        if area_str:
-            request["area"] = area_str
+        # The model-level request uses the MARS endpoint which has a different request format and 
+        # requires additional parameters ('class', 'stream', 'type', etc.) compared to the CDS API 
+        # endpoint used for single and pressure level variables. 
+        if level_type == "model":
+            date_range = f"{year}-{month}-01/to/{year}-{month}-{days_in_month:02d}"
 
-        # Add level-specific parameters
-        if level_type == "single":
-            # Single-level (surface) variables
-            request["levtype"] = self.model_config["levtype_single"]
-        elif level_type == "pressure":
-            request["levtype"] = self.model_config["levtype_pressure"]
-            if self.pressure_levels is not None:
-                request["levelist"] = "/".join(self.pressure_levels)
-        elif level_type == "model":
-            request["levtype"] = self.model_config["levtype_model"]
+            # Format times as HH:MM:SS separated by slashes
+            time_range = "/".join([f"{i:02d}:00:00" for i in range(24)])
+
+            # Build base request
+            request = {
+                "class": self.model_config["MARS"]["mars_class"],
+                "date": date_range,
+                "expver": self.model_config["MARS"]["mars_expver"],
+                "param": "/".join(param_codes),
+                "stream": self.model_config["MARS"]["mars_stream"],
+                "time": time_range,
+                "type": self.model_config["MARS"]["mars_type"],
+            }
+
+            # Add area if specified
+            if self.area:
+                # Format area as N/W/S/E string
+                request["area"] = f"{self.area[0]}/{self.area[1]}/{self.area[2]}/{self.area[3]}"
+
+            request["levtype"] = self.model_config["MARS"]["levtype_model"]
             if self.model_levels is not None:
                 request["levelist"] = "/".join(self.model_levels)
+        
+        # Pressure- and single level use the CDS API endpoint. 
+        else:
+            date_range = [f"{i:02d}" for i in range(1, days_in_month + 1)]
+            time_range = [f"{i:02d}:00" for i in range(24)]
+            request = {
+                "product_type": self.model_config["CDS"]["product_type"],
+                "variable": param_codes,
+                "year": [year],
+                "month": [month],
+                "day": date_range,
+                "time": time_range,
+                "data_format": self.model_config["CDS"]["data_format"],
+                "download_format": self.model_config["CDS"]["download_format"],
+            }
 
-        return request
+            # Add pressure levels for pressure level variables request
+            if level_type == "pressure":
+                request["pressure_level"] = self.pressure_levels
+
+
+            # Add area if specified
+            if self.area:
+                # Format area as list N, W, S, E
+                request["area"] = [self.area[0], self.area[1], self.area[2], self.area[3]]
+            
+        return dataset, request
 
     @staticmethod
     def print_available_variables() -> None:

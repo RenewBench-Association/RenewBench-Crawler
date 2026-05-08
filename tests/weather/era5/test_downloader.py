@@ -144,25 +144,6 @@ def test_downloader_initialization_default_months(
         assert downloader.months[-1] == "12"
 
 
-def test_downloader_initialization_invalid_format(
-    api_credentials: dict, tmp_path: Path
-) -> None:
-    """Test initialization with invalid file format.
-
-    Args:
-        api_credentials (dict): API credentials.
-        tmp_path (Path): Temporary directory.
-    """
-    with pytest.raises(ValueError, match="file_format must be"):
-        with patch("rbc.weather.era5.downloader.cdsapi.Client"):
-            Era5Downloader(
-                **api_credentials,
-                output_path=tmp_path,
-                years=[2020],
-                file_format="hdf5",
-            )
-
-
 def test_downloader_initialization_unreachable_endpoint(
     api_credentials: dict, tmp_path: Path, mock_requests_head: MagicMock
 ) -> None:
@@ -434,7 +415,7 @@ def test_build_mars_request_batch_single_level(downloader: Era5Downloader) -> No
     Args:
         downloader (Era5Downloader): Instance of Era5Downloader.
     """
-    request = downloader._build_mars_request_batch(
+    request = downloader._build_request_batch(
         variables=["2m_temperature", "surface_pressure"],
         year=2020,
         month="01",
@@ -454,7 +435,7 @@ def test_build_mars_request_batch_pressure_level(downloader: Era5Downloader) -> 
     Args:
         downloader (Era5Downloader): Instance of Era5Downloader.
     """
-    request = downloader._build_mars_request_batch(
+    request = downloader._build_request_batch(
         variables=["temperature", "u_component_of_wind"],
         year=2020,
         month="01",
@@ -474,7 +455,7 @@ def test_build_mars_request_batch_model_level(
     Args:
         model_level_downloader (Era5Downloader): Downloader configured with model levels.
     """
-    request = model_level_downloader._build_mars_request_batch(
+    request = model_level_downloader._build_request_batch(
         variables=["temperature"],
         year=2020,
         month="01",
@@ -537,7 +518,7 @@ def test_download_variables_already_exists(downloader: Era5Downloader) -> None:
     # pressure_levels=["1000","950"]. For level_type="single", only
     # 2m_temperature (param "2t") is downloaded, producing this filename:
     existing_file = (
-        downloader.output_path / f"era5_2020_01_sl_2t.{downloader.file_extension}"
+        downloader.output_path / f"era5_2020_01_sl_2t.grib"
     )
     existing_file.touch()
 
