@@ -131,6 +131,8 @@ class AemoDownloader(EnergyDownloader):
                 f"No energy data for {len(diff_units)} out of {len(unique_units)} units "
                 f"(not yet producing in {latest_year}). Skipping:\n\n{diff_units}"
             )
+        else:
+            logger.info(f"All units {len(unique_units)} are producing energy data.")
 
     def download_data(self) -> None:
         """Parse data for all given years from AEMO (OpenElectricity) and save to CSV."""
@@ -236,7 +238,7 @@ class AemoDownloader(EnergyDownloader):
                 units_wo_data = sum(1 for r in results if not r)
                 logger.info(
                     f"Task {task.identifier}: {units_w_data} units with data, "
-                    f" {units_wo_data} units without data."
+                    f"{units_wo_data} units without data."
                 )
 
                 return [item for sublist in results for item in sublist]
@@ -443,7 +445,7 @@ class AemoDownloader(EnergyDownloader):
 def _get_start_date(
     d1: datetime | None, d2: datetime | None, network_id: str
 ) -> pd.Series:
-    """Set start date as d1, d2 or MIN_YEAR datetime object depending on which is not None.
+    """Define (buffered) start date using d1, d2 or MIN_YEAR depending on which is not None.
 
     In this case, d1 is the "data_first_seen" date and d2 is the "commencement_date". The
     assumption here is that the "data_first_seen" date is what we're actually looking for,
@@ -466,5 +468,5 @@ def _get_start_date(
         if isinstance(d2, datetime)
         else (datetime(MIN_YEAR, 1, 1, tzinfo=row_tz))
     )
-
-    return pd.Series({"start": start_date, "timezone": row_tz})
+    buffered_start_date = start_date.replace(month=1, day=1, hour=0, minute=0, second=0)
+    return pd.Series({"start": buffered_start_date, "timezone": row_tz})
