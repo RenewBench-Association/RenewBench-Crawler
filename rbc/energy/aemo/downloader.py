@@ -27,7 +27,7 @@ from rbc.energy.utils import (
 
 logging.getLogger("openelectricity").setLevel(logging.CRITICAL)
 
-MIN_YEAR = 2006
+MIN_YEAR = 1998  # start in December
 VALID_NETWORKS = {
     "NEM": timezone(timedelta(hours=10)),
     "WEM": timezone(timedelta(hours=8)),

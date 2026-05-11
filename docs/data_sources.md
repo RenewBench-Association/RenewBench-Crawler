@@ -319,8 +319,8 @@ RenewBench-Crawler package.
 **Download & data structure**
 - Spatial resolution: per generation unit (plant)
 - Temporal resolution: hourly / 5 min
-- Available data timespan: ??? to now
-- Files saved as **raw**: 1 `.csv` per day
+- Available data timespan: 1998 to now
+- Files saved as **raw**: 1 `.csv` per day for 5-min, 1 `.csv` per month for 1h
 - Columns saved as **raw**:
 
   `timestamp` – timestamp end (!) in UTC-aware ISO 8601 (`YYYY-MM-DDTHH:MM:SS+00:00`;
