@@ -138,10 +138,9 @@ class AemoDownloader(EnergyDownloader):
         tasks = [
             DownloadTask(date=d, temporal_resolution=t_res)
             for t_res in self.temporal_resolutions
-            for d in self._get_date_list()
-            # for d in (
-            #     self._get_month_list() if t_res == "1h" else self._get_date_list()
-            # )
+            for d in (
+                self._get_month_list() if t_res == "1h" else self._get_date_list()
+            )
         ]
 
         logger.info(
@@ -169,9 +168,15 @@ class AemoDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
-        start = datetime.fromisoformat(task.date)
-        start = start.replace(second=1)
-        end = start + timedelta(days=1)
+        start = task.dt.to_pydatetime()
+        start = start.replace(second=1)  # to ensure end-of-interval timeframe
+
+        task_type = "month" if len(task.date.split("-")) == 2 else "day"
+        if task_type == "month":
+            end = (start + pd.offsets.MonthBegin(1)).to_pydatetime()
+        else:
+            end = start + timedelta(days=1)
+
         t_res = task.temporal_resolution
         t_res = t_res if "min" not in t_res else t_res.replace("min", "m")
 
@@ -200,7 +205,7 @@ class AemoDownloader(EnergyDownloader):
                     unit_start = self.units_lookup[unit]["start"]
                     task_end = end.replace(tzinfo=self.units_lookup[unit]["timezone"])
 
-                    if task_end < unit_start:
+                    if task_end.date() < unit_start.date():
                         logger.debug(
                             f"No energy data for unit {unit} (it's before {unit_start}). "
                             f"Skipping..."
@@ -226,6 +231,14 @@ class AemoDownloader(EnergyDownloader):
                             raise
 
                 results = await asyncio.gather(*tasks)
+
+                units_w_data = sum(1 for r in results if r)
+                units_wo_data = sum(1 for r in results if not r)
+                logger.info(
+                    f"Task {task.identifier}: {units_w_data} units with data, "
+                    f" {units_wo_data} units without data."
+                )
+
                 return [item for sublist in results for item in sublist]
 
         loop = asyncio.new_event_loop()
