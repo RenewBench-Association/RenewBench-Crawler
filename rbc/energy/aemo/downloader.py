@@ -322,11 +322,11 @@ class AemoDownloader(EnergyDownloader):
          'project_lodgement_date', 'created_at', 'updated_at']
         All columns are combined into one df by adding the prefix 'unit' to the unit data.
         The lookup dictionary is generated from this dataframe to have the keys:
-        ["code", "network_id", "unit_code", "start", "timezone"]
+        ["code", "network_id", "unit_code", "start"]
 
         Returns:
             df_fu (pd.Dataframe): Dataframe of units with their associated facility data.
-            lookup_f (dict): Dict of all units and their start date.
+            lookup_u (dict): Dict of all units and their start date.
 
         Raises:
             DataStructureError: If the API facilities data no longer contains content that
@@ -371,7 +371,7 @@ class AemoDownloader(EnergyDownloader):
 
             # build a lookup dict with start dates for all rows (units)
             df_lookup = df_fu.copy()
-            df_lookup[["start", "timezone"]] = df_lookup.apply(
+            df_lookup["start"] = df_lookup.apply(
                 lambda r: _get_start_date(
                     d1=r["unit_data_first_seen"],
                     d2=r["unit_commencement_date"],
@@ -379,12 +379,10 @@ class AemoDownloader(EnergyDownloader):
                 ),
                 axis=1,
             )
-            df_lookup = df_lookup[
-                ["code", "network_id", "unit_code", "start", "timezone"]
-            ]
+            df_lookup = df_lookup[["code", "network_id", "unit_code", "start"]]
 
             lookup_u = df_lookup.set_index("unit_code")[
-                ["network_id", "start", "timezone"]
+                ["network_id", "start"]
             ].to_dict("index")
 
         except KeyError as e:
@@ -413,8 +411,8 @@ class AemoDownloader(EnergyDownloader):
             list: List of valid units.
         """
         valid_units = [u for u in units if self.lookup_u[u]["start"].year <= year]
-        diff = set(units) - set(valid_units)
 
+        diff = set(units) - set(valid_units)
         if len(diff) > 0:
             logger.warning(
                 f"No energy data for {len(diff)} out of {len(units)} units "
@@ -431,7 +429,7 @@ class AemoDownloader(EnergyDownloader):
 
 def _get_start_date(
     d1: datetime | None, d2: datetime | None, network_id: str
-) -> pd.Series:
+) -> datetime:
     """Define (buffered) start date using d1, d2 or MIN_YEAR depending on which is not None.
 
     In this case, d1 is the "data_first_seen" date and d2 is the "commencement_date". The
@@ -444,7 +442,7 @@ def _get_start_date(
         network_id (str): Network ID used to identify the row's timezone info.
 
     Returns:
-        pd.Series: column "start" with start_date, column "timezone" with timezone info.
+        datetime: unit's start date
     """
     row_tz: tzinfo = VALID_NETWORKS[network_id]
 
@@ -456,4 +454,4 @@ def _get_start_date(
         else (datetime(MIN_YEAR, 1, 1, tzinfo=row_tz))
     )
     buffered_start_date = start_date.replace(month=1, day=1, hour=0, minute=0, second=0)
-    return pd.Series({"start": buffered_start_date, "timezone": row_tz})
+    return buffered_start_date
