@@ -41,7 +41,6 @@ EXPECTED_COLS = [
     "network_id",
     "network_region",
     "description",
-    "npi_id",
     "location",
     "unit_code",
     "unit_fueltech_id",
@@ -50,10 +49,10 @@ EXPECTED_COLS = [
     "unit_capacity_registered",
     "unit_capacity_maximum",
     "unit_capacity_storage",
-    "value",
     "unit_data_first_seen",
     "unit_data_last_seen",
     "unit_commencement_date",
+    "value",
 ]
 
 
@@ -63,9 +62,9 @@ class AemoDownloader(EnergyDownloader):
     Attributes:
         token (str): The personal OpenElectricity API token.
         client (OEClient): OEClient object for AEMO (OpenElectricity) data access.
-        df_units (pd.DataFrame): Dataframe containing facilities and units information.
-        units_lookup (dict): Lookup dict for facility start dates.
-        valid_units (list): List of valid AEMO facility units for the given time frame.
+        df_fu (pd.DataFrame): Dataframe containing information on all units.
+        lookup_u (dict): Lookup dict for unit start dates.
+        valid_u (list): List of valid AEMO units for the given time frame.
     """
 
     def __init__(
@@ -113,26 +112,14 @@ class AemoDownloader(EnergyDownloader):
             f"AEMO (OpenElectricity) Downloader initialized for:\n- years:\t\t{years}"
         )
 
-        # get existing facilities and units dataframe and lookup dict for start dates
-        self.df_units, self.units_lookup = self._get_facilities_and_units()
+        # get dataframe of existing facilities & units and lookup dict for start dates
+        self.df_fu, self.lookup_u = self._get_facilities_and_units()
 
         # pre-filter units to only those that generate data in the requested year(s)
-        latest_year = max(years)
-        unique_units = self.df_units["unit_code"].unique()
-        self.valid_units = [
-            unit
-            for unit in unique_units
-            if self.units_lookup[unit]["start"].year <= latest_year
-        ]
-
-        diff_units = set(unique_units) - set(self.valid_units)
-        if len(diff_units) > 0:
-            logger.warning(
-                f"No energy data for {len(diff_units)} out of {len(unique_units)} units "
-                f"(not yet producing in {latest_year}). Skipping:\n\n{diff_units}"
-            )
-        else:
-            logger.info(f"All units {len(unique_units)} are producing energy data.")
+        unique_u = self.df_fu["unit_code"].unique()
+        self.valid_u = self._get_valid_units(
+            units=unique_u, year=max(years), verbose=True
+        )
 
     def download_data(self) -> None:
         """Parse data for all given years from AEMO (OpenElectricity) and save to CSV."""
@@ -163,7 +150,7 @@ class AemoDownloader(EnergyDownloader):
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
 
         Returns:
-            df (pd.DataFrame): Dataframe for specific date.
+            df_fu (pd.DataFrame): Dataframe of units for specific date.
 
         Raises:
             MissingDataError: If no generation data exists.
@@ -182,12 +169,8 @@ class AemoDownloader(EnergyDownloader):
         t_res = task.temporal_resolution
         t_res = t_res if "min" not in t_res else t_res.replace("min", "m")
 
-        # filter list of units even further based on current task at hand
-        valid_units = [
-            unit
-            for unit in self.valid_units
-            if self.units_lookup[unit]["start"].year <= task.year
-        ]
+        # filter list of units further based on current task
+        valid_u = self._get_valid_units(units=self.valid_u, year=task.year)
 
         async def fetch_task_data() -> list:
             """Fetch all data for a task (date, t_res) using an async (parallel) client.
@@ -203,65 +186,42 @@ class AemoDownloader(EnergyDownloader):
                 tasks = []
 
                 # get data for 1 unit at a time because results are otherwise aggregated
-                for unit in valid_units:
-                    unit_start = self.units_lookup[unit]["start"]
-                    task_end = end.replace(tzinfo=self.units_lookup[unit]["timezone"])
-
-                    if task_end.date() < unit_start.date():
-                        logger.debug(
-                            f"No energy data for unit {unit} (it's before {unit_start}). "
-                            f"Skipping..."
-                        )  # don't raise error here or loop will be interrupted
-                    else:
-                        try:
-                            tasks.append(
-                                self._fetch_unit_data_async(
-                                    a_client,
-                                    semaphore,
-                                    network_code=self.units_lookup[unit]["network_id"],
-                                    unit_code=unit,
-                                    date_start=start,
-                                    date_end=end,
-                                    temporal_res=t_res,
-                                )
-                            )
-                        except requests.exceptions.HTTPError:
-                            logger.warning(
-                                f"Defining task {task} as failed given that "
-                                f"data for unit {unit} could not be fetched."
-                            )
-                            raise
+                for unit in valid_u:
+                    tasks.append(
+                        self._fetch_unit_data_async(
+                            a_client,
+                            semaphore,
+                            network_code=self.lookup_u[unit]["network_id"],
+                            unit_code=unit,
+                            date_start=start,
+                            date_end=end,
+                            temporal_res=t_res,
+                        )
+                    )
 
                 results = await asyncio.gather(*tasks)
 
-                units_w_data = sum(1 for r in results if r)
-                units_wo_data = sum(1 for r in results if not r)
                 logger.info(
-                    f"Task {task.identifier}: {units_w_data} units with data, "
-                    f"{units_wo_data} units without data."
+                    f"Task {task.identifier}: {sum(1 for r in results if r)} / {len(results)}"
+                    f" units with data"
                 )
-
                 return [item for sublist in results for item in sublist]
 
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            data = loop.run_until_complete(fetch_task_data())
-        finally:
-            loop.close()
+        # get results
+        data = asyncio.run(fetch_task_data())
 
         if not data:
             raise MissingDataError(f"No generation data for {task.date}")
 
         # define dataframe to be saved
-        df = pd.DataFrame(data)
+        df_api = pd.DataFrame(data)
         try:
-            df = pd.merge(self.df_units, df, on=["unit_code"])
+            df = pd.merge(self.df_fu, df_api, on=["unit_code"])
             df = df[EXPECTED_COLS].sort_values(by=["timestamp"])
         except KeyError as e:
             raise DataStructureError(
                 f"AEMO (OpenElectricity) structure change detected! Relevant column missing "
-                f"from facility and units data: {e}"
+                f"from facilities and units data: {e}"
             )
 
         return df
@@ -313,10 +273,10 @@ class AemoDownloader(EnergyDownloader):
                 # map the nested response back to a flat list of dicts
                 logger.debug(f"Energy data found for unit {unit_code}")
                 return [
-                    {"timestamp": e.root[0], "unit_code": unit_code, "value": e.root[1]}
+                    {"timestamp": d.root[0], "unit_code": unit_code, "value": d.root[1]}
                     for s in response.data
                     for result in s.results
-                    for e in result.data
+                    for d in result.data
                 ]
 
             except APIError as e:  # openelectricity-package error that will be raised
@@ -365,8 +325,8 @@ class AemoDownloader(EnergyDownloader):
         ["code", "network_id", "unit_code", "start", "timezone"]
 
         Returns:
-            df_fu (pd.Dataframe): Dataframe of facilities and units.
-            units_lookup_start (dict): Dict of all units and their start date.
+            df_fu (pd.Dataframe): Dataframe of units with their associated facility data.
+            lookup_f (dict): Dict of all units and their start date.
 
         Raises:
             DataStructureError: If the API facilities data no longer contains content that
@@ -378,7 +338,7 @@ class AemoDownloader(EnergyDownloader):
 
         try:
             data: list[dict] = [f.model_dump() for f in facilities.data]
-            df_facilities = pd.DataFrame(data)
+            df_f = pd.DataFrame(data)
 
         except (AttributeError, ValueError) as e:
             raise DataStructureError(
@@ -387,7 +347,7 @@ class AemoDownloader(EnergyDownloader):
             )
 
         # check if data or created dataframe are empty (no data was downloaded)
-        if not data or df_facilities.empty:
+        if not data or df_f.empty:
             raise DataStructureError(
                 "AEMO (OpenElectricity) structure change detected! No facilities / units "
                 "data was downloaded."
@@ -395,24 +355,23 @@ class AemoDownloader(EnergyDownloader):
 
         # create merged dataframe and lookup dictionary
         try:
-            df_facilities.pop("units")
-            df_facilities["description"] = df_facilities["description"].str.replace(
+            df_f.pop("units")
+            df_f["description"] = df_f["description"].str.replace(
                 r"<[^>]*>", "", regex=True
             )
-            df_units = pd.json_normalize(
+
+            # build a dataframe of units including their facilities information
+            df_u = pd.json_normalize(
                 data,
                 record_path=["units"],
                 meta=["code", "name", "network_region"],
                 record_prefix="unit_",
             )
+            df_fu = pd.merge(df_f, df_u, on=["code", "name", "network_region"])
 
-            # merge dataframes on "code", "name", and "network_region"
-            df_fu = pd.merge(
-                df_facilities, df_units, on=["code", "name", "network_region"]
-            )
-
-            # build a lookup dict with start dates for units
-            df_fu[["start", "timezone"]] = df_fu.apply(
+            # build a lookup dict with start dates for all rows (units)
+            df_lookup = df_fu.copy()
+            df_lookup[["start", "timezone"]] = df_lookup.apply(
                 lambda r: _get_start_date(
                     d1=r["unit_data_first_seen"],
                     d2=r["unit_commencement_date"],
@@ -420,13 +379,13 @@ class AemoDownloader(EnergyDownloader):
                 ),
                 axis=1,
             )
-            units_lookup_start = (
-                df_fu[["code", "network_id", "unit_code", "start", "timezone"]]
-                .set_index("unit_code")  # make 'unit_code' the dict key value
-                .to_dict(orient="index")  # convert to {key: {col: value}} format
-            )
-            df_fu.pop("start")
-            df_fu.pop("timezone")
+            df_lookup = df_lookup[
+                ["code", "network_id", "unit_code", "start", "timezone"]
+            ]
+
+            lookup_u = df_lookup.set_index("unit_code")[
+                ["network_id", "start", "timezone"]
+            ].to_dict("index")
 
         except KeyError as e:
             raise DataStructureError(
@@ -439,7 +398,35 @@ class AemoDownloader(EnergyDownloader):
                 f"reformatted so that json normalisation does not work anymore: {e}"
             )
 
-        return df_fu, units_lookup_start
+        return df_fu, lookup_u
+
+    def _get_valid_units(self, units: list, year: int, verbose: bool = False) -> list:
+        """Get a list of units that are valid based on start date.
+
+        Args:
+            units (list): List of all units as basis for getting valid ones.
+            year (int, optional): Year to compare to start time.
+            verbose (bool, optional): Whether to log verbosely (i.e. skipped units) or not.
+                Defaults to False.
+
+        Returns:
+            list: List of valid units.
+        """
+        valid_units = [u for u in units if self.lookup_u[u]["start"].year <= year]
+        diff = set(units) - set(valid_units)
+
+        if len(diff) > 0:
+            logger.warning(
+                f"No energy data for {len(diff)} out of {len(units)} units "
+                f"(not yet generating in {year})."
+            )
+            if verbose:
+                logger.warning(f"Skipping:\n{diff}")
+        else:
+            if verbose:
+                logger.info(f"All {len(units)} units are producing energy data.")
+
+        return valid_units
 
 
 def _get_start_date(
