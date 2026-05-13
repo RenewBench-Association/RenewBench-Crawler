@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install coverage==7.6.4
-          uv pip install pytest pytest-cov coverage-badge .
+          uv pip install pytest pytest-cov coverage-badge ".[dev]"
 
       - name: Test with pytest and coverage badge
         run: |
