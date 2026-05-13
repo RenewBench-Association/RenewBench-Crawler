@@ -27,7 +27,7 @@ dependencies = [
     "eptr2",
     "geopandas",
     "loguru",
-    "openelectricity @ git+https://github.com/RenewBench-Association/openelectricity.git@fix/async_get_facility_data",
+    "openelectricity @ git+https://github.com/RenewBench-Association/openelectricity.git@fix/async_get_facility_data#egg=openelectricity",
     "pandas",
     "pydantic",
     "pyyaml",
