@@ -5,6 +5,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["rbc"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
 name = "RenewBench-Crawler"
 version = "0.0.1"
