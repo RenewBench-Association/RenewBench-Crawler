@@ -94,7 +94,7 @@ class AemoDownloader(EnergyDownloader):
         )
         self.temporal_resolutions = temporal_resolutions
 
-        invalid_t_res = set(temporal_resolutions) - set({"1h", "5min"})
+        invalid_t_res = set(temporal_resolutions) - {"1h", "5min"}
         if invalid_t_res:
             raise InvalidError(
                 f"Invalid temporal resolution(s): {sorted(invalid_t_res)}"
@@ -144,7 +144,7 @@ class AemoDownloader(EnergyDownloader):
         AEMO follows an End-of-Interval timestamp convention, meaning values for an hour
         are saved on the dot of the next hour (i.e. "01:00" = data from 0-1 AM, not 1-2 AM).
         This means for each day, data starts with hour 1 of Day 1 and hour 0 of Day 2
-        (i.e. start = "2018-01-01T01:00", end = "2018-01-02T00:00"). Analagous for 5 min data.
+        (i.e. start = "2018-01-01T01:00", end = "2018-01-02T00:00"). Analogous for 5 min data.
 
         Args:
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
@@ -220,8 +220,8 @@ class AemoDownloader(EnergyDownloader):
             df = df[EXPECTED_COLS].sort_values(by=["timestamp"])
         except KeyError as e:
             raise DataStructureError(
-                f"AEMO (OpenElectricity) structure change detected! Relevant column missing "
-                f"from facilities and units data: {e}"
+                f"AEMO (OpenElectricity) structure change detected! Relevant column(s) "
+                f"missing from facilities and units data: {e}"
             )
 
         return df
@@ -385,15 +385,10 @@ class AemoDownloader(EnergyDownloader):
                 ["network_id", "start"]
             ].to_dict("index")
 
-        except KeyError as e:
+        except (KeyError, ValueError) as e:
             raise DataStructureError(
                 f"AEMO (OpenElectricity) structure change detected! Relevant column missing "
                 f"from facility and units data: {e}"
-            )
-        except NotImplementedError as e:
-            raise DataStructureError(
-                f"AEMO (OpenElectricity) structure change detected! Data content has been "
-                f"reformatted so that json normalisation does not work anymore: {e}"
             )
 
         return df_fu, lookup_u
@@ -443,8 +438,14 @@ def _get_start_date(
 
     Returns:
         datetime: unit's start date
+
+    Raises:
+        InvalidError: If provided network_id is not valid (not defined in VALID_NETWORKS).
     """
-    row_tz: tzinfo = VALID_NETWORKS[network_id]
+    try:
+        row_tz: tzinfo = VALID_NETWORKS[network_id]
+    except KeyError as e:
+        raise InvalidError(f"Invalid network ID provided: {e}")
 
     start_date = (
         d1
