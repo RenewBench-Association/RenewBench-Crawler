@@ -10,7 +10,7 @@ RenewBench-Crawler package.
 
 | Region                   | Source   | Status             | Resolution               | Access            | Resources                                                                                                                                                                                                                                                                                                              |
 |--------------------------|----------|--------------------|--------------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Europe**               | ENTSO-e  | downloader &check; | hourly/15 min; per plant | API token         | [TP](https://transparency.entsoe.eu/), [API guide](https://transparencyplatform.zendesk.com/hc/en-us/sections/12783116987028-Restful-API-integration-guide),<br> [API how-to](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token)                                     |
+| **Europe**               | ENTSO-e  | downloader &check; | hourly/higher; per plant | API token         | [TP](https://transparency.entsoe.eu/), [API guide](https://transparencyplatform.zendesk.com/hc/en-us/sections/12783116987028-Restful-API-integration-guide),<br> [API how-to](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token)                                     |
 | **Turkey**               | EPIAS    | downloader &check; | hourly; per plant        | Login credentials | [TP](https://seffaflik.epias.com.tr/home), [Docs](https://seffaflik.epias.com.tr/electricity-service/technical/en/index.html),<br> [Registration form](https://kayit.epias.com.tr/epias-transparency-platform-registration-form)                                                                                       |
 | **USA**                  | EIA      | downloader &check; | hourly; per company      | API token         | [API browser](https://www.eia.gov/opendata/browser/), [API docs](https://www.eia.gov/opendata/documentation.php),<br> [API registration form](https://www.eia.gov/opendata/register.php)                                                                                                                               |
 | **Canada<br> (Alberta)** | AESO     | downloader &check; | hourly/5 min; per plant  | `box` API token   | [Website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/), [Data hosting](https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5/folder/196731538687), <br> [API how-to](https://developer.box.com/guides/authentication/tokens/developer-tokens) (s. details!) |
@@ -64,7 +64,7 @@ RenewBench-Crawler package.
 
 **STAC**
 
-- `measurement_type = 'net_output'`
+- `measurement_type`: `'net_output'`
   - According to [their TP docs](https://transparencyplatform.zendesk.com/hc/en-us/articles/16648326220564-Actual-Generation-per-Generation-Unit-16-1-A):
     "Actual net generation output (MW) per market time unit and per generation unit of 100
     MW or more installed generation capacity. "
@@ -184,7 +184,7 @@ RenewBench-Crawler package.
 
 **STAC**
 
-- `measurement_type = 'gross_output'`
+- `measurement_type`: `'gross_output'`
   -  According to [their website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/):
     "\[...\] this data is not the same as settlement meter data.
     This data generally represents what was generated at the unit, not necessarily
@@ -336,8 +336,6 @@ RenewBench-Crawler package.
 
   `description` – free-text facility description (HTML stripped)
 
-  `npi_id` – AEMO NPI identifier of the facility (if available)
-
   `location` – location dict of the facility (i.e. `{'lat': ..., 'lng': ...}`)
 
   `unit_code` – unique unit name (starts with facility name)
@@ -354,13 +352,13 @@ RenewBench-Crawler package.
 
   `unit_capacity_storage` – storage capacity of the unit
 
-  `value` – energy generated in the interval (MWh), derived from AEMO power data
-
   `unit_data_first_seen` – first date the unit appears in AEMO / OpenElectricity data
 
   `unit_data_last_seen` – last date the unit appears in AEMO / OpenElectricity data
 
   `unit_commencement_date` – official commencement date of the unit
+
+  `value` – energy generated in the interval (MWh), derived from AEMO power data
 
 > **PLEASE NOTE:**
 >
@@ -376,7 +374,7 @@ RenewBench-Crawler package.
 
 **STAC**
 
-- `measurement_type = 'curtailed_gross_output'`
+- `measurement_type`: `'curtailed_gross_output'`
   - According to [OpenElectricity](https://docs.openelectricity.org.au/guides/curtailment#how-open-electricity-reports-curtailment):
     Curtailment is not included directly in the data but can theoretically be accessed
     separately. This is not done here.
@@ -386,6 +384,11 @@ RenewBench-Crawler package.
     According to [AEMO's term definitions](https://www.aemo.com.au/-/media/files/electricity/nem/planning_and_forecasting/demand-forecasts/operational-consumption-definition.pdf),
     their provided [generation output](https://www.aemo.com.au/energy-systems/electricity/national-electricity-market-nem/data-nem/market-management-system-mms-data/generation-and-load)
     seems to be "as generated" (total gross production on-site, not net grid injections).
+- `entity_type`: `'unit'`
+
+  The parsed data is specifically for units. These all are associated with a facility
+  (under `code` and `name`) for which consolidated data is generated in postprocessing to
+  create `entity_type`: `'facility'` rows.
 
 </details>
 
