@@ -41,6 +41,10 @@ def download_realtime_data(dst_dir: Path) -> None:
         sys.exit(1)
 
     session = Session()
+
+    # Spoof a standard web browser to bypass the 403 Forbidden error.
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+
     response = session.get(URL)
 
     if not response.status_code == 200:
