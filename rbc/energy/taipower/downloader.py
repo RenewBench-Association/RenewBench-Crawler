@@ -105,10 +105,11 @@ def save_df_to_csv(df: pd.DataFrame, csv_path: Path) -> None:
         df (pd.DataFrame): Dataframe to save.
         csv_path (Path): Path to csv file.
     """
-    df.to_csv(csv_path, index=False)
-    if csv_path.is_file():
-        print(f"Successfully saved to: {csv_path}")
-        sys.exit(0)
-    else:
-        print(f"Failed to save to: {csv_path}!")
+    try:
+        df.to_csv(csv_path, index=False)
+    except OSError as e:
+        print(f"Failed to save to: {csv_path}! Error: {e}")
         sys.exit(1)
+
+    print(f"Successfully saved to: {csv_path}")
+    sys.exit(0)
