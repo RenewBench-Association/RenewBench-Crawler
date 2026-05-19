@@ -31,6 +31,7 @@ dependencies = [
     "geopandas",
     "loguru",
     "openelectricity @ git+https://github.com/RenewBench-Association/openelectricity-python.git@fix/async_get_facility_data",
+    "openpyxl",
     "pandas",
     "pydantic",
     "pyyaml",
