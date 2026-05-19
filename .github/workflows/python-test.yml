@@ -32,9 +32,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: |
-          uv pip install coverage==7.6.4
-          uv pip install pytest pytest-cov coverage-badge ".[dev]"
+        run: uv pip install ".[dev]"
 
       - name: Test with pytest and coverage badge
         run: |
