@@ -364,9 +364,12 @@ def test_load_yearly_excel(downloader: AdmeDownloader) -> None:
         {"Fecha": ["01-01-2010 01:00"], "Hydro A": [100.0], "Eólica": [10.0]}
     )
 
-    with patch(
-        "rbc.energy.adme.downloader.load_excel_from_file", return_value=mock_xlsx
-    ), patch("rbc.energy.adme.downloader.pd.read_excel", return_value=mock_df):
+    with (
+        patch(
+            "rbc.energy.adme.downloader.load_excel_from_file", return_value=mock_xlsx
+        ),
+        patch("rbc.energy.adme.downloader.pd.read_excel", return_value=mock_df),
+    ):
         df = downloader._load_yearly_excel("https://fake.url/gpf_2010.xlsx")
 
     assert isinstance(df.columns, pd.MultiIndex)
@@ -397,9 +400,14 @@ def test_load_yearly_excel_bad_content(downloader: AdmeDownloader) -> None:
     """
     mock_xlsx = MagicMock(spec=pd.ExcelFile, sheet_names=list(EXPECTED_OLD_SHEETS))
 
-    with patch(
-        "rbc.energy.adme.downloader.load_excel_from_file", return_value=mock_xlsx
-    ), patch("rbc.energy.adme.downloader.pd.read_excel", side_effect=ValueError("bad")):
+    with (
+        patch(
+            "rbc.energy.adme.downloader.load_excel_from_file", return_value=mock_xlsx
+        ),
+        patch(
+            "rbc.energy.adme.downloader.pd.read_excel", side_effect=ValueError("bad")
+        ),
+    ):
         with pytest.raises(DataStructureError, match="does not contain loadable data"):
             downloader._load_yearly_excel("https://fake.url/gpf_2010.xlsx")
 
@@ -413,8 +421,11 @@ def test_load_yearly_excel_not_datetimelike(downloader: AdmeDownloader) -> None:
     mock_xlsx = MagicMock(spec=pd.ExcelFile, sheet_names=list(EXPECTED_OLD_SHEETS))
     mock_df = pd.DataFrame({"Fecha": ["not-a-date"], "Hydro Plant A": [100.0]})
 
-    with patch(
-        "rbc.energy.adme.downloader.load_excel_from_file", return_value=mock_xlsx
-    ), patch("rbc.energy.adme.downloader.pd.read_excel", return_value=mock_df):
+    with (
+        patch(
+            "rbc.energy.adme.downloader.load_excel_from_file", return_value=mock_xlsx
+        ),
+        patch("rbc.energy.adme.downloader.pd.read_excel", return_value=mock_df),
+    ):
         with pytest.raises(DataStructureError, match="no longer datetimelike"):
             downloader._load_yearly_excel("https://fake.url/gpf_2010.xlsx")

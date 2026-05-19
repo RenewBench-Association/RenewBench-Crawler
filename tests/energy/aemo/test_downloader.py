@@ -358,9 +358,10 @@ def test_fetch_task_data_flattens_results(
             return mock_df[fetch_out_cols].iloc[[1, 3]].to_dict("records")
         return []
 
-    with patch.object(downloader, "_fetch_unit_data_async") as mock_fetch, patch(
-        "rbc.energy.aemo.downloader.AsyncOEClient"
-    ) as mock_async_client:
+    with (
+        patch.object(downloader, "_fetch_unit_data_async") as mock_fetch,
+        patch("rbc.energy.aemo.downloader.AsyncOEClient") as mock_async_client,
+    ):
         mock_fetch.side_effect = fake_fetch
         mock_async_client.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
         mock_async_client.return_value.__aexit__ = AsyncMock(return_value=None)

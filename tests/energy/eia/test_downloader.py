@@ -268,9 +268,10 @@ def test_get_task_data_rate_limit_fail(
         downloader (EiaDownloader): Instance of EiaDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
     """
-    with patch("rbc.energy.eia.downloader.requests.get") as mock_get, patch(
-        "rbc.energy.eia.downloader.time.sleep"
-    ) as mock_sleep:
+    with (
+        patch("rbc.energy.eia.downloader.requests.get") as mock_get,
+        patch("rbc.energy.eia.downloader.time.sleep") as mock_sleep,
+    ):
         mock_get.side_effect = [MagicMock(status_code=429)] * (
             MAX_RATE_LIMIT_RETRIES + 1
         )
