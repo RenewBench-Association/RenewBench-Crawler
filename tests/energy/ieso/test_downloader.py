@@ -392,7 +392,7 @@ def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> No
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_xlsx = MagicMock(
+    mock_xls = MagicMock(
         spec=pd.ExcelFile,
         sheet_names=[
             "Output",
@@ -409,9 +409,7 @@ def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> No
     )
 
     with (
-        patch(
-            "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
-        ),
+        patch("rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xls),
         patch(
             "rbc.energy.ieso.downloader.pd.read_excel",
             side_effect=[
@@ -448,15 +446,13 @@ def test_load_yearly_excel_missing_capacity(
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_xlsx = MagicMock(spec=pd.ExcelFile, sheet_names=["Output", "Capability"])
+    mock_xls = MagicMock(spec=pd.ExcelFile, sheet_names=["Output", "Capability"])
     mock_df_out = pd.DataFrame(
         {"DATE": [f"{task.date}-01"], "HOUR": [1], "GEN_A": [10]}
     )
 
     with (
-        patch(
-            "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
-        ),
+        patch("rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xls),
         patch(
             "rbc.energy.ieso.downloader.pd.read_excel",
             side_effect=[
