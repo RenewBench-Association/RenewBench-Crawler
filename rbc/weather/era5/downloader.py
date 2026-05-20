@@ -56,20 +56,26 @@ class Era5Downloader(WeatherDownloader):
             api_key (str): The CDS API key.
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
-            months (list[str], optional): List of months (01-12). Defaults to all months.
-            variables (list[str], optional): List of ERA5 variables. Defaults to common variables.
-            area (list[float], optional): Bounding box [N, W, S, E]. Defaults to global (None).
-            pressure_levels (list[str], optional): Pressure levels (hPa). Defaults to default levels if None.
-            model_levels (list[str], optional): Model levels (1-137). Defaults to default levels if None.
-            dry_run (bool, optional): If True, print requests without submitting them. Defaults to False.
-            resume (bool, optional): Whether to resume from a previous download. Defaults to True.
+            months (list[str] | None, optional): List of months (01-12). 
+                If None, defaults to all months.
+            variables (list[str] | None, optional): List of ERA5 variables. 
+                If None, defaults to DEFAULT_VARIABLES.  
+            area (list[float] | None, optional): Bounding box [N, W, S, E]. 
+                If None, defaults to global.
+            pressure_levels (list[str] | None, optional): Pressure levels (hPa). 
+                If None, defaults to DEFAULT_PRESSURE_LEVELS.
+            model_levels (list[str] | None, optional): Model levels (1-137). 
+                If None, defaults to DEFAULT_MODEL_LEVELS.
+            dry_run (bool, optional): If True, print requests without submitting them. 
+                Defaults to False.
+            resume (bool, optional): Whether to resume from a previous download. 
+                Defaults to True.
 
         Raises:
             ValueError: If API credentials are invalid.
             ConnectionError: If the CDS API endpoint is unreachable.
         """
         self.model_config = MODEL_CONFIG
-
         self.area = area  # If None, API downloads global data (area parameter omitted from request)
 
         # Determine which level types to download
@@ -232,7 +238,7 @@ class Era5Downloader(WeatherDownloader):
         try:
             # Build a single request with all variables combined
             dataset, request_params = self._build_request_batch(
-                variables=variables_to_download,
+                short_names=short_names,
                 year=year,
                 month=month,
                 level_type=level_type,
@@ -353,7 +359,7 @@ class Era5Downloader(WeatherDownloader):
         return variable
 
     def _build_request_batch(
-        self, variables: list[str], year: int, month: str, level_type: str = "single"
+        self, short_names: list[str], year: int, month: str, level_type: str = "single"
     ) -> tuple[str, dict[str, Any]]:
         """Build a CDS / MARS format request for multiple variables combined.
 
@@ -367,7 +373,7 @@ class Era5Downloader(WeatherDownloader):
         For model level variables, the request is made through the MARS endpoint.
 
         Args:
-            variables (list[str]): List of ERA5 variable names
+            short_names (list[str]): List of ERA5 variable short names
             year (int): Year
             month (str): Month (format: '01' to '12')
             level_type (str): Type of levels ("single", "pressure", or "model")
@@ -376,9 +382,6 @@ class Era5Downloader(WeatherDownloader):
             tuple: Dataset name and CDS / MARS format request parameters with combined param codes
         """
         days_in_month = monthrange(year, int(month))[1]
-        # Combine all parameter codes with "/"
-        param_codes = [self._get_mars_param(var) for var in variables]
-
         dataset_map = {
             "model": self.model_config["MARS"]["dataset"],
             "pressure": self.model_config["CDS"]["dataset_pl"],
@@ -406,7 +409,7 @@ class Era5Downloader(WeatherDownloader):
                 if self.model_levels is not None
                 else None,
                 "leveltype": self.model_config["MARS"]["levtype_model"],
-                "param": "/".join(param_codes),
+                "param": "/".join(short_names),
                 "stream": self.model_config["MARS"]["mars_stream"],
                 "time": time_range,
                 "type": self.model_config["MARS"]["mars_type"],
@@ -425,7 +428,7 @@ class Era5Downloader(WeatherDownloader):
             time_list = [f"{i:02d}:00" for i in range(24)]
             request = {
                 "product_type": self.model_config["CDS"]["product_type"],
-                "variable": param_codes,
+                "variable": short_names,
                 "year": [year],
                 "month": [month],
                 "day": date_list,

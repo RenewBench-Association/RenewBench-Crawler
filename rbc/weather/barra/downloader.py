@@ -71,20 +71,6 @@ def _get_available_codes(model_name: str) -> set[str]:
         return C2_20MIN_SINGLE_LEVEL_VARIABLES | INVARIANT_VARIABLES
 
 
-def _is_available_variable(variable: str, model_name: str) -> bool:
-    """Check if a variable is available for a given BARRA2 model.
-
-    Args:
-        variable (str): Variable name (descriptive or BARRA2 code).
-        model_name (str): Normalized model key ("R2", "C2", or "C2_20min").
-
-    Returns:
-        bool: True if the variable is available for the model, False otherwise.
-    """
-    barra2_code = VARIABLE_TO_BARRA2_PARAM.get(variable, variable)
-    return barra2_code in _get_available_codes(model_name)
-
-
 class Barra2Downloader(WeatherDownloader):
     """BARRA2 reanalysis data downloader.
 
@@ -121,12 +107,12 @@ class Barra2Downloader(WeatherDownloader):
             output_path (Path): Directory to save downloaded data.
             model (str): BARRA2 model key ("R2", "C2", or "C2_20min").
             years (list[int]): List of years to download.
-            months (list[str] | None, optional): List of months (01-12).
-                Defaults to all months.
+            months (list[str] | None, optional): List of months (01-12). 
+                If None, defaults to all months.
             variables (list[str] | None, optional): Variables to download.
-                Defaults to model-specific defaults.
-            pressure_levels (list[int] | None, optional): Pressure levels for
-                3D variables (in hPa). Defaults to all levels for the model.
+                If None, defaults to model-specific DEFAULT_VARIABLES.
+            pressure_levels (list[int] | None, optional): Pressure levels for 3D variables (in hPa). 
+                If None, defaults to model-specific pressure levels.
             include_invariants (bool, optional): If True, include invariant
                 variables (orography, land-sea mask) in download set.
                 Defaults to False.
@@ -163,11 +149,13 @@ class Barra2Downloader(WeatherDownloader):
         }
 
         # Setup variables (use defaults if none provided)
-        base_variables = (
-            list(variables)
-            if variables is not None
-            else [v for v in DEFAULT_VARIABLES if _is_available_variable(v, self.model)]
-        )
+        if variables is not None:
+            base_variables = list(variables)
+        else:
+            base_variables = [
+                v for v in DEFAULT_VARIABLES 
+                if VARIABLE_TO_BARRA2_PARAM.get(v, v) in self.available_codes
+            ]
         if self.include_invariants:
             invariant_variable_names = sorted(
                 name

@@ -46,7 +46,7 @@ class WeatherDownloader(ABC):
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to download.
-            months (list[str] | None): List of months (01-12). None defaults to all months.
+            months (list[str] | None): List of months (01-12). If None, defaults to all months.
             variables (list[str]): List of variables to download.
             dry_run (bool): If True, skip actual downloads.
             resume (bool): If True, load an existing checkpoint on init.

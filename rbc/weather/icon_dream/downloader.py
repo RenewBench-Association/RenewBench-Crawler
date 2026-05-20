@@ -80,11 +80,16 @@ class IconDreamDownloader(WeatherDownloader):
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to download.
-            months (list[str], optional): List of months (01-12). Defaults to all months.
-            variables (list[str], optional): List of variables. Defaults to common variables.
-            model (str, optional): Model ("global" or "eu"). Defaults to "global".
-            dry_run (bool, optional): If True, print requests without downloading. Defaults to False.
-            resume (bool, optional): If True, resume from checkpoint. Defaults to True.
+            months (list[str] | None, optional): List of months (01-12). 
+                If None, defaults to all months.
+            variables (list[str] | None, optional): List of variables. 
+                If None, defaults to DEFAULT_VARIABLES.
+            model (str, optional): Model ("global" or "eu"). 
+                Defaults to "global".
+            dry_run (bool, optional): If True, print requests without downloading. 
+                Defaults to False.
+            resume (bool, optional): If True, resume from checkpoint. 
+                Defaults to True.
 
         Raises:
             ValueError: If the model is not defined in the model configuration.
