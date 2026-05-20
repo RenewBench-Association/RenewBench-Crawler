@@ -536,7 +536,7 @@ def test_download_variables_already_exists(downloader: Era5Downloader) -> None:
     # The fixture has variables=["2m_temperature", "temperature"] and
     # pressure_levels=["1000","950"]. For level_type="single", only
     # 2m_temperature (param "2t") is downloaded, producing this filename:
-    existing_file = downloader.output_path / "era5_2020_01_sl_2t.grib"
+    existing_file = Path(downloader.output_path, "era5_2020_01_sl_2t.grib")
     existing_file.touch()
 
     with patch.object(downloader.client, "retrieve") as mock_retrieve:
