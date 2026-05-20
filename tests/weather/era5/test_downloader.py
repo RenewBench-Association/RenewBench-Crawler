@@ -446,10 +446,10 @@ def test_build_cds_request_batch_pressure_level(downloader: Era5Downloader) -> N
     assert request["pressure_level"] == ["1000", "950"]
 
 
-def test_build_request_batch_model_level(
+def test_build_mars_request_batch_model_level(
     model_level_downloader: Era5Downloader,
 ) -> None:
-    """Test CDS / MARS request building for model-level variables.
+    """Test MARS request building for model-level variables.
 
     Args:
         model_level_downloader (Era5Downloader): Downloader configured with model levels.
