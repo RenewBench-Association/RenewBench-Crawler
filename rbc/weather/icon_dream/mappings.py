@@ -69,8 +69,8 @@ DEFAULT_VARIABLES = [
     "turbulent_kinetic_energy",
 ]
 
-# Mapping of variable descriptions to DWD short codes
-VARIABLE_TO_DWD_PARAM = {
+# Mapping of variable names to DWD parameter short codes
+VARIABLE_TO_SHORT_PARAM = {
     # Single-level variables
     "2m_temperature": "T_2M",
     "10m_u_component_of_wind": "U_10M",

@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 from rbc.weather.era5 import Era5Downloader
+from rbc.weather.era5.mappings import VARIABLE_TO_SHORT_PARAM
+from rbc.weather.utils import get_short_param
 
 
 # ----------------------------------
@@ -384,30 +386,20 @@ def test_validate_variables_model_level_invalid(downloader: Era5Downloader) -> N
 
 
 # ----------------------------------
-# Tests - MARS request building
+# Tests - CDS / MARS request building
 # ----------------------------------
-def test_get_mars_param(downloader: Era5Downloader) -> None:
-    """Test conversion of variable names to MARS parameter codes.
-
-    Args:
-        downloader (Era5Downloader): Instance of Era5Downloader.
-    """
-    assert downloader._get_mars_param("2m_temperature") == "2t"
-    assert downloader._get_mars_param("10m_u_component_of_wind") == "10u"
-    assert downloader._get_mars_param("temperature") == "t"
-    assert downloader._get_mars_param("u_component_of_wind") == "u"
+def test_get_param() -> None:
+    """Test conversion of variable names to CDS / MARS parameter codes."""
+    assert get_short_param("2m_temperature", VARIABLE_TO_SHORT_PARAM) == "2t"
+    assert get_short_param("10m_u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "10u"
+    assert get_short_param("temperature", VARIABLE_TO_SHORT_PARAM) == "t"
+    assert get_short_param("u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "u"
 
 
-def test_get_mars_param_fallback_returns_variable_name(
-    downloader: Era5Downloader,
-) -> None:
-    """Test that _get_mars_param returns the variable name when it is not in the mapping.
-
-    Args:
-        downloader (Era5Downloader): Instance of Era5Downloader.
-    """
-    result = downloader._get_mars_param("custom_unmapped_variable")
-    assert result == "custom_unmapped_variable"
+def test_get_param_fallback_returns_variable_name() -> None:
+    """Test that get_short_param returns the variable name when it is not in the mapping."""
+    result = get_short_param("unmapped_variable", VARIABLE_TO_SHORT_PARAM)
+    assert result == "unmapped_variable"
 
 
 def test_build_cds_request_batch_single_level(downloader: Era5Downloader) -> None:
@@ -454,10 +446,10 @@ def test_build_cds_request_batch_pressure_level(downloader: Era5Downloader) -> N
     assert request["pressure_level"] == ["1000", "950"]
 
 
-def test_build_mars_request_batch_model_level(
+def test_build_request_batch_model_level(
     model_level_downloader: Era5Downloader,
 ) -> None:
-    """Test MARS request building for model-level variables.
+    """Test CDS / MARS request building for model-level variables.
 
     Args:
         model_level_downloader (Era5Downloader): Downloader configured with model levels.

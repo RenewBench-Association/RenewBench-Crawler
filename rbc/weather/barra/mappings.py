@@ -251,8 +251,8 @@ R2_DEFAULT_PRESSURE_LEVELS = ["1000", "950"]
 # Default: 1000, 975, 950 hPa (lowest 3 pressure levels, ~110m, ~300m, ~560m altitude)
 C2_DEFAULT_PRESSURE_LEVELS = ["1000", "975", "950"]
 
-# Mapping of variable descriptions to BARRA2 short codes
-VARIABLE_TO_BARRA2_PARAM = {
+# Mapping of variable names to BARRA2 parameter short codes
+VARIABLE_TO_SHORT_PARAM = {
     # Temperature
     "1.5m_temperature": "tas",
     "1.5m_temperature_mean": "tasmean",

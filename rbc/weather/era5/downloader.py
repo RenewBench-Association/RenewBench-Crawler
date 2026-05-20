@@ -21,9 +21,9 @@ from rbc.weather.era5.mappings import (
     DEFAULT_PRESSURE_LEVELS,
     DEFAULT_VARIABLES,
     MODEL_CONFIG,
-    VARIABLE_TO_MARS_PARAM,
+    VARIABLE_TO_SHORT_PARAM,
 )
-from rbc.weather.utils import WeatherDownloader
+from rbc.weather.utils import WeatherDownloader, get_short_param
 
 
 class Era5Downloader(WeatherDownloader):
@@ -222,7 +222,10 @@ class Era5Downloader(WeatherDownloader):
             level_suffix += f"_{levels_str}"
 
         # Build combined filename with short names separated by "-"
-        short_names = [self._get_mars_param(var) for var in variables_to_download]
+        short_names = [
+            get_short_param(var, VARIABLE_TO_SHORT_PARAM)
+            for var in variables_to_download
+        ]
         variables_str = "-".join(short_names)
         output_file = Path(
             self.output_path,
@@ -343,20 +346,6 @@ class Era5Downloader(WeatherDownloader):
             raise ValueError("\n".join(error_messages))
 
         logger.info(f"All {len(self.variables)} requested variables are available.")
-
-    def _get_mars_param(self, variable: str) -> str:
-        """Convert variable name to MARS parameter code.
-
-        Args:
-            variable (str): ERA5 variable name
-
-        Returns:
-            str: MARS parameter code
-        """
-        if variable in VARIABLE_TO_MARS_PARAM:
-            return VARIABLE_TO_MARS_PARAM[variable]
-        # Fallback: use variable name directly
-        return variable
 
     def _build_request_batch(
         self, short_names: list[str], year: int, month: str, level_type: str = "single"

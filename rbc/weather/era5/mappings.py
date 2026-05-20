@@ -403,8 +403,8 @@ ALL_MODEL_LEVELS = [str(i) for i in range(1, 138)]
 # Default: 133, 134, 135, 136, 137 (lowest 5 model levels, ~150m, ~100-120m, ~50-70m, ~10-15m, surface)
 DEFAULT_MODEL_LEVELS = ["133", "134", "135", "136", "137"]
 
-# Mapping of variable names to MARS parameter short codes
-VARIABLE_TO_MARS_PARAM = {
+# Mapping of variable names to CDS / MARS parameter short codes
+VARIABLE_TO_SHORT_PARAM = {
     # Surface and single level parameters: instantaneous
     "convective_inhibition": "cin",
     "friction_velocity": "zust",

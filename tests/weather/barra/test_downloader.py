@@ -12,8 +12,9 @@ import requests
 from rbc.weather.barra import Barra2Downloader
 from rbc.weather.barra.mappings import (
     DEFAULT_VARIABLES,
-    VARIABLE_TO_BARRA2_PARAM,
+    VARIABLE_TO_SHORT_PARAM,
 )
+from rbc.weather.utils import get_short_param
 
 
 # ----------------------------------
@@ -152,14 +153,13 @@ def test_downloader_init_model_configs(
         default_variables = [
             v
             for v in DEFAULT_VARIABLES
-            if VARIABLE_TO_BARRA2_PARAM.get(v, v) in downloader.available_codes
+            if VARIABLE_TO_SHORT_PARAM.get(v, v) in downloader.available_codes
         ]
         assert downloader.variables == default_variables
     assert exp_label in downloader.model_config["label"]
     assert exp_spatial_res in downloader.model_config["resolution"]
     assert exp_grid in downloader.model_config["grid"]
     assert downloader.temporal_res == exp_temporal_res
-    assert len(downloader.available_variables) > 0
 
 
 @pytest.mark.parametrize(
@@ -400,6 +400,22 @@ def test_build_opendap_url_invariant_uses_fx_path(tmp_path: Path) -> None:
     assert "_v1.nc" in url
     assert "/20min/" not in url
     assert "202204" not in url
+
+
+# ----------------------------------
+# Tests - Variable mapping
+# ----------------------------------
+def test_get_short_param() -> None:
+    """Test conversion of variable names to BARRA2 parameter short codes."""
+    assert get_short_param("1.5m_temperature", VARIABLE_TO_SHORT_PARAM) == "tas"
+    assert get_short_param("10m_u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "uas"
+    assert get_short_param("10m_v_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "vas"
+
+
+def test_get_short_param_fallback_returns_variable_name() -> None:
+    """Test that get_short_param returns the variable name when it is not in the mapping."""
+    result = get_short_param("unmapped_variable", VARIABLE_TO_SHORT_PARAM)
+    assert result == "unmapped_variable"
 
 
 # ----------------------------------

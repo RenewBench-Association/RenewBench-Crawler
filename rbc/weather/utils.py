@@ -149,6 +149,20 @@ class WeatherDownloader(ABC):
         temp_path.replace(self.checkpoint_path)
 
 
+def get_short_param(variable: str, mapping: dict[str, str]) -> str:
+    """Convert a variable name to its parameter short code using the provided mapping.
+
+    Args:
+        variable (str): Variable name (e.g. '10m_u_component_of_wind').
+        mapping (dict[str, str]): Mapping from variable names to short codes.
+
+    Returns:
+        str: Short code from the mapping, or the variable name itself as a fallback
+            (e.g. when the variable is already a short code).
+    """
+    return mapping.get(variable, variable)
+
+
 def download_file_streaming(url: str, output_file: Path, description: str) -> int:
     """Download a file from a URL using streaming with a tqdm progress bar.
 

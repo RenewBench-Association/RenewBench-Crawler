@@ -8,6 +8,8 @@ import pytest
 import requests
 
 from rbc.weather.icon_dream import IconDreamDownloader
+from rbc.weather.icon_dream.mappings import VARIABLE_TO_SHORT_PARAM
+from rbc.weather.utils import get_short_param
 
 
 # ----------------------------------
@@ -468,13 +470,9 @@ def test_get_default_variables(tmp_path: Path) -> None:
         assert "2m_temperature" in downloader.variables
 
 
-def test_get_dwd_param_fallback(downloader: IconDreamDownloader) -> None:
-    """Test _get_dwd_param fallback for unmapped variables.
-
-    Args:
-        downloader (IconDreamDownloader): Instance of IconDreamDownloader.
-    """
-    result = downloader._get_dwd_param("unmapped_variable")
+def test_get_dwd_param_fallback() -> None:
+    """Test get_short_param fallback for unmapped variables."""
+    result = get_short_param("unmapped_variable", VARIABLE_TO_SHORT_PARAM)
     assert result == "unmapped_variable"
 
 
