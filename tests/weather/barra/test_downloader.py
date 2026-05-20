@@ -150,7 +150,8 @@ def test_downloader_init_model_configs(
 
     if variables is None:
         default_variables = [
-            v for v in DEFAULT_VARIABLES 
+            v
+            for v in DEFAULT_VARIABLES
             if VARIABLE_TO_BARRA2_PARAM.get(v, v) in downloader.available_codes
         ]
         assert downloader.variables == default_variables

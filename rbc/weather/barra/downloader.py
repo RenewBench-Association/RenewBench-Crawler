@@ -107,11 +107,11 @@ class Barra2Downloader(WeatherDownloader):
             output_path (Path): Directory to save downloaded data.
             model (str): BARRA2 model key ("R2", "C2", or "C2_20min").
             years (list[int]): List of years to download.
-            months (list[str] | None, optional): List of months (01-12). 
+            months (list[str] | None, optional): List of months (01-12).
                 If None, defaults to all months.
             variables (list[str] | None, optional): Variables to download.
                 If None, defaults to model-specific DEFAULT_VARIABLES.
-            pressure_levels (list[int] | None, optional): Pressure levels for 3D variables (in hPa). 
+            pressure_levels (list[int] | None, optional): Pressure levels for 3D variables (in hPa).
                 If None, defaults to model-specific pressure levels.
             include_invariants (bool, optional): If True, include invariant
                 variables (orography, land-sea mask) in download set.
@@ -153,7 +153,8 @@ class Barra2Downloader(WeatherDownloader):
             base_variables = list(variables)
         else:
             base_variables = [
-                v for v in DEFAULT_VARIABLES 
+                v
+                for v in DEFAULT_VARIABLES
                 if VARIABLE_TO_BARRA2_PARAM.get(v, v) in self.available_codes
             ]
         if self.include_invariants:

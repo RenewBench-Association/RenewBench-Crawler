@@ -56,19 +56,19 @@ class Era5Downloader(WeatherDownloader):
             api_key (str): The CDS API key.
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to get data for.
-            months (list[str] | None, optional): List of months (01-12). 
+            months (list[str] | None, optional): List of months (01-12).
                 If None, defaults to all months.
-            variables (list[str] | None, optional): List of ERA5 variables. 
-                If None, defaults to DEFAULT_VARIABLES.  
-            area (list[float] | None, optional): Bounding box [N, W, S, E]. 
+            variables (list[str] | None, optional): List of ERA5 variables.
+                If None, defaults to DEFAULT_VARIABLES.
+            area (list[float] | None, optional): Bounding box [N, W, S, E].
                 If None, defaults to global.
-            pressure_levels (list[str] | None, optional): Pressure levels (hPa). 
+            pressure_levels (list[str] | None, optional): Pressure levels (hPa).
                 If None, defaults to DEFAULT_PRESSURE_LEVELS.
-            model_levels (list[str] | None, optional): Model levels (1-137). 
+            model_levels (list[str] | None, optional): Model levels (1-137).
                 If None, defaults to DEFAULT_MODEL_LEVELS.
-            dry_run (bool, optional): If True, print requests without submitting them. 
+            dry_run (bool, optional): If True, print requests without submitting them.
                 Defaults to False.
-            resume (bool, optional): Whether to resume from a previous download. 
+            resume (bool, optional): Whether to resume from a previous download.
                 Defaults to True.
 
         Raises:
