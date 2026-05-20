@@ -417,7 +417,7 @@ def test_build_cds_request_batch_single_level(downloader: Era5Downloader) -> Non
         downloader (Era5Downloader): Instance of Era5Downloader.
     """
     dataset, request = downloader._build_request_batch(
-        variables=["2m_temperature", "surface_pressure"],
+        short_names=["2t", "sp"],
         year=2020,
         month="01",
         level_type="single",
@@ -443,7 +443,7 @@ def test_build_cds_request_batch_pressure_level(downloader: Era5Downloader) -> N
         downloader (Era5Downloader): Instance of Era5Downloader.
     """
     dataset, request = downloader._build_request_batch(
-        variables=["temperature", "u_component_of_wind"],
+        short_names=["t", "u"],
         year=2020,
         month="01",
         level_type="pressure",
@@ -463,7 +463,7 @@ def test_build_mars_request_batch_model_level(
         model_level_downloader (Era5Downloader): Downloader configured with model levels.
     """
     dataset, request = model_level_downloader._build_request_batch(
-        variables=["temperature"], year=2020, month="01", level_type="model"
+        short_names=["t"], year=2020, month="01", level_type="model"
     )
 
     assert dataset == model_level_downloader.model_config["MARS"]["dataset"]
