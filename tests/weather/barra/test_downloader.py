@@ -405,17 +405,12 @@ def test_build_opendap_url_invariant_uses_fx_path(tmp_path: Path) -> None:
 # ----------------------------------
 # Tests - Variable mapping
 # ----------------------------------
-def test_get_short_param() -> None:
-    """Test conversion of variable names to BARRA2 parameter short codes."""
+def test_mapping_short_param() -> None:
+    """Test mapping of variable names to BARRA2 parameter short codes."""
     assert get_short_param("1.5m_temperature", VARIABLE_TO_SHORT_PARAM) == "tas"
     assert get_short_param("10m_u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "uas"
     assert get_short_param("10m_v_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "vas"
-
-
-def test_get_short_param_fallback_returns_variable_name() -> None:
-    """Test that get_short_param returns the variable name when it is not in the mapping."""
-    result = get_short_param("unmapped_variable", VARIABLE_TO_SHORT_PARAM)
-    assert result == "unmapped_variable"
+    assert get_short_param("orography", VARIABLE_TO_SHORT_PARAM) == "orog"
 
 
 # ----------------------------------

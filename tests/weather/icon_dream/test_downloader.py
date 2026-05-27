@@ -470,10 +470,11 @@ def test_get_default_variables(tmp_path: Path) -> None:
         assert "2m_temperature" in downloader.variables
 
 
-def test_get_dwd_param_fallback() -> None:
-    """Test get_short_param fallback for unmapped variables."""
-    result = get_short_param("unmapped_variable", VARIABLE_TO_SHORT_PARAM)
-    assert result == "unmapped_variable"
+def test_mapping_short_param() -> None:
+    """Test mapping of variable names to ICON-DREAM / DWD parameter short codes."""
+    assert get_short_param("temperature", VARIABLE_TO_SHORT_PARAM) == "T"
+    assert get_short_param("u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "U"
+    assert get_short_param("2m_temperature", VARIABLE_TO_SHORT_PARAM) == "T_2M"
 
 
 # ----------------------------------

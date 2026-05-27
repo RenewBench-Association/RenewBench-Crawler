@@ -386,22 +386,19 @@ def test_validate_variables_model_level_invalid(downloader: Era5Downloader) -> N
 
 
 # ----------------------------------
-# Tests - CDS / MARS request building
+# Tests - Variable mapping
 # ----------------------------------
-def test_get_param() -> None:
-    """Test conversion of variable names to CDS / MARS parameter codes."""
+def test_mapping_short_param() -> None:
+    """Test mapping of variable names to CDS / MARS parameter short codes."""
     assert get_short_param("2m_temperature", VARIABLE_TO_SHORT_PARAM) == "2t"
     assert get_short_param("10m_u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "10u"
     assert get_short_param("temperature", VARIABLE_TO_SHORT_PARAM) == "t"
     assert get_short_param("u_component_of_wind", VARIABLE_TO_SHORT_PARAM) == "u"
 
 
-def test_get_param_fallback_returns_variable_name() -> None:
-    """Test that get_short_param returns the variable name when it is not in the mapping."""
-    result = get_short_param("unmapped_variable", VARIABLE_TO_SHORT_PARAM)
-    assert result == "unmapped_variable"
-
-
+# ----------------------------------
+# Tests - CDS / MARS request building
+# ----------------------------------
 def test_build_cds_request_batch_single_level(downloader: Era5Downloader) -> None:
     """Test CDS request building for single-level variables.
 

@@ -405,21 +405,10 @@ class Barra2Downloader(WeatherDownloader):
                 else set()
             )
 
-            single_level_vars = [
-                name
-                for name, code in sorted(VARIABLE_TO_SHORT_PARAM.items())
-                if code in single_level_codes
-            ]
-            pressure_level_vars = [
-                name
-                for name, code in sorted(VARIABLE_TO_SHORT_PARAM.items())
-                if code in pressure_level_codes
-            ]
-            invariant_vars = [
-                name
-                for name, code in sorted(VARIABLE_TO_SHORT_PARAM.items())
-                if code in INVARIANT_VARIABLES
-            ]
+            var_items = sorted(VARIABLE_TO_SHORT_PARAM.items())
+            single_level_vars = [n for n, c in var_items if c in single_level_codes]
+            pressure_level_vars = [n for n, c in var_items if c in pressure_level_codes]
+            invariant_vars = [n for n, c in var_items if c in INVARIANT_VARIABLES]
 
             single_level_lines = "\n".join(
                 (

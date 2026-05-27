@@ -346,14 +346,15 @@ class IconDreamDownloader(WeatherDownloader):
 
         for model_name in models:
             model_config = _get_model_config(model_name)
+            var_items = sorted(VARIABLE_TO_SHORT_PARAM.items())
             single_level_lines = "\n".join(
                 (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
-                for name, code in sorted(VARIABLE_TO_SHORT_PARAM.items())
+                for name, code in var_items
                 if code in ALL_SINGLE_LEVEL_VARIABLES
             )
             model_level_lines = "\n".join(
                 (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
-                for name, code in sorted(VARIABLE_TO_SHORT_PARAM.items())
+                for name, code in var_items
                 if code in ALL_MODEL_LEVEL_VARIABLES
             )
 
