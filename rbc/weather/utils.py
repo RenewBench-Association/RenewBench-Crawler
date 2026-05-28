@@ -46,7 +46,7 @@ class WeatherDownloader(ABC):
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to download.
-            months (list[str] | None): List of months (01-12). None defaults to all months.
+            months (list[str] | None): List of months (01-12). If None, defaults to all months.
             variables (list[str]): List of variables to download.
             dry_run (bool): If True, skip actual downloads.
             resume (bool): If True, load an existing checkpoint on init.
@@ -147,6 +147,20 @@ class WeatherDownloader(ABC):
         with open(temp_path, "wb") as f:
             pickle.dump(self.checkpoint, f)
         temp_path.replace(self.checkpoint_path)
+
+
+def get_short_param(variable: str, mapping: dict[str, str]) -> str:
+    """Convert a variable name to its parameter short code using the provided mapping.
+
+    Args:
+        variable (str): Variable name (e.g. '10m_u_component_of_wind').
+        mapping (dict[str, str]): Mapping from variable names to short codes.
+
+    Returns:
+        str: Short code from the mapping, or the variable name itself as a fallback
+            (e.g. when the variable is already a short code).
+    """
+    return mapping.get(variable, variable)
 
 
 def download_file_streaming(url: str, output_file: Path, description: str) -> int:
