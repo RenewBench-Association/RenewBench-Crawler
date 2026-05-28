@@ -80,7 +80,7 @@ def downloader(init_args: dict, mock_lookup: dict) -> AesoDownloader:
 
 @pytest.fixture(params=["1h", "5min"])
 def task(request: pytest.FixtureRequest, init_args: dict) -> DownloadTask:
-    """Gets a task as 'date=YYYY-MM, temporal_resolution=1h' from the init arguments.
+    """Gets a task as 'date=YYYY-MM' for two temporal resolutions from the init arguments.
 
     Args:
         request (FixtureRequest): Special pytest fixture used to access 'params' values.
@@ -102,7 +102,7 @@ def get_mock_df(spec_task: DownloadTask) -> pd.DataFrame:
         spec_task (DownloadTask): The metadata of a download task, here: date (YYYY-MM), t_res
 
     Returns:
-        pandas.DataFrame: Mock dataframe.
+        pd.DataFrame: Mock dataframe.
     """
     row: dict[str, object] = {c: ["A"] for c in EXPECTED_COLS}
     row.update(
@@ -212,10 +212,10 @@ def test_download_data_resume(init_args: dict) -> None:
 # Tests - Data crawling logic
 # ----------------------------------
 def test_download_task_data(downloader: AesoDownloader, task: DownloadTask) -> None:
-    """Happy path for "_download_task_data" method when resuming from checkpoint.
+    """Happy path for "_download_task_data" method.
 
     Args:
-        downloader (IesoDownloader): Instance of AesoDownloader class.
+        downloader (AesoDownloader): Instance of AesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM), t_res
     """
     mock_df = pd.DataFrame({"Volume": [16.2]})

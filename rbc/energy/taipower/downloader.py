@@ -6,11 +6,11 @@ Remote access of Taipower website to fetch current live data with.
 import sys
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests.exceptions
 from requests import Session
-from zoneinfo import ZoneInfo
 
 TIMEZONE = ZoneInfo("Asia/Taipei")
 URL = "http://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json"

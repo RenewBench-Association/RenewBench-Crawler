@@ -669,9 +669,10 @@ def test_download_variable_success_writes_file(downloader: Barra2Downloader) -> 
     mock_response.iter_content.return_value = [b"ab", b"cd"]
     mock_response.raise_for_status.return_value = None
 
-    with patch("rbc.weather.utils.requests.get", return_value=mock_response), patch(
-        "rbc.weather.utils.tqdm"
-    ) as mock_tqdm:
+    with (
+        patch("rbc.weather.utils.requests.get", return_value=mock_response),
+        patch("rbc.weather.utils.tqdm") as mock_tqdm,
+    ):
         progress = MagicMock()
         progress.__enter__.return_value = progress  # make context manager return itself
         mock_tqdm.return_value = progress
@@ -725,8 +726,9 @@ def test_download_variable_request_exception_removes_existing_partial(
     mock_response.raise_for_status.return_value = None
     mock_response.iter_content.side_effect = _failing_chunks
 
-    with patch("rbc.weather.utils.requests.get", return_value=mock_response), patch(
-        "rbc.weather.utils.tqdm", return_value=MagicMock()
+    with (
+        patch("rbc.weather.utils.requests.get", return_value=mock_response),
+        patch("rbc.weather.utils.tqdm", return_value=MagicMock()),
     ):
         result = downloader._download_task((2020, "01", "1.5m_temperature", ""))
 
@@ -754,9 +756,10 @@ def test_download_variable_generic_exception_removes_partial(
     mock_response.iter_content.side_effect = _broken_chunks
     mock_response.raise_for_status.return_value = None
 
-    with patch("rbc.weather.utils.requests.get", return_value=mock_response), patch(
-        "rbc.weather.utils.tqdm"
-    ) as mock_tqdm:
+    with (
+        patch("rbc.weather.utils.requests.get", return_value=mock_response),
+        patch("rbc.weather.utils.tqdm") as mock_tqdm,
+    ):
         progress = MagicMock()
         progress.__enter__.return_value = progress
         mock_tqdm.return_value = progress
