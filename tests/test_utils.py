@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 
+import pytest
 from loguru import logger
 
 from rbc.utils import handle_exceptions, setup_logging
@@ -10,28 +11,30 @@ from rbc.utils import handle_exceptions, setup_logging
 # ----------------------------------
 # Tests
 # ----------------------------------
-def test_setup_logging(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verbose, level", [[False, "INFO"], [True, "DEBUG"]])
+def test_setup_logging(tmp_path: Path, verbose: bool, level: str) -> None:
     """Happy path for "setup_logging" function, ensuring messages are logged to file.
 
     Args:
         tmp_path (Path): Path to the temporary directory.
+        verbose (bool, optional): Whether or not to define a high logging verbosity level.
+        level (str): The resulting logging level.
     """
     logger.remove()
-    logs = []
-    sink = logger.add(lambda msg: logs.append(msg.record["message"]), level="INFO")
+    setup_logging(tmp_path, verbose=verbose)
 
-    try:
-        setup_logging(tmp_path)
-        assert any("Log file initialized." in msg for msg in logs)
+    log_dir = Path(tmp_path, "logs")
+    assert log_dir.exists()
 
-        log_dir = Path(tmp_path, "logs")
-        assert log_dir.exists()
+    log_files = list(log_dir.rglob("*.log"))
+    assert len(log_files) == 1
 
-        log_files = list(log_dir.rglob("*.log"))
-        assert len(log_files) == 1
+    log_file = log_files[0]
+    content = log_file.read_text()
 
-    finally:
-        logger.remove(sink)
+    assert f"Logging initialized with level {level}." in content
+    assert "Log file writing to:" in content
+    assert str(log_file.name) in content
 
 
 def test_handle_exceptions(tmp_path: Path):

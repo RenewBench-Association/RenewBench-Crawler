@@ -303,11 +303,13 @@ def test_get_task_data_structure_changed(
         downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
     """
-    with patch(
-        "rbc.energy.entsoe.downloader.ActualGenerationPerGenerationUnit"
-    ) as mock_api, patch(
-        "rbc.energy.entsoe.downloader.extract_records"
-    ) as mock_extract, patch("rbc.energy.entsoe.downloader.add_timestamps") as mock_ts:
+    with (
+        patch(
+            "rbc.energy.entsoe.downloader.ActualGenerationPerGenerationUnit"
+        ) as mock_api,
+        patch("rbc.energy.entsoe.downloader.extract_records") as mock_extract,
+        patch("rbc.energy.entsoe.downloader.add_timestamps") as mock_ts,
+    ):
         mock_api.return_value.query_api.return_value = ["dummy_data"]
         mock_extract.return_value = [{"some_col": 1}]
         mock_ts.return_value = [{"some_col": 1, "timestamp": "2020-01-01"}]

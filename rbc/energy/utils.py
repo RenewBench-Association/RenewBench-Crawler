@@ -21,6 +21,7 @@ import urllib3
 from loguru import logger
 
 WORKERS = 4
+ASYNC_WORKERS = 10
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 MAX_RATE_LIMIT_RETRIES = 6

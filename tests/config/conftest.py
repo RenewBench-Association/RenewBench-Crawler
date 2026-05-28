@@ -17,6 +17,10 @@ def source_configs(tmp_path: Path) -> dict:
     """
     return {
         "adme": {"paths": {"dst_dir_raw": str(Path(tmp_path, "adme"))}},
+        "aemo": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "aemo"))},
+            "access": {"api_key": "token"},
+        },
         "aeso": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "aeso"))},
             "access": {"api_key": "token"},
