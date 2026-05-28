@@ -20,7 +20,7 @@ RenewBench-Crawler package.
 | **Uruguay**              | ADME     | downloader &check; | hourly; per plant        | public            | [Website](https://www.adme.com.uy/controlpanel.php), Data hosting [old](https://www.adme.com.uy/gpf_historico.php) / [new](https://www.adme.com.uy/panelControl/gpf.php)                                                                                                                                               |
 | **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
-| **Japan**                | REI      | planned            | hourly; per region       |                   |                                                                                                                                                                                                                                                                                                                        |
+| **Japan**                | REI      | planned            | hourly; per region       | public            | [Website](https://www.renewable-ei.org/en/activities/statistics/20200619.php), [Dashboard](https://www.renewable-ei.org/en/statistics/electricity/#demand),<br> [Example JSON for 2020](https://www.renewable-ei.org/en/statistics/electricity/data/2020/power-data.json)                                              |
 | **Taiwan**               | Taipower | downloader &check; | 10 min; per plant        | public            | [Website](https://www.taipower.com.tw/d006/loadGraph/loadGraph/genshx_e.html), [JSON](https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json),<br> [Example parser](https://github.com/electricitymaps/electricitymaps-contrib/blob/master/electricitymap/contrib/parsers/TAIPOWER.py)              |
 
 ### Data Source Details
@@ -324,6 +324,46 @@ RenewBench-Crawler package.
 
 
 <details>
+<summary><b>REI (Japan)</b></summary>
+
+**Access**
+- Website: [REI info site](https://www.adme.com.uy/controlpanel.php), [REI data dashboard](https://www.renewable-ei.org/en/statistics/electricity/#demand)
+- Requirements: public, no authentication needed
+- License: unclear, but [they state](https://www.renewable-ei.org/en/activities/statistics/20200619.php):
+
+  "You can use the downloaded figures and data freely.
+  However, when citing, please use the credit notation in the following form: [...]"
+
+**Download & data structure**
+- Spatial resolution: per region (!)
+- Temporal resolution: hourly
+- Available data timespan: April 2016 to (two months before) now
+- Downloadable files: 1 `.json` per year; 1 `.csv` per chosen time period/region via dashboard
+- Files saved as **raw**: 1 `.csv` per month
+- Columns saved as **raw**:
+
+  `( , )` – date start in local format (`YYYY/MM/DD`) = index column!
+
+  `( , )` - hour start in local format (`HH:MM`)
+
+  `(<region_name>, Nuclear)`, `( , Thermal)`, `( , Geothermal)`, `( , Biomass)`,
+  `( , SolarPV)`, `( , Wind)`, `( , Pumped hydro(pump up))`, `( , Pumped hydro(generate))`,
+  `( , Import)`, `( , Export)`, `( , SolarPV(curtailment))`, `( , Wind(curtailment))` -
+  power generated per region and source in GW
+
+> **PLEASE NOTE:**
+>
+> Data only available PER REGION!
+>
+> The "raw" CSV files are set up to mimic what the REI dashboard outputs as downloadable CSV
+> files using the same underlying JSON files. To this end, the originally provided
+> [UNIX time](https://note.nkmk.me/en/python-unix-time-datetime/) is converted to local
+> Japanese timestamps.
+
+</details>
+
+
+<details>
 <summary><b>Taipower (Taiwan)</b></summary>
 
 **Access**
@@ -385,8 +425,8 @@ raw/energy
 
 | Region                     | Source / Model    | Status              | Resolution             | Data availability |  Access   |  Resources                                                                                                                                                                                                                                                 |
 |----------------------------|-------------------|---------------------|------------------------|-------------------|-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Australia and surroundings | BARRA2 R2         | downloader &check;  | 0.11° / ~11 km; 1 hour | 1979-present      | public    | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html) [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) |
-| Australia                  | BARRA2 C2         | downloader &check;  | 0.04° / ~4 km; 1 hour  | 1979-present      | public    | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html) [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) |
+| Australia and surroundings | BARRA2 R2         | downloader &check;  | 0.11° / ~11 km; hourly | 1979-present      | public    | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html) [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) |
+| Australia                  | BARRA2 C2         | downloader &check;  | 0.04° / ~4 km; hourly  | 1979-present      | public    | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html) [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) |
 | Australia                  | BARRA2 C2         | downloader &check;  | 0.04° / ~4 km; 20 min  | 1979-present      | public    | [BOM](https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/20min/catalog.html) [Guide](https://opus.nci.org.au/spaces/NDP/pages/264241166/BOM+BARRA2+ob53) |
 | Global                     | ERA5              | downloader &check;  | 0.25° (~31 km); hourly | 1940–present      | API token | [Copernicus / ECMWF](https://apps.ecmwf.int/data-catalogues/era5/?type=an&class=ea&stream=oper&expver=1),<br> [Guide](https://confluence.ecmwf.int/display/CKB/How+to+download+ERA5), [API how-to](https://cds.climate.copernicus.eu/how-to-api) |
 | Global                     | ICON DREAM Global | downloader &check;  | ~13 km; hourly         | 2010–present      | public    | [DWD Open Data](https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly/), [Guide](http://dx.doi.org/10.5676/dwd/icon-dream_v1) |
