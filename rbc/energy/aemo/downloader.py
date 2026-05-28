@@ -235,7 +235,7 @@ class AemoDownloader(EnergyDownloader):
         date_start: datetime,
         date_end: datetime,
         temporal_res: str,
-    ) -> list[dict] | list[None]:
+    ) -> list[dict]:
         """Fetch data for one specific unit at a time, within the realm of the given task.
 
         The OpenElectricity API offers the download of DataMetric.ENERGY and DataMetric.POWER
@@ -355,7 +355,7 @@ class AemoDownloader(EnergyDownloader):
 
         # create merged dataframe and lookup dictionary
         try:
-            df_f.pop("units")
+            df_f = df_f.drop(columns=["units"])
             df_f["description"] = df_f["description"].str.replace(
                 r"<[^>]*>", "", regex=True
             )

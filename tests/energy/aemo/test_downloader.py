@@ -620,7 +620,6 @@ def test_get_start_date(
 
     out = _get_start_date(d1=d1, d2=d2, network_id=network_id)
     assert out == expected_out
-    assert out.year == expected_year
     assert out.tzinfo is tz
 
 
