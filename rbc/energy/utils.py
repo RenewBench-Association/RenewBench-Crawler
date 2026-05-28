@@ -268,8 +268,7 @@ class EnergyDownloader(ABC):
             except MissingDataError as e:  # handle missing data for task
                 logger.error(f"Missing data for '{task.identifier}': {e}")
 
-                task.validate_required_fields("date")
-                if pd.Timestamp(task.date).year == pd.Timestamp.now().year:
+                if task.dt.year == pd.Timestamp.now().year:
                     return 0  # current year task -> might become available later!
 
                 return 1  # skip task
