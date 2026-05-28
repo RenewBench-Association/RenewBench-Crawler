@@ -17,6 +17,7 @@ from openelectricity.client import APIError
 from openelectricity.models.facilities import FacilityResponse
 
 from rbc.energy.utils import (
+    ASYNC_WORKERS,
     WORKERS,
     DataStructureError,
     DownloadTask,
@@ -33,7 +34,8 @@ VALID_NETWORKS = {
     "WEM": timezone(timedelta(hours=8)),
     "AU": timezone(timedelta(hours=10)),
 }
-# (s. https://docs.openelectricity.org.au/sdk/typescript/utilities#date-and-time-utilities)
+# For more information on Australian timezones, s.
+# https://docs.openelectricity.org.au/sdk/typescript/utilities#date-and-time-utilities
 EXPECTED_COLS = [
     "timestamp",
     "code",
@@ -157,17 +159,17 @@ class AemoDownloader(EnergyDownloader):
             DataStructureError: If the data structure changed and relevant columns are now
                 missing (this will cause the entire run to be killed).
         """
+        t_res = task.temporal_resolution
+        t_res = t_res if "min" not in t_res else t_res.replace("min", "m")
+
         start = task.dt.to_pydatetime()
         start = start.replace(second=1)  # to ensure end-of-interval timeframe
 
-        task_type = "month" if len(task.date.split("-")) == 2 else "day"
+        task_type = "month" if t_res == "1h" else "day"
         if task_type == "month":
             end = (start + pd.offsets.MonthBegin(1)).to_pydatetime()
         else:
             end = start + timedelta(days=1)
-
-        t_res = task.temporal_resolution
-        t_res = t_res if "min" not in t_res else t_res.replace("min", "m")
 
         # filter list of units further based on current task
         valid_u = self._get_valid_units(units=self.valid_u, year=task.year)
@@ -182,12 +184,14 @@ class AemoDownloader(EnergyDownloader):
                 list: List of data from all units for a given task (date, t_res)
             """
             async with AsyncOEClient(api_key=self.token) as a_client:
-                semaphore = asyncio.Semaphore(10)  # few workers to work with threading
-                tasks = []
+                semaphore = asyncio.Semaphore(
+                    ASYNC_WORKERS
+                )  # few to work with threading
+                coroutines = []
 
                 # get data for 1 unit at a time because results are otherwise aggregated
                 for unit in valid_u:
-                    tasks.append(
+                    coroutines.append(
                         self._fetch_unit_data_async(
                             a_client,
                             semaphore,
@@ -199,7 +203,7 @@ class AemoDownloader(EnergyDownloader):
                         )
                     )
 
-                results = await asyncio.gather(*tasks)
+                results = await asyncio.gather(*coroutines)
 
                 logger.info(
                     f"Task {task.identifier}: {sum(1 for r in results if r)} / {len(results)}"

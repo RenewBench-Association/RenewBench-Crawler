@@ -29,7 +29,7 @@ def parse_arguments() -> Namespace:
         "--years",
         nargs="+",
         type=int,
-        default=list(range(MIN_YEAR, datetime.now().year + 1)),  # 5min: 2015-2023
+        default=list(range(MIN_YEAR, datetime.now().year + 1)),
         help=f"Years to download. Example: -y 2020 2021. "
         f"Default: {list(range(MIN_YEAR, datetime.now().year + 1))}",
     )
