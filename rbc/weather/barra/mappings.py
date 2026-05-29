@@ -246,10 +246,10 @@ C2_PRESSURE_LEVELS = sorted(
 )
 
 # Default: 1000, 950 hPa (lowest 2 pressure levels, ~110m, ~560m altitude)
-R2_DEFAULT_PRESSURE_LEVELS = ["1000", "950"]
+R2_DEFAULT_PRESSURE_LEVELS = [1000, 950]
 
 # Default: 1000, 975, 950 hPa (lowest 3 pressure levels, ~110m, ~300m, ~560m altitude)
-C2_DEFAULT_PRESSURE_LEVELS = ["1000", "975", "950"]
+C2_DEFAULT_PRESSURE_LEVELS = [1000, 975, 950]
 
 # Mapping of variable names to BARRA2 parameter short codes
 VARIABLE_TO_SHORT_PARAM = {

@@ -234,7 +234,7 @@ def test_downloader_initialization_optional_args(tmp_path: Path) -> None:
         pressure_levels=custom_levels,
     )
     assert dl_custom.months == ["06"]
-    assert dl_custom.pressure_levels == custom_levels
+    assert dl_custom.pressure_levels == list(map(str, custom_levels))
 
 
 # ----------------------------------
@@ -273,23 +273,36 @@ def test_checkpoint_resume_behavior(
 # ----------------------------------
 # Tests - File path & URL construction
 # ----------------------------------
-def test_construct_file_path(downloader: Barra2Downloader) -> None:
+@pytest.mark.parametrize(
+    "var, level", [("1.5m_temperature", ""), ("tas", ""), ("temperature", "850")]
+)
+def test_construct_file_path(
+    downloader: Barra2Downloader, var: str, level: str
+) -> None:
     """Test file path construction resolves to BARRA2 code.
 
     Args:
         downloader (Barra2Downloader): Instance of Barra2Downloader class.
+        var (str): Variable name.
+        level (str): Level name.
     """
-    file_path = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    ref_path = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
+    file_path = downloader._construct_file_path(2020, "01", var, level)
+
+    # common assertions
     assert file_path.parent == downloader.output_path
     assert "R2" in str(file_path)
     assert "1hr" in str(file_path)
     assert "202001" in str(file_path)
-    # File name uses resolved BARRA2 code, not descriptive name
-    assert "tas" in str(file_path)
-    assert str(file_path).endswith(".nc")
-    # Passing a raw BARRA2 code directly is also accepted (passthrough fallback)
-    file_path_raw = downloader._construct_file_path(2020, "01", "tas")
-    assert file_path_raw == file_path
+    assert file_path.suffix == ".nc"
+
+    # specific assertions depending on if pressure level exists of not
+    if not level:
+        assert file_path == ref_path
+        assert "tas" in file_path.name
+    else:
+        assert file_path != ref_path
+        assert level in file_path.name
 
 
 def test_construct_file_path_different_vars(downloader: Barra2Downloader) -> None:
@@ -298,8 +311,8 @@ def test_construct_file_path_different_vars(downloader: Barra2Downloader) -> Non
     Args:
         downloader (Barra2Downloader): Instance of Barra2Downloader class.
     """
-    path1 = downloader._construct_file_path(2020, "01", "1.5m_temperature")
-    path2 = downloader._construct_file_path(2020, "01", "total_precipitation")
+    path1 = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
+    path2 = downloader._construct_file_path(2020, "01", "total_precipitation", "")
     assert str(path1) != str(path2)
     assert "tas" in str(path1)
     assert "pr" in str(path2)
@@ -320,7 +333,7 @@ def test_construct_file_path_invariant_uses_fx_name(tmp_path: Path) -> None:
     )
 
     # Invariant variables ignore year/month; use sentinel values matching the actual call site.
-    file_path = downloader._construct_file_path(0, "fx", "orography")
+    file_path = downloader._construct_file_path(0, "fx", "orography", "")
 
     assert file_path.parent.name == "invariant"
     assert file_path.name == "barra2_C2_20min_fx_orog.nc"
@@ -352,7 +365,7 @@ def test_build_opendap_url_r2(downloader: Barra2Downloader) -> None:
     Args:
         downloader (Barra2Downloader): Instance of Barra2Downloader class.
     """
-    url = downloader._build_opendap_url(2020, "06", "1.5m_temperature")
+    url = downloader._build_opendap_url(2020, "06", "1.5m_temperature", "")
     assert "thredds.nci.org.au" in url
     assert "202006" in url
     # URL uses resolved BARRA2 code
@@ -374,8 +387,8 @@ def test_build_opendap_url_different_models(
         years=[2020],
         variables=["1.5m_temperature"],
     )
-    url_r2 = downloader._build_opendap_url(2020, "01", "1.5m_temperature")
-    url_c2 = dl_c2._build_opendap_url(2020, "01", "1.5m_temperature")
+    url_r2 = downloader._build_opendap_url(2020, "01", "1.5m_temperature", "")
+    url_c2 = dl_c2._build_opendap_url(2020, "01", "1.5m_temperature", "")
     assert url_r2 != url_c2
 
 
@@ -394,7 +407,7 @@ def test_build_opendap_url_invariant_uses_fx_path(tmp_path: Path) -> None:
     )
 
     # Invariant variables ignore year/month; use sentinel values matching the actual call site.
-    url = downloader._build_opendap_url(0, "fx", "land_sea_mask")
+    url = downloader._build_opendap_url(0, "fx", "land_sea_mask", "")
 
     assert "/fx/sftlf/latest/" in url
     assert "_v1.nc" in url
@@ -434,8 +447,8 @@ def test_temporal_res_in_file_path(tmp_path: Path) -> None:
         years=[2020],
         variables=["1.5m_temperature"],
     )
-    path_1hr = dl_1hr._construct_file_path(2020, "01", "1.5m_temperature")
-    path_20min = dl_20min._construct_file_path(2020, "01", "1.5m_temperature")
+    path_1hr = dl_1hr._construct_file_path(2020, "01", "1.5m_temperature", "")
+    path_20min = dl_20min._construct_file_path(2020, "01", "1.5m_temperature", "")
     assert "1hr" in str(path_1hr)
     assert "20min" in str(path_20min)
     assert path_1hr != path_20min
@@ -459,8 +472,8 @@ def test_temporal_res_in_opendap_url(tmp_path: Path) -> None:
         years=[2020],
         variables=["1.5m_temperature"],
     )
-    url_1hr = dl_1hr._build_opendap_url(2020, "01", "1.5m_temperature")
-    url_20min = dl_20min._build_opendap_url(2020, "01", "1.5m_temperature")
+    url_1hr = dl_1hr._build_opendap_url(2020, "01", "1.5m_temperature", "")
+    url_20min = dl_20min._build_opendap_url(2020, "01", "1.5m_temperature", "")
     assert "/1hr/" in url_1hr
     assert "/20min/" in url_20min
 
@@ -506,8 +519,8 @@ def test_download_data_skips_completed(init_args: dict) -> None:
     """
     # Save a fake checkpoint marking all tasks as done
     checkpoint = {
-        (2020, "01", "1.5m_temperature"): 1,
-        (2020, "01", "total_precipitation"): 1,
+        (2020, "01", "1.5m_temperature", ""): 1,
+        (2020, "01", "total_precipitation", ""): 1,
     }
     checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -533,7 +546,7 @@ def test_download_data_calls_download_variable(init_args: dict) -> None:
 
     with patch.object(downloader, "_download_task", return_value=1) as mock_dl:
         downloader.download_data()
-        mock_dl.assert_called_once_with((2020, "01", "1.5m_temperature"))
+        mock_dl.assert_called_once_with((2020, "01", "1.5m_temperature", ""))
 
 
 def test_download_data_calls_download_variable_for_invariant(init_args: dict) -> None:
@@ -547,7 +560,7 @@ def test_download_data_calls_download_variable_for_invariant(init_args: dict) ->
 
     with patch.object(downloader, "_download_task", return_value=1) as mock_dl:
         downloader.download_data()
-        mock_dl.assert_called_once_with(("fx", "fx", "orography"))
+        mock_dl.assert_called_once_with(("fx", "fx", "orography", ""))
 
 
 def test_download_data_skips_completed_invariant(init_args: dict) -> None:
@@ -556,7 +569,7 @@ def test_download_data_skips_completed_invariant(init_args: dict) -> None:
     Args:
         init_args (dict): Initialization arguments for Barra2Downloader.
     """
-    checkpoint: dict = {("fx", "fx", "orography"): 1}
+    checkpoint: dict = {("fx", "fx", "orography", ""): 1}
     checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
@@ -569,6 +582,46 @@ def test_download_data_skips_completed_invariant(init_args: dict) -> None:
     with patch.object(downloader, "_download_task") as mock_dl:
         downloader.download_data()
         mock_dl.assert_not_called()
+
+
+# ----------------------------------
+# Tests - Task generation
+# ----------------------------------
+def test_get_tasks_creates_task_per_pressure_level(tmp_path: Path) -> None:
+    """Pressure-level variables generate one task per pressure level.
+
+    Each task carries the level as a string; single-level variables are not affected.
+
+    Args:
+        tmp_path (Path): Path to the temporary directory.
+    """
+    pressure_levels = [500, 850, 1000]
+    downloader = Barra2Downloader(
+        output_path=tmp_path,
+        model="R2",
+        years=[2020],
+        months=["01"],
+        variables=["temperature"],
+        pressure_levels=pressure_levels,
+    )
+    tasks = downloader._get_tasks()
+
+    assert len(tasks) == len(pressure_levels)
+    assert all(t[:3] == (2020, "01", "temperature") for t in tasks)
+    assert {t[3] for t in tasks} == {str(lvl) for lvl in pressure_levels}
+
+
+def test_get_tasks_single_level_variable_has_empty_level(init_args: dict) -> None:
+    """Single-level variables should produce tasks with an empty level string.
+
+    Args:
+        init_args (dict): Initialization arguments for Barra2Downloader.
+    """
+    downloader = Barra2Downloader(**init_args)
+    tasks = downloader._get_tasks()
+
+    single_tasks = [t for t in tasks if t[2] in init_args["variables"]]
+    assert all(t[3] == "" for t in single_tasks)
 
 
 # ----------------------------------
@@ -606,10 +659,10 @@ def test_download_variable_skips_when_file_exists(downloader: Barra2Downloader) 
     Args:
         downloader (Barra2Downloader): Instance of Barra2Downloader class.
     """
-    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
     output_file.write_bytes(b"already here")
 
-    result = downloader._download_task((2020, "01", "1.5m_temperature"))
+    result = downloader._download_task((2020, "01", "1.5m_temperature", ""))
 
     assert result == 1
 
@@ -633,9 +686,9 @@ def test_download_variable_success_writes_file(downloader: Barra2Downloader) -> 
         progress.__enter__.return_value = progress  # make context manager return itself
         mock_tqdm.return_value = progress
 
-        result = downloader._download_task((2020, "01", "1.5m_temperature"))
+        result = downloader._download_task((2020, "01", "1.5m_temperature", ""))
 
-    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
     assert result == 1
     assert output_file.exists()
     assert output_file.read_bytes() == b"abcd"
@@ -651,14 +704,14 @@ def test_download_variable_request_exception_removes_partial(
     Args:
         downloader (Barra2Downloader): Instance of Barra2Downloader class.
     """
-    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
     assert not output_file.exists()
 
     with patch(
         "rbc.weather.utils.requests.get",
         side_effect=requests.exceptions.RequestException("boom"),
     ):
-        result = downloader._download_task((2020, "01", "1.5m_temperature"))
+        result = downloader._download_task((2020, "01", "1.5m_temperature", ""))
 
     assert result == 0
     assert not output_file.exists()
@@ -686,9 +739,9 @@ def test_download_variable_request_exception_removes_existing_partial(
         patch("rbc.weather.utils.requests.get", return_value=mock_response),
         patch("rbc.weather.utils.tqdm", return_value=MagicMock()),
     ):
-        result = downloader._download_task((2020, "01", "1.5m_temperature"))
+        result = downloader._download_task((2020, "01", "1.5m_temperature", ""))
 
-    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
     assert result == 0
     assert not output_file.exists()
 
@@ -719,9 +772,9 @@ def test_download_variable_generic_exception_removes_partial(
         progress = MagicMock()
         progress.__enter__.return_value = progress
         mock_tqdm.return_value = progress
-        result = downloader._download_task((2020, "01", "1.5m_temperature"))
+        result = downloader._download_task((2020, "01", "1.5m_temperature", ""))
 
-    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature")
+    output_file = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
     assert result == 0
     assert not output_file.exists()
 
