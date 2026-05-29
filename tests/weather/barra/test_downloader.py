@@ -273,27 +273,36 @@ def test_checkpoint_resume_behavior(
 # ----------------------------------
 # Tests - File path & URL construction
 # ----------------------------------
-def test_construct_file_path(downloader: Barra2Downloader) -> None:
+@pytest.mark.parametrize(
+    "var, level", [("1.5m_temperature", ""), ("tas", ""), ("temperature", "850")]
+)
+def test_construct_file_path(
+    downloader: Barra2Downloader, var: str, level: str
+) -> None:
     """Test file path construction resolves to BARRA2 code.
 
     Args:
         downloader (Barra2Downloader): Instance of Barra2Downloader class.
+        var (str): Variable name.
+        level (str): Level name.
     """
-    file_path = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
+    ref_path = downloader._construct_file_path(2020, "01", "1.5m_temperature", "")
+    file_path = downloader._construct_file_path(2020, "01", var, level)
+
+    # common assertions
     assert file_path.parent == downloader.output_path
     assert "R2" in str(file_path)
     assert "1hr" in str(file_path)
     assert "202001" in str(file_path)
-    # File name uses resolved BARRA2 code, not descriptive name
-    assert "tas" in str(file_path)
-    assert str(file_path).endswith(".nc")
-    # Passing a raw BARRA2 code directly is also accepted (passthrough fallback)
-    file_path_raw = downloader._construct_file_path(2020, "01", "tas", "")
-    assert file_path_raw == file_path
-    # Pressure-level file includes the level in the filename
-    file_path_plev = downloader._construct_file_path(2020, "01", "temperature", "850")
-    assert "850" in file_path_plev.name
-    assert file_path_plev != file_path
+    assert file_path.suffix == ".nc"
+
+    # specific assertions depending on if pressure level exists of not
+    if not level:
+        assert file_path == ref_path
+        assert "tas" in file_path.name
+    else:
+        assert file_path != ref_path
+        assert level in file_path.name
 
 
 def test_construct_file_path_different_vars(downloader: Barra2Downloader) -> None:
