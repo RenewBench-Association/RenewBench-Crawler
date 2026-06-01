@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from rbc.weather.utils import WeatherDownloader, download_file_streaming
+from rbc.weather.utils import (
+    WeatherDownloader,
+    download_file_streaming,
+    get_short_param,
+)
 
 
 # ----------------------------------
@@ -327,6 +331,37 @@ class TestAbstractMethods:
                 dry_run=False,
                 resume=False,
             )
+
+
+# ----------------------------------
+# get_short_param
+# ----------------------------------
+class TestGetShortParam:
+    """Tests for the get_short_param utility function.
+
+    Covers known mappings, the fallback behaviour for unmapped variables,
+    variables that are already short codes, and an empty mapping.
+    """
+
+    def test_known_variable_returns_short_code(self) -> None:
+        """A variable present in the mapping is resolved to its short code."""
+        mapping = {"2m_temperature": "2t", "surface_pressure": "sp"}
+        assert get_short_param("2m_temperature", mapping) == "2t"
+        assert get_short_param("surface_pressure", mapping) == "sp"
+
+    def test_unknown_variable_returns_itself(self) -> None:
+        """A variable absent from the mapping is returned unchanged (fallback)."""
+        mapping = {"2m_temperature": "2t"}
+        assert get_short_param("unmapped_variable", mapping) == "unmapped_variable"
+
+    def test_already_a_short_code_passes_through(self) -> None:
+        """A value that equals a short code but is not a key passes through unchanged."""
+        mapping = {"2m_temperature": "2t"}
+        assert get_short_param("2t", mapping) == "2t"
+
+    def test_empty_mapping_returns_variable_unchanged(self) -> None:
+        """Any variable is returned unchanged when the mapping is empty."""
+        assert get_short_param("2m_temperature", {}) == "2m_temperature"
 
 
 # ----------------------------------

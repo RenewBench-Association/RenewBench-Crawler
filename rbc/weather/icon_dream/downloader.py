@@ -14,9 +14,13 @@ from rbc.weather.icon_dream.mappings import (
     ALL_SINGLE_LEVEL_VARIABLES,
     DEFAULT_VARIABLES,
     MODEL_CONFIG,
-    VARIABLE_TO_DWD_PARAM,
+    VARIABLE_TO_SHORT_PARAM,
 )
-from rbc.weather.utils import WeatherDownloader, download_file_streaming
+from rbc.weather.utils import (
+    WeatherDownloader,
+    download_file_streaming,
+    get_short_param,
+)
 
 
 def _normalize_model(model: str) -> str:
@@ -80,11 +84,16 @@ class IconDreamDownloader(WeatherDownloader):
         Args:
             output_path (Path): Path to the output directory.
             years (list[int]): List of years to download.
-            months (list[str], optional): List of months (01-12). Defaults to all months.
-            variables (list[str], optional): List of variables. Defaults to common variables.
-            model (str, optional): Model ("global" or "eu"). Defaults to "global".
-            dry_run (bool, optional): If True, print requests without downloading. Defaults to False.
-            resume (bool, optional): If True, resume from checkpoint. Defaults to True.
+            months (list[str] | None, optional): List of months (01-12).
+                If None, defaults to all months.
+            variables (list[str] | None, optional): List of variables.
+                If None, defaults to DEFAULT_VARIABLES.
+            model (str, optional): Model ("global" or "eu").
+                Defaults to "global".
+            dry_run (bool, optional): If True, print requests without downloading.
+                Defaults to False.
+            resume (bool, optional): If True, resume from checkpoint.
+                Defaults to True.
 
         Raises:
             ValueError: If the model is not defined in the model configuration.
@@ -169,7 +178,7 @@ class IconDreamDownloader(WeatherDownloader):
         Returns:
             int: 1 if successful, 0 if failed.
         """
-        dwd_code = self._get_dwd_param(variable)
+        dwd_code = get_short_param(variable, VARIABLE_TO_SHORT_PARAM)
         filename = f"{self.model_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
         url = f"{self.model_config['base_url']}/{dwd_code}/{filename}"
         output_file = Path(self.output_path, filename)
@@ -263,7 +272,7 @@ class IconDreamDownloader(WeatherDownloader):
             ValueError: If any requested variable is not available.
         """
         # Check that all requested variables exist in our mapping
-        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_DWD_PARAM]
+        invalid_vars = [v for v in self.variables if v not in VARIABLE_TO_SHORT_PARAM]
 
         if invalid_vars:
             raise ValueError(
@@ -275,11 +284,14 @@ class IconDreamDownloader(WeatherDownloader):
         unavailable_vars = [
             v
             for v in self.variables
-            if self._get_dwd_param(v) not in self.available_variables
+            if get_short_param(v, VARIABLE_TO_SHORT_PARAM)
+            not in self.available_variables
         ]
 
         if unavailable_vars:
-            dwd_codes = [self._get_dwd_param(v) for v in unavailable_vars]
+            dwd_codes = [
+                get_short_param(v, VARIABLE_TO_SHORT_PARAM) for v in unavailable_vars
+            ]
             raise ValueError(
                 f"Variables not available on DWD server: {', '.join(unavailable_vars)} "
                 f"(DWD codes: {', '.join(dwd_codes)})"
@@ -323,21 +335,6 @@ class IconDreamDownloader(WeatherDownloader):
             return ALL_MODEL_LEVEL_VARIABLES | ALL_SINGLE_LEVEL_VARIABLES
 
     @staticmethod
-    def _get_dwd_param(variable: str) -> str:
-        """Convert variable name to DWD parameter code.
-
-        Args:
-            variable (str): ICON-DREAM variable name
-
-        Returns:
-            str: DWD parameter code
-        """
-        if variable in VARIABLE_TO_DWD_PARAM:
-            return VARIABLE_TO_DWD_PARAM[variable]
-        # Fallback: use variable name directly
-        return variable
-
-    @staticmethod
     def print_available_variables(model: str = "global") -> None:
         """Print all available ICON-DREAM variables for a model.
 
@@ -349,14 +346,15 @@ class IconDreamDownloader(WeatherDownloader):
 
         for model_name in models:
             model_config = _get_model_config(model_name)
+            var_items = sorted(VARIABLE_TO_SHORT_PARAM.items())
             single_level_lines = "\n".join(
                 (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
-                for name, code in sorted(VARIABLE_TO_DWD_PARAM.items())
+                for name, code in var_items
                 if code in ALL_SINGLE_LEVEL_VARIABLES
             )
             model_level_lines = "\n".join(
                 (f"  - {name}{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}")
-                for name, code in sorted(VARIABLE_TO_DWD_PARAM.items())
+                for name, code in var_items
                 if code in ALL_MODEL_LEVEL_VARIABLES
             )
 

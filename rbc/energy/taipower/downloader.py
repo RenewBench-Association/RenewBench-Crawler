@@ -6,11 +6,11 @@ Remote access of Taipower website to fetch current live data with.
 import sys
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests.exceptions
 from requests import Session
-from zoneinfo import ZoneInfo
 
 TIMEZONE = ZoneInfo("Asia/Taipei")
 URL = "http://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json"
@@ -41,6 +41,10 @@ def download_realtime_data(dst_dir: Path) -> None:
         sys.exit(1)
 
     session = Session()
+
+    # Spoof a standard web browser to bypass the 403 Forbidden error.
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+
     response = session.get(URL)
 
     if not response.status_code == 200:
@@ -101,10 +105,11 @@ def save_df_to_csv(df: pd.DataFrame, csv_path: Path) -> None:
         df (pd.DataFrame): Dataframe to save.
         csv_path (Path): Path to csv file.
     """
-    df.to_csv(csv_path, index=False)
-    if csv_path.is_file():
-        print(f"Successfully saved to: {csv_path}")
-        sys.exit(0)
-    else:
-        print(f"Failed to save to: {csv_path}!")
+    try:
+        df.to_csv(csv_path, index=False)
+    except OSError as e:
+        print(f"Failed to save to: {csv_path}! Error: {e}")
         sys.exit(1)
+
+    print(f"Successfully saved to: {csv_path}")
+    sys.exit(0)

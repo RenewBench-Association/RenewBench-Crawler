@@ -36,6 +36,7 @@ def handle_exceptions(
 
 def setup_logging(
     output_dir: Path,
+    verbose: bool = False,
     retention: bool = False,
     compression: bool = False,
 ) -> None:
@@ -43,21 +44,32 @@ def setup_logging(
 
     Args:
         output_dir (Path): Directory where the script outputs will be saved.
+        verbose (bool): Whether to include DEBUG logging messages in file. Defaults to False.
         retention (bool): Whether to delete log files older than 30 days. Defaults to False.
         compression (bool): Whether to compress log files. Defaults to False.
     """
+    log_level = "DEBUG" if verbose else "INFO"
+
+    # define the file logging sink
     log_dir = Path(output_dir, "logs")
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = Path(log_dir, f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.log")
 
-    # add file logging
-    logger.add(
-        log_path,
-        retention="30 days" if retention else None,  # delete files older than 30 days
-        compression="zip" if compression else None,  # compress logs to zip
-        level="INFO",
+    # configure logger to have both a console sink and file logging sink
+    logger.configure(
+        handlers=[
+            {"sink": sys.stderr, "level": log_level},
+            {
+                "sink": log_path,
+                "level": log_level,
+                "retention": "30 days" if retention else None,  # delete files >30 days
+                "compression": "zip" if compression else None,  # compress logs to zip
+            },
+        ]
     )
+
     # register the global exception hook
     sys.excepthook = handle_exceptions
 
-    logger.info(f"Log file initialized. Writing to: {log_path}")
+    logger.info(f"Logging initialized with level {log_level}.")
+    logger.info(f"Log file writing to: {log_path}")

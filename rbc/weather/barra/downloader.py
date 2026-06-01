@@ -10,18 +10,22 @@ from loguru import logger
 
 from rbc.weather.barra.mappings import (
     C2_20MIN_SINGLE_LEVEL_VARIABLES,
+    C2_DEFAULT_PRESSURE_LEVELS,
     C2_PRESSURE_LEVEL_VARIABLES,
-    C2_PRESSURE_LEVELS,
     C2_SINGLE_LEVEL_VARIABLES,
     DEFAULT_VARIABLES,
     INVARIANT_VARIABLES,
     MODEL_CONFIG,
+    R2_DEFAULT_PRESSURE_LEVELS,
     R2_PRESSURE_LEVEL_VARIABLES,
-    R2_PRESSURE_LEVELS,
     R2_SINGLE_LEVEL_VARIABLES,
-    VARIABLE_TO_BARRA2_PARAM,
+    VARIABLE_TO_SHORT_PARAM,
 )
-from rbc.weather.utils import WeatherDownloader, download_file_streaming
+from rbc.weather.utils import (
+    WeatherDownloader,
+    download_file_streaming,
+    get_short_param,
+)
 
 
 def _normalize_model(model: str) -> str:
@@ -80,7 +84,6 @@ class Barra2Downloader(WeatherDownloader):
 
     Attributes:
         available_codes (set[str]): Set of BARRA2 parameter codes available for the model.
-        available_variables (set[str]): Known available variables for this model.
         model_config (dict): Model-specific configuration from MODEL_CONFIG.
         include_invariants (bool): If True, invariant variables are included in the download.
         invariant_output_path (Path): Directory for invariant variable outputs.
@@ -108,11 +111,11 @@ class Barra2Downloader(WeatherDownloader):
             model (str): BARRA2 model key ("R2", "C2", or "C2_20min").
             years (list[int]): List of years to download.
             months (list[str] | None, optional): List of months (01-12).
-                Defaults to all months.
+                If None, defaults to all months.
             variables (list[str] | None, optional): Variables to download.
-                Defaults to model-specific defaults.
-            pressure_levels (list[int] | None, optional): Pressure levels for
-                3D variables (in hPa). Defaults to all levels for the model.
+                If None, defaults to model-specific DEFAULT_VARIABLES.
+            pressure_levels (list[int] | None, optional): Pressure levels for 3D variables (in hPa).
+                If None, defaults to model-specific pressure levels.
             include_invariants (bool, optional): If True, include invariant
                 variables (orography, land-sea mask) in download set.
                 Defaults to False.
@@ -142,20 +145,20 @@ class Barra2Downloader(WeatherDownloader):
 
         # Build available BARRA2 codes and variable names for selected model
         self.available_codes = _get_available_codes(self.model)
-        self.available_variables = {
-            name
-            for name, code in VARIABLE_TO_BARRA2_PARAM.items()
-            if code in self.available_codes
-        }
 
         # Setup variables (use defaults if none provided)
-        base_variables = (
-            list(variables) if variables is not None else list(DEFAULT_VARIABLES)
-        )
+        if variables is not None:
+            base_variables = list(variables)
+        else:
+            base_variables = [
+                v
+                for v in DEFAULT_VARIABLES
+                if VARIABLE_TO_SHORT_PARAM.get(v, v) in self.available_codes
+            ]
         if self.include_invariants:
             invariant_variable_names = sorted(
                 name
-                for name, code in VARIABLE_TO_BARRA2_PARAM.items()
+                for name, code in VARIABLE_TO_SHORT_PARAM.items()
                 if code in INVARIANT_VARIABLES
             )
             resolved_variables: list[str] = list(
@@ -166,11 +169,11 @@ class Barra2Downloader(WeatherDownloader):
 
         # Setup pressure levels (use model defaults if none provided)
         if pressure_levels is not None:
-            self.pressure_levels = pressure_levels
+            self.pressure_levels = list(map(str, pressure_levels))
         elif self.model == "R2":
-            self.pressure_levels = list(R2_PRESSURE_LEVELS)
+            self.pressure_levels = list(map(str, R2_DEFAULT_PRESSURE_LEVELS))
         elif self.model == "C2":
-            self.pressure_levels = list(C2_PRESSURE_LEVELS)
+            self.pressure_levels = list(map(str, C2_DEFAULT_PRESSURE_LEVELS))
         else:
             self.pressure_levels = []
 
@@ -208,8 +211,9 @@ class Barra2Downloader(WeatherDownloader):
     def _get_tasks(self) -> list[tuple]:
         """Return all download tasks: invariant variables first, then temporal.
 
-        Invariant tasks use the sentinel key ("fx", "fx", variable).
-        Temporal tasks use (year, month, variable).
+        Invariant tasks use the sentinel key ("fx", "fx", variable, "").
+        Single-level tasks use (year, month, variable, "").
+        Pressure-level tasks use (year, month, variable, level) for each pressure level.
 
         Returns:
             list[tuple]: Ordered list of task tuples.
@@ -219,46 +223,71 @@ class Barra2Downloader(WeatherDownloader):
             f"({self.temporal_res} frequency)"
         )
 
+        pressure_codes = (
+            R2_PRESSURE_LEVEL_VARIABLES
+            if self.model == "R2"
+            else C2_PRESSURE_LEVEL_VARIABLES
+            if self.model == "C2"
+            else set()
+        )
+
         invariant_tasks: list[tuple] = [
-            ("fx", "fx", v)
+            ("fx", "fx", v, "")
             for v in self.variables
-            if self._get_barra2_param(v) in INVARIANT_VARIABLES
+            if get_short_param(v, VARIABLE_TO_SHORT_PARAM) in INVARIANT_VARIABLES
         ]
-        temporal_tasks: list[tuple] = [
-            (year, month, v)
+        single_tasks: list[tuple] = [
+            (year, month, v, "")
             for year in self.years
             for month in self.months
             for v in self.variables
-            if self._get_barra2_param(v) not in INVARIANT_VARIABLES
+            if get_short_param(v, VARIABLE_TO_SHORT_PARAM) not in INVARIANT_VARIABLES
+            and get_short_param(v, VARIABLE_TO_SHORT_PARAM) not in pressure_codes
         ]
-        return invariant_tasks + temporal_tasks
+        pressure_tasks: list[tuple] = [
+            (year, month, v, str(level))
+            for year in self.years
+            for month in self.months
+            for v in self.variables
+            if get_short_param(v, VARIABLE_TO_SHORT_PARAM) in pressure_codes
+            for level in self.pressure_levels
+        ]
+
+        return invariant_tasks + single_tasks + pressure_tasks
 
     def _download_task(self, task: tuple) -> int:
         """Download a single BARRA2 data file.
 
         Args:
-            task (tuple): Task tuple of (year, month, variable).
-                Invariant variables use ("fx", "fx", variable).
+            task (tuple): Task tuple of (year, month, variable, level).
+                Invariant variables use ("fx", "fx", variable, "").
+                Single-level variables use (year, month, variable, "").
+                Pressure-level variables use (year, month, variable, "pressure").
 
         Returns:
             int: 1 if successful, 0 if failed.
         """
-        year, month, variable = task
-        return self._download_variables(year=year, month=month, variable=variable)
+        year, month, variable, level = task
+        return self._download_variables(
+            year=year, month=month, variable=variable, level=level
+        )
 
-    def _download_variables(self, year: int | str, month: str, variable: str) -> int:
+    def _download_variables(
+        self, year: int | str, month: str, variable: str, level: str
+    ) -> int:
         """Download a single BARRA2 data file.
 
         Args:
             year (int | str): Year to download, or "fx" for invariant variables.
             month (str): Month to download (format: '01' to '12'), or "fx" for invariant variables.
             variable (str): Variable name (e.g., 'temperature', '10m_u_component_of_wind').
+            level (str): Pressure level as string (e.g. "1000"), or "" for single-level/invariant variables.
 
         Returns:
             int: 1 if successful, 0 if failed.
         """
-        url = self._build_opendap_url(year, month, variable)
-        output_file = self._construct_file_path(year, month, variable)
+        url = self._build_opendap_url(year, month, variable, level)
+        output_file = self._construct_file_path(year, month, variable, level)
         description = f"{year}-{month} ({variable})"
 
         if output_file.exists():
@@ -277,7 +306,9 @@ class Barra2Downloader(WeatherDownloader):
     # --------------------------------------------
     # Helper methods
     # --------------------------------------------
-    def _build_opendap_url(self, year: int | str, month: str, variable: str) -> str:
+    def _build_opendap_url(
+        self, year: int | str, month: str, variable: str, level: str
+    ) -> str:
         """Build OPeNDAP URL for a specific file on the NCI THREDDS server.
 
         The URL structure follows the NCI THREDDS catalog layout for BARRA2 data.
@@ -286,12 +317,13 @@ class Barra2Downloader(WeatherDownloader):
             year (int | str): Year as integer, or "fx" for invariant variables.
             month (str): Month as string (01-12), or "fx" for invariant variables.
             variable (str): Variable name.
+            level (str): Pressure level as string (e.g. "1000"), or "" for single-level/invariant variables.
 
         Returns:
             str: Full OPeNDAP URL for accessing the file.
         """
         base_url = self.model_config["opendap_url"].replace("/dodsC/", "/fileServer/")
-        barra2_code = self._get_barra2_param(variable)
+        barra2_code = get_short_param(variable, VARIABLE_TO_SHORT_PARAM)
         grid = self.model_config["grid"]
         dataset_label = self.model_config["label"]
 
@@ -304,45 +336,33 @@ class Barra2Downloader(WeatherDownloader):
         else:
             year_month = f"{year}{month}"
             dataset_file = (
-                f"{barra2_code}_{grid}_ERA5_historical_hres_BOM_"
+                f"{barra2_code}{level}_{grid}_ERA5_historical_hres_BOM_"
                 f"{dataset_label}_v1_{self.temporal_res}_{year_month}-{year_month}.nc"
             )
-            url = f"{base_url}/{self.temporal_res}/{barra2_code}/latest/{dataset_file}"
+            url = f"{base_url}/{self.temporal_res}/{barra2_code}{level}/latest/{dataset_file}"
         return url
 
-    def _construct_file_path(self, year: int | str, month: str, variable: str) -> Path:
+    def _construct_file_path(
+        self, year: int | str, month: str, variable: str, level: str
+    ) -> Path:
         """Construct the local file path for a BARRA2 data file.
 
         Args:
             year (int | str): Year as integer, or "fx" for invariant variables.
             month (str): Month as string (01-12), or "fx" for invariant variables.
             variable (str): Variable name.
+            level (str): Pressure level as string (e.g. "1000"), or "" for single-level/invariant variables.
 
         Returns:
             Path: Full local file path for the data file.
         """
-        barra2_code = self._get_barra2_param(variable)
+        barra2_code = get_short_param(variable, VARIABLE_TO_SHORT_PARAM)
         if barra2_code in INVARIANT_VARIABLES:
             filename = f"barra2_{self.model}_fx_{barra2_code}.nc"
             return Path(self.invariant_output_path, filename)
         else:
-            filename = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_{barra2_code}.nc"
+            filename = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_{barra2_code}{level}.nc"
             return Path(self.output_path, filename)
-
-    @staticmethod
-    def _get_barra2_param(variable: str) -> str:
-        """Convert descriptive variable name to BARRA2 parameter code.
-
-        Args:
-            variable (str): Descriptive variable name (e.g. "10m_u_component_of_wind").
-
-        Returns:
-            str: BARRA2 parameter code (e.g. "uas").
-        """
-        if variable in VARIABLE_TO_BARRA2_PARAM:
-            return VARIABLE_TO_BARRA2_PARAM[variable]
-        # Fallback: use variable name directly (e.g. already a BARRA2 code)
-        return variable
 
     def _validate_variables(self) -> None:
         """Validate that requested variables are available for this model.
@@ -355,8 +375,8 @@ class Barra2Downloader(WeatherDownloader):
                 available for this model.
         """
         # Check that all requested variables exist in our mapping or is already a BARRA2 code
-        all_known_vars = set(VARIABLE_TO_BARRA2_PARAM.keys()) | set(
-            VARIABLE_TO_BARRA2_PARAM.values()
+        all_known_vars = set(VARIABLE_TO_SHORT_PARAM.keys()) | set(
+            VARIABLE_TO_SHORT_PARAM.values()
         )
         invalid_vars = [v for v in self.variables if v not in all_known_vars]
 
@@ -371,11 +391,13 @@ class Barra2Downloader(WeatherDownloader):
         unavailable_vars = [
             v
             for v in self.variables
-            if self._get_barra2_param(v) not in self.available_codes
+            if get_short_param(v, VARIABLE_TO_SHORT_PARAM) not in self.available_codes
         ]
 
         if unavailable_vars:
-            barra2_codes = [self._get_barra2_param(v) for v in unavailable_vars]
+            barra2_codes = [
+                get_short_param(v, VARIABLE_TO_SHORT_PARAM) for v in unavailable_vars
+            ]
             raise ValueError(
                 f"Variables not available for BARRA2-{self.model}: "
                 f"{', '.join(unavailable_vars)} "
@@ -415,38 +437,27 @@ class Barra2Downloader(WeatherDownloader):
                 else set()
             )
 
-            single_level_vars = [
-                name
-                for name, code in sorted(VARIABLE_TO_BARRA2_PARAM.items())
-                if code in single_level_codes
-            ]
-            pressure_level_vars = [
-                name
-                for name, code in sorted(VARIABLE_TO_BARRA2_PARAM.items())
-                if code in pressure_level_codes
-            ]
-            invariant_vars = [
-                name
-                for name, code in sorted(VARIABLE_TO_BARRA2_PARAM.items())
-                if code in INVARIANT_VARIABLES
-            ]
+            var_items = sorted(VARIABLE_TO_SHORT_PARAM.items())
+            single_level_vars = [n for n, c in var_items if c in single_level_codes]
+            pressure_level_vars = [n for n, c in var_items if c in pressure_level_codes]
+            invariant_vars = [n for n, c in var_items if c in INVARIANT_VARIABLES]
 
             single_level_lines = "\n".join(
                 (
-                    f"  - {name} ({VARIABLE_TO_BARRA2_PARAM[name]})"
+                    f"  - {name} ({VARIABLE_TO_SHORT_PARAM[name]})"
                     f"{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}"
                 )
                 for name in single_level_vars
             )
             pressure_level_lines = "\n".join(
                 (
-                    f"  - {name} ({VARIABLE_TO_BARRA2_PARAM[name]})"
+                    f"  - {name} ({VARIABLE_TO_SHORT_PARAM[name]})"
                     f"{' [DEFAULT]' if name in DEFAULT_VARIABLES else ''}"
                 )
                 for name in pressure_level_vars
             )
             invariant_lines = "\n".join(
-                f"  - {name} ({VARIABLE_TO_BARRA2_PARAM[name]})"
+                f"  - {name} ({VARIABLE_TO_SHORT_PARAM[name]})"
                 for name in invariant_vars
             )
 

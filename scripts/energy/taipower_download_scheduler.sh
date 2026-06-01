@@ -56,7 +56,8 @@ if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
     # -s: Silent.
     # -o /dev/null: Throw away the output (we only want the status code).
     # -w "%{http_code}": Returns just the number (200, 304, 404, etc.).
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I -z "$MOST_RECENT_DOWNLOAD" "$URL")
+    # -A: Sets the User-Agent string to pretend we are a standard web browser (bypasses anti-bot filters).
+    HTTP_CODE=$(curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o /dev/null -w "%{http_code}" -I -z "$MOST_RECENT_DOWNLOAD" "$URL")
 
     if [ "$HTTP_CODE" -eq 304 ]; then
         # 304 = Not Modified, we have the latest data.
@@ -72,7 +73,7 @@ if [ -f "$MOST_RECENT_DOWNLOAD" ]; then
         if [ $PYTHON_EXIT_CODE -eq 0 ]; then
           echo "Downloading most recent data was successful - updating most recent file!"
           # Update most recently downloaded file.
-          curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
+          curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
           exit 0
         else
           echo "OH NO - The download failed with the errors above!."
@@ -92,7 +93,7 @@ else
     if [ $PYTHON_EXIT_CODE -eq 0 ]; then
       echo "Downloading the data for the first time was a success - creating most recent file!"
       # Update most recently downloaded file.
-      curl -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
+      curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -f -s -S -R -o "$MOST_RECENT_DOWNLOAD" "$URL"
       exit 0
     else
       echo "OH NO - The download failed with the errors above!."
