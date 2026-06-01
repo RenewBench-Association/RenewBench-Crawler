@@ -170,17 +170,47 @@ INVARIANT_VARIABLES = {
     "sftlf",  # Land-sea mask
 }
 
-# Default: 13 variables (8 single-level surface + 5 pressure-level atmospheric)
 DEFAULT_VARIABLES = [
-    # 2D surface variables
-    "10m_u_component_of_wind",
-    "10m_v_component_of_wind",
-    "100m_u_component_of_wind",
-    "100m_v_component_of_wind",
+    # Single-level temperature, pressure and humidity
     "1.5m_temperature",
+    "1.5m_temperature_mean",
+    "1.5m_maximum_temperature",
+    "1.5m_minimum_temperature",
+    "50m_temperature",
+    "100m_temperature",
+    "150m_temperature",
+    "200m_temperature",
+    "250m_temperature",
+    "1500m_temperature",
     "surface_pressure",
-    "surface_solar_radiation_downwards",
+    "mean_sea_level_pressure",
+    "1.5m_specific_humidity",
+    # Single-level wind, precipitation and evaporation
+    "10m_u_component_of_wind",
+    "10m_u_component_of_wind_mean",
+    "10m_u_component_of_wind_maximum",
+    "50m_u_component_of_wind",
+    "100m_u_component_of_wind",
+    "150m_u_component_of_wind",
+    "200m_u_component_of_wind",
+    "250m_u_component_of_wind",
+    "1500m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "10m_v_component_of_wind_mean",
+    "10m_v_component_of_wind_maximum",
+    "50m_v_component_of_wind",
+    "100m_v_component_of_wind",
+    "150m_v_component_of_wind",
+    "200m_v_component_of_wind",
+    "250m_v_component_of_wind",
+    "1500m_v_component_of_wind",
+    "10m_wind_speed",
+    "10m_maximum_wind_speed",
     "total_precipitation",
+    "evaporation",
+    # Single-level radiation and clouds
+    "surface_solar_radiation_downwards",
+    "total_cloud_cover",
     # 3D pressure level variables
     "temperature",
     "u_component_of_wind",
@@ -216,13 +246,13 @@ C2_PRESSURE_LEVELS = sorted(
 )
 
 # Default: 1000, 950 hPa (lowest 2 pressure levels, ~110m, ~560m altitude)
-R2_DEFAULT_PRESSURE_LEVELS = ["1000", "950"]
+R2_DEFAULT_PRESSURE_LEVELS = [1000, 950]
 
 # Default: 1000, 975, 950 hPa (lowest 3 pressure levels, ~110m, ~300m, ~560m altitude)
-C2_DEFAULT_PRESSURE_LEVELS = ["1000", "975", "950"]
+C2_DEFAULT_PRESSURE_LEVELS = [1000, 975, 950]
 
-# Mapping of variable descriptions to BARRA2 short codes
-VARIABLE_TO_BARRA2_PARAM = {
+# Mapping of variable names to BARRA2 parameter short codes
+VARIABLE_TO_SHORT_PARAM = {
     # Temperature
     "1.5m_temperature": "tas",
     "1.5m_temperature_mean": "tasmean",

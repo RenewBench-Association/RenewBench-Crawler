@@ -91,15 +91,6 @@ def parse_arguments() -> argparse.Namespace:
         "Can be combined with -pl for both types in one request.",
     )
     parser.add_argument(
-        "-f",
-        "--file_format",
-        type=str,
-        choices=["grib", "netcdf"],
-        default="grib",
-        help="Output file format. Choices: grib, netcdf. "
-        "Default: grib (more space-efficient)",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print MARS requests without submitting them to CDS API. "
@@ -154,7 +145,6 @@ def main() -> None:
         area=args.area,
         pressure_levels=pressure_levels,
         model_levels=model_levels,
-        file_format=args.file_format,
         resume=args.resume,
         dry_run=args.dry_run,
     )

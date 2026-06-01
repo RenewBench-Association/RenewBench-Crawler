@@ -10,7 +10,7 @@ RenewBench-Crawler package.
 
 | Region                   | Source   | Status             | Resolution               | Access            | Resources                                                                                                                                                                                                                                                                                                              |
 |--------------------------|----------|--------------------|--------------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Europe**               | ENTSO-e  | downloader &check; | hourly/15 min; per plant | API token         | [TP](https://transparency.entsoe.eu/), [API guide](https://transparencyplatform.zendesk.com/hc/en-us/sections/12783116987028-Restful-API-integration-guide),<br> [API how-to](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token)                                     |
+| **Europe**               | ENTSO-e  | downloader &check; | hourly/higher; per plant | API token         | [TP](https://transparency.entsoe.eu/), [API guide](https://transparencyplatform.zendesk.com/hc/en-us/sections/12783116987028-Restful-API-integration-guide),<br> [API how-to](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token)                                     |
 | **Turkey**               | EPIAS    | downloader &check; | hourly; per plant        | Login credentials | [TP](https://seffaflik.epias.com.tr/home), [Docs](https://seffaflik.epias.com.tr/electricity-service/technical/en/index.html),<br> [Registration form](https://kayit.epias.com.tr/epias-transparency-platform-registration-form)                                                                                       |
 | **USA**                  | EIA      | downloader &check; | hourly; per company      | API token         | [API browser](https://www.eia.gov/opendata/browser/), [API docs](https://www.eia.gov/opendata/documentation.php),<br> [API registration form](https://www.eia.gov/opendata/register.php)                                                                                                                               |
 | **Canada<br> (Alberta)** | AESO     | downloader &check; | hourly/5 min; per plant  | `box` API token   | [Website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/), [Data hosting](https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5/folder/196731538687), <br> [API how-to](https://developer.box.com/guides/authentication/tokens/developer-tokens) (s. details!) |
@@ -18,7 +18,7 @@ RenewBench-Crawler package.
 | **Chile**                | CEN      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
 | **Brazil**               | ONS      | downloader &check; | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
 | **Uruguay**              | ADME     | downloader &check; | hourly; per plant        | public            | [Website](https://www.adme.com.uy/controlpanel.php), Data hosting [old](https://www.adme.com.uy/gpf_historico.php) / [new](https://www.adme.com.uy/panelControl/gpf.php)                                                                                                                                               |
-| **Australia**            | AEMO     | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
+| **Australia**            | AEMO     | downloader &check; | hourly/5 min; per plant  | API token         | [Website](https://www.aemo.com.au/),<br> [Python package](https://github.com/opennem/openelectricity-python), [API docs](https://docs.openelectricity.org.au/)                                                                                                                                                         |
 | **New<br>Zealand**       | EAT      | downloader &check; | 30 min; per plant        | public            | [Website / Data hosting](https://www.ea.govt.nz/data-and-insights/datasets/wholesale/generation/generation-output/)                                                                                                                                                                                                    |
 | **Japan**                | REI      | planned            | hourly; per region       | public            | [Website](https://www.renewable-ei.org/en/activities/statistics/20200619.php), [Dashboard](https://www.renewable-ei.org/en/statistics/electricity/#demand),<br> [Example JSON for 2020](https://www.renewable-ei.org/en/statistics/electricity/data/2020/power-data.json)                                              |
 | **Taiwan**               | Taipower | downloader &check; | 10 min; per plant        | public            | [Website](https://www.taipower.com.tw/d006/loadGraph/loadGraph/genshx_e.html), [JSON](https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/genary_eng.json),<br> [Example parser](https://github.com/electricitymaps/electricitymaps-contrib/blob/master/electricitymap/contrib/parsers/TAIPOWER.py)              |
@@ -55,9 +55,19 @@ RenewBench-Crawler package.
 
   `time_series.period.point.secondary_quantity` – consumption in MW (if the unit is consuming, else `NaN`)
 
-  `time_series.quantity_measure_unit_name` – physical unit of the reported quantities (usually `MAW`)
+  `time_series.quantity_measure_unit_name` – physical unit of the reported quantities
+  (usually `MAW`). According to [their TP docs](https://transparencyplatform.zendesk.com/hc/en-us/articles/16648326220564-Actual-Generation-per-Generation-Unit-16-1-A):
+  "Average of all available instantaneous net power output values in each Market Time Unit."
+  => MWh if `time_series.period.resolution = PT60M` (= 1h)
 
   `time_series.period.resolution` – string describing the time step (e.g. `PT15M`, `PT60M`)
+
+**STAC**
+
+- `measurement_type`: `'net_output'`
+  - According to [their TP docs](https://transparencyplatform.zendesk.com/hc/en-us/articles/16648326220564-Actual-Generation-per-Generation-Unit-16-1-A):
+    "Actual net generation output (MW) per market time unit and per generation unit of 100
+    MW or more installed generation capacity. "
 
 </details>
 
@@ -117,7 +127,7 @@ RenewBench-Crawler package.
 
   `value` - net generation
 
-  `value-units` - unit of net generation
+  `value-units` - unit of net generation (commonly MWh)
 
 </details>
 
@@ -156,7 +166,9 @@ RenewBench-Crawler package.
 
   `Asset Grouping` - the meter that behind-the-fence assets share, if appropriate.
 
-  `Volume` - volume reported via SCADA (similar to that reported on CSD page)
+  `Volume` - volume reported via SCADA (similar to that reported on CSD page). According to
+  [their website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/):
+  "The reported volume is the average generation over the given period." = MWh
 
   `Maximum Capability` - maximum capacity reported to the AESO
 
@@ -169,6 +181,14 @@ RenewBench-Crawler package.
   `Planning Area` - AESO planning area the asset is located in
 
   `Region` - AESO region the asset is located in
+
+**STAC**
+
+- `measurement_type`: `'gross_output'`
+  -  According to [their website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/):
+    "\[...\] this data is not the same as settlement meter data.
+    This data generally represents what was generated at the unit, not necessarily
+    what is delivered to the AESO grid."
 
 </details>
 
@@ -197,7 +217,9 @@ RenewBench-Crawler package.
   `Fuel Type` – fuel type (not given in `.xlsx` so `=NaN`; to be filled in during processing)
 
   `Measurement` – type of measurement:
-  - `Output`: generation in MW
+  - `Output`: generation in MW. According to [their docs](https://reports-public.ieso.ca/docrefs/helpfile/GenOutputCapability_h4.pdf):
+    "Output is the actual energy production of the unit or facility. The hourly output is the facility’s five-minute
+     outputs averaged over an hour." => MWh
   - `Capability`: available capacity
 
   `Hour 1`, `Hour 2`, …, `Hour 24` – ending hour intervals (i.e. `00:00 - 01:00` to `23:00 to
@@ -211,7 +233,8 @@ RenewBench-Crawler package.
 
 **Access**
 - Website: [ONS generation data](https://dados.ons.org.br/dataset/geracao-usina-2)
-- Requirements: public, no authentication needed (CC Attribution License)
+- Requirements: public, no authentication needed
+- License: [CC Attribution](https://dados.ons.org.br/dataset/geracao-usina-2)
 
 **Download & data structure**
 - Spatial resolution: per plant
@@ -269,7 +292,9 @@ RenewBench-Crawler package.
   `(/, Fecha)` – timestamp end (!) in local format (`DD-MM-YYYY HH:MM`)
 
   `(Hidráulico, <unit_name>)`, `(Biomasa, <unit_name>)`, `(Térmico, <unit_name>)`,
-  `(Eólico, <unit_name>)`, `(Solar, <unit_name>)` - generation per plant and source in MWh
+  `(Eólico, <unit_name>)`, `(Solar, <unit_name>)` - generation per plant and source in MWh.
+  According to [their website](https://adme-com-uy.translate.goog/datosabiertos.html?_x_tr_sl=es&_x_tr_tl=en&_x_tr_hl=en-US&_x_tr_pto=wapp):
+  "The file contains hourly data series showing the generation in MW of the different power plants"
 
 > **PLEASE NOTE:**
 >
@@ -278,6 +303,94 @@ RenewBench-Crawler package.
 
 </details>
 
+<details>
+<summary><b>AEMO (Australia)</b></summary>
+
+**Access**
+- Platform: [OpenElectricity](https://platform.openelectricity.org.au/)
+- Docs: [OpenElectricity Rest API](https://docs.openelectricity.org.au/api-reference/overview),
+  [Facility data guide](https://docs.openelectricity.org.au/guides/facilities)
+- Requirements: personal API token
+  1. Create account for the OpenElectricity platform via the [sign-up](https://platform.openelectricity.org.au/sign-up)
+  2. Go to Dashboard > API Keys > "+ Create New Key". This is your API token.
+- Limits: for 5-min data, max 8 days at once; for hourly data, max 32 days at once
+- License: [CC BY-NC 4.0](https://docs.openelectricity.org.au/api-reference/overview#data-licence)
+
+**Download & data structure**
+- Spatial resolution: per generation unit (plant)
+- Temporal resolution: hourly / 5 min
+- Available data timespan: 1998 to now
+- Files saved as **raw**: 1 `.csv` per day for 5-min, 1 `.csv` per month for 1h
+- Columns saved as **raw**:
+
+  `timestamp` – timestamp end (!) in UTC-aware ISO 8601 (`YYYY-MM-DDTHH:MM:SS+00:00`;
+  `+10:00` for NEM, `+08:00` for WEM)
+
+  `code` – facility code
+
+  `name` – facility name
+
+  `network_id` – AEMO network identifier (e.g. `NEM`, `WEM`, `AU`)
+
+  `network_region` – network region identifier (e.g. `NSW1`, `QLD1`, `SA1`)
+
+  `description` – free-text facility description (HTML stripped)
+
+  `location` – location dict of the facility (i.e. `{'lat': ..., 'lng': ...}`)
+
+  `unit_code` – unique unit name (starts with facility name)
+
+  `unit_fueltech_id` – fuel/technology classification of the unit
+
+  `unit_status_id` – status of the unit (e.g. operating, retired)
+
+  `unit_dispatch_type` – dispatch type of the unit (e.g. `GENERATOR`, `LOAD`)
+
+  `unit_capacity_registered` – registered capacity of the unit (probably MW)
+
+  `unit_capacity_maximum` – maximum capacity of the unit (probably MW)
+
+  `unit_capacity_storage` – storage capacity of the unit
+
+  `unit_data_first_seen` – first date the unit appears in AEMO / OpenElectricity data
+
+  `unit_data_last_seen` – last date the unit appears in AEMO / OpenElectricity data
+
+  `unit_commencement_date` – official commencement date of the unit
+
+  `value` – energy generated in the interval (MWh), derived from AEMO power data
+
+> **PLEASE NOTE:**
+>
+> The times are stored in an End-of-Interval format that will require conversion!
+> (s. [the docs](https://docs.openelectricity.org.au/guides/curtailment#understanding-aemo%E2%80%99s-timestamp-convention))
+>
+> The stored energy generation/load values in MWh are calculated from AEMO's power data
+> (for more information, s. [their docs](https://docs.openelectricity.org.au/guides/energy#difference-between-energy-and-power))
+> All data is based on 5-min instantaneous power \[MW\], meaning hourly values are always
+> aggregated. For power, this aggregration is erroneously done by summation.
+> [An issue](https://github.com/opennem/opennem/issues/523) was created to address this.
+> Energy seems to be independent of this problem.
+
+**STAC**
+
+- `measurement_type`: `'curtailed_gross_output'`
+  - According to [OpenElectricity](https://docs.openelectricity.org.au/guides/curtailment#how-open-electricity-reports-curtailment):
+    Curtailment is not included directly in the data but can theoretically be accessed
+    separately. This is not done here.
+  - AEMO publishes [SCADA data](https://www.nemweb.com.au/Reports/), which is
+    ["power dispatch data"](https://docs.openelectricity.org.au/guides/power#data) parsed
+    directly by [OpenElectricity](https://github.com/opennem/opennem/blob/main/opennem/crawl.py#L44).
+    According to [AEMO's term definitions](https://www.aemo.com.au/-/media/files/electricity/nem/planning_and_forecasting/demand-forecasts/operational-consumption-definition.pdf),
+    their provided [generation output](https://www.aemo.com.au/energy-systems/electricity/national-electricity-market-nem/data-nem/market-management-system-mms-data/generation-and-load)
+    seems to be "as generated" (total gross production on-site, not net grid injections).
+- `entity_type`: `'unit'`
+
+  The parsed data is specifically for units. These all are associated with a facility
+  (under `code` and `name`) for which consolidated data is generated in postprocessing to
+  create `entity_type`: `'facility'` rows.
+
+</details>
 
 <details>
 <summary><b>EAT (New Zealand)</b></summary>

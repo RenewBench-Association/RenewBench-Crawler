@@ -126,6 +126,20 @@ class AdmeConfig(PathValidation, BaseModel):
     paths: Paths
 
 
+class AemoConfig(PathValidation, AccessValidation, BaseModel):
+    """Configuration schema for the AEMO energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAPI): Access pydantic model for access settings.
+    """
+
+    source: Literal["aemo"] = "aemo"
+    paths: Paths
+    access: AccessAPI
+
+
 class AesoConfig(PathValidation, AccessValidation, BaseModel):
     """Configuration schema for the AESO energy data source.
 
@@ -288,6 +302,7 @@ class Barra2Config(PathValidation, BaseModel):
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "adme": AdmeConfig,
+    "aemo": AemoConfig,
     "aeso": AesoConfig,
     "eat": EatConfig,
     "eia": EiaConfig,

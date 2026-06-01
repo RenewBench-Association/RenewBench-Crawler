@@ -356,10 +356,11 @@ def test_lru_cache_works(downloader: IesoDownloader, task: DownloadTask) -> None
         {"DATE": pd.to_datetime(f"{task.date}-01"), "HOUR": [1], "GEN_A": [10]}
     )
 
-    with patch(
-        "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
-    ) as mock_load, patch(
-        "rbc.energy.ieso.downloader.pd.read_excel", return_value=mock_df
+    with (
+        patch(
+            "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
+        ) as mock_load,
+        patch("rbc.energy.ieso.downloader.pd.read_excel", return_value=mock_df),
     ):
         downloader._get_from_old_source(task=task)
         downloader._get_from_old_source(task=task)
@@ -391,7 +392,7 @@ def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> No
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_xlsx = MagicMock(
+    mock_xls = MagicMock(
         spec=pd.ExcelFile,
         sheet_names=[
             "Output",
@@ -407,16 +408,17 @@ def test_load_yearly_excel(downloader: IesoDownloader, task: DownloadTask) -> No
         {"DATE": [f"{task.date}-01"], "HOUR": [1], "GEN_A": [100]}
     )
 
-    with patch(
-        "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
-    ), patch(
-        "rbc.energy.ieso.downloader.pd.read_excel",
-        side_effect=[
-            mock_df_out,  # Output sheet
-            ValueError,  # Available Capacities - not found
-            mock_df_cap,  # Capability - see Notes
-        ],
-    ) as mock_load:
+    with (
+        patch("rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xls),
+        patch(
+            "rbc.energy.ieso.downloader.pd.read_excel",
+            side_effect=[
+                mock_df_out,  # Output sheet
+                ValueError,  # Available Capacities - not found
+                mock_df_cap,  # Capability - see Notes
+            ],
+        ) as mock_load,
+    ):
         df = downloader._load_yearly_excel(url="http://fake.xlsx")
 
         # check that returned df has correct new structure (up to 'HOUR 2')
@@ -444,21 +446,22 @@ def test_load_yearly_excel_missing_capacity(
         downloader (IesoDownloader): Instance of IesoDownloader class.
         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_xlsx = MagicMock(spec=pd.ExcelFile, sheet_names=["Output", "Capability"])
+    mock_xls = MagicMock(spec=pd.ExcelFile, sheet_names=["Output", "Capability"])
     mock_df_out = pd.DataFrame(
         {"DATE": [f"{task.date}-01"], "HOUR": [1], "GEN_A": [10]}
     )
 
-    with patch(
-        "rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xlsx
-    ), patch(
-        "rbc.energy.ieso.downloader.pd.read_excel",
-        side_effect=[
-            mock_df_out,  # Output sheet
-            ValueError,  # Available Capacities - not found
-            ValueError,  # Capability - see Notes - not found
-            ValueError,  # Capability - not found
-        ],
+    with (
+        patch("rbc.energy.ieso.downloader.load_excel_from_file", return_value=mock_xls),
+        patch(
+            "rbc.energy.ieso.downloader.pd.read_excel",
+            side_effect=[
+                mock_df_out,  # Output sheet
+                ValueError,  # Available Capacities - not found
+                ValueError,  # Capability - see Notes - not found
+                ValueError,  # Capability - not found
+            ],
+        ),
     ):
         with pytest.raises(DataStructureError, match="No valid capacity sheets"):
             downloader._load_yearly_excel(url="http://fake.xlsx")
