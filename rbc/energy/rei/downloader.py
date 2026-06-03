@@ -102,24 +102,22 @@ class ReiDownloader(EnergyDownloader):
                 parsed monthly dictionary is empty.
         """
         # check which yearly JSON is required based on the task month
-        year = task.year if task.month >= 4 else task.year - 1
+        json_year = task.year if task.month >= 4 else task.year - 1
 
-        if year < MIN_YEAR:
+        if json_year < MIN_YEAR:
             raise MissingDataError(
                 f"No energy data available (it's before {MIN_YEAR}-4). Skipping..."
             )
 
         # load yearly JSON file
-        url = f"{URL_BASE}data/{year}/power-data.json"
+        url = f"{URL_BASE}data/{json_year}/power-data.json"
 
         with self._download_lock:
             # NOTE: dict_year is cached - do NOT mutate it!
-            dict_year, timestamps_year = self._load_yearly_json(url)
+            dict_year, ts_year = self._load_yearly_json(url)
 
         # filter timestamps to get the specific month
-        month_mask = (timestamps_year.year == task.year) & (
-            timestamps_year.month == task.month
-        )
+        month_mask = (ts_year.year == task.year) & (ts_year.month == task.month)
         matching_indices = month_mask.nonzero()[0]
 
         if len(matching_indices) == 0:
@@ -132,7 +130,7 @@ class ReiDownloader(EnergyDownloader):
 
         if len(matching_indices) != (end_idx - start_idx):
             logger.warning(
-                f"Missing (non-contiguous) timestamps detected for {task.year}-{task.month}: "
+                f"Data continuity issue detected for {task.year}-{task.month}: "
                 f"{len(matching_indices)} timestamps in range of {end_idx - start_idx}!"
             )
 
@@ -195,7 +193,14 @@ class ReiDownloader(EnergyDownloader):
             # get timestamps from epoch for monthly slicing later
             ts_data = pd.DatetimeIndex(pd.to_datetime(data["epochs"], unit="s"))
             ts_data = ts_data.tz_localize("UTC").tz_convert(TIMEZONE)
-            num_ts = len(ts_data)
+            hours = len(ts_data)
+
+            expected_hours = int((ts_data[-1] - ts_data[0]) / pd.Timedelta(hours=1)) + 1
+            if hours != expected_hours:
+                logger.warning(
+                    f"Data continuity issue detected for {url}: Expected {expected_hours} "
+                    f"hourly timestamps for the year, but the JSON contains {hours} hours."
+                )
 
             # slim down full yearly JSON to only get the expected keys
             relevant_data = {k: data[k] for k in EXPECTED_KEYS}
@@ -208,11 +213,11 @@ class ReiDownloader(EnergyDownloader):
                         f"Region '{r}' data is no longer a dictionary!"
                     )
                 for ft, ft_data in r_data.items():
-                    if len(ft_data) != num_ts:
+                    if len(ft_data) != hours:
                         raise DataStructureError(
                             f"REI file structure change detected for '{url}'! "
                             f"Data for region '{r}', fueltype '{ft}' has {len(ft_data)} "
-                            f"entries, but there are {num_ts} timestamps!"
+                            f"entries, but there are {hours} timestamps!"
                         )
 
         except KeyError as e:
