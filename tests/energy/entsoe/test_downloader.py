@@ -384,6 +384,15 @@ def test_save_task_data_two_tres(
     assert df_20min.iloc[0]["time_series.period.point.quantity"] == 20.0
 
 
+def test_save_task_data_invalid_format(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Failure path for _save_task_data when provided data is not a pandas.DataFrame."""
+    non_df = {"timestamp": [f"{task.date}T00:00:00+00:00"]}
+    with pytest.raises(InvalidError, match="must be a DataFrame"):
+        downloader._save_task_data(task, non_df)
+
+
 def test_save_task_data_invalid_tres(
     downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
