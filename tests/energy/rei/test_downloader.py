@@ -2,6 +2,7 @@
 
 import json
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Generator
@@ -491,3 +492,46 @@ def test_load_yearly_json_structural_failures(
 
         with pytest.raises(DataStructureError, match=expected_error_msg):
             downloader._load_yearly_json("dummy-url")
+
+
+# ------------------------------------
+# Tests - Locking with _download_lock
+# ------------------------------------
+def test_get_task_data_concurrent_tasks_single_call(downloader: ReiDownloader) -> None:
+    """Happy path for "_get_task_data" that concurrent tasks share the same yearly JSON.
+
+    This runs several tasks using the same yearly JSON file in parallel to assert that the
+    underlying HTTP request is made only once, thereby ensuring the combination of
+    "_download_lock" and "@lru_cache" with "_load_yearly_json" work.
+
+    Args:
+        downloader (ReiDownloader): Instance of ReiDownloader class.
+    """
+    # define two tasks (months using same JSON) and example JSON for the year
+    tasks = [DownloadTask(date="2020-04"), DownloadTask(date="2020-05")]
+
+    mock_dict_t1, _ = get_mock_yearly_json(tasks[0], num_epochs=4)
+    mock_dict_t2, _ = get_mock_yearly_json(tasks[1], num_epochs=4)
+    mock_dict = {
+        "epochs": mock_dict_t1["epochs"] + mock_dict_t2["epochs"],
+        **{
+            region: {
+                source: mock_dict_t1[region][source] + mock_dict_t2[region][source]
+                for source in ["thermal", "solar"]
+            }
+            for region in EXPECTED_REGIONS
+        },
+    }
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = mock_dict
+
+    with patch("rbc.energy.rei.downloader.requests.get") as mock_get:
+        mock_get.return_value = mock_resp
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            results = list(executor.map(downloader._get_task_data, tasks))
+
+    assert len(results) == len(tasks)  # all tasks should return valid dicts
+    for result in results:
+        assert set(result.keys()) == set(EXPECTED_KEYS)
+
+    assert mock_get.call_count == 1  # only one HTTP request since JSON is shared

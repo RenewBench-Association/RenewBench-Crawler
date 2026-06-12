@@ -1,6 +1,7 @@
 """Tests for ADME energy data downloader."""
 
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -358,7 +359,7 @@ def test_load_yearly_excel(downloader: AdmeDownloader) -> None:
     Args:
         downloader (AdmeDownloader): Instance of AdmeDownloader class.
     """
-    # mock df with single column headers and similar setup at what GPF sheet returns
+    # mock df with single column headers and similar setup as what GPF sheet returns
     mock_xls = MagicMock(spec=pd.ExcelFile, sheet_names=list(EXPECTED_OLD_SHEETS))
     mock_df = pd.DataFrame(
         {"Fecha": ["01-01-2010 01:00"], "Hydro A": [100.0], "Eólica": [10.0]}
@@ -419,3 +420,37 @@ def test_load_yearly_excel_not_datetimelike(downloader: AdmeDownloader) -> None:
     ):
         with pytest.raises(DataStructureError, match="no longer datetimelike"):
             downloader._load_yearly_excel("https://fake.url/gpf_2010.xlsx")
+
+
+# ------------------------------------
+# Tests - Locking with _download_lock
+# ------------------------------------
+def test_get_task_data_concurrent_tasks_single_call(downloader: AdmeDownloader) -> None:
+    """Happy path for "_get_task_data" that concurrent tasks share the same yearly Excel.
+
+    This runs several tasks using the same yearly Excel file in parallel to assert that the
+    underlying HTTP request is made only once, thereby ensuring the combination of
+    "_download_lock" and "@lru_cache" with "_load_yearly_excel" work.
+
+    Args:
+        downloader (AdmeDownloader): Instance of AdmeDownloader class.
+    """
+    # define two tasks (months using same old Excel) and example excel & extracted df
+    tasks = [DownloadTask(date="2018-04"), DownloadTask(date="2018-05")]
+
+    mock_xls = MagicMock(spec=pd.ExcelFile, sheet_names=list(EXPECTED_OLD_SHEETS))
+    dates = [f"01-{t.month}-{t.year} 01:00" for t in tasks]
+    mock_df = pd.DataFrame(
+        {"Fecha": dates, "Hydro A": [100.0, 200.0], "Eólica": [10.0, 20.0]}
+    )
+
+    with (
+        patch("rbc.energy.adme.downloader.load_excel_from_file") as mock_load,
+        patch("rbc.energy.adme.downloader.pd.read_excel", return_value=mock_df),
+    ):
+        mock_load.return_value = mock_xls
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(downloader._get_task_data, tasks))
+
+    assert len(results) == len(tasks)  # all tasks should return one result
+    assert mock_load.call_count == 1  # only one HTTP request since CSV is shared
