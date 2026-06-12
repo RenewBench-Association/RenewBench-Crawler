@@ -440,7 +440,7 @@ RenewBench-Crawler package.
 <summary><b>REI (Japan)</b></summary>
 
 **Access**
-- Website: [REI info site](https://www.adme.com.uy/controlpanel.php), [REI data dashboard](https://www.renewable-ei.org/en/statistics/electricity/#demand)
+- Website: [REI info site](https://www.renewable-ei.org/en/activities/statistics/20200619.php), [REI data dashboard](https://www.renewable-ei.org/en/statistics/electricity/#demand)
 - Requirements: public, no authentication needed
 - License: unclear, but [they state](https://www.renewable-ei.org/en/activities/statistics/20200619.php):
 
@@ -448,7 +448,8 @@ RenewBench-Crawler package.
   However, when citing, please use the credit notation in the following form: [...]"
 
 **Download & data structure**
-- Spatial resolution: per region (!)
+- Spatial resolution: per [region](https://github.com/RenewBench-Association/RenewBench-Crawler/blob/main/rbc/energy/rei/downloader.py#L28)
+  (!)
 - Temporal resolution: hourly
 - Available data timespan: April 2016 to (two months before) now
 - Downloadable files: 1 `.json` per year

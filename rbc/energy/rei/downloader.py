@@ -95,7 +95,7 @@ class ReiDownloader(EnergyDownloader):
             task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
 
         Returns:
-            dict: Dictionary for specific date with the columns as per EXPECTED_COLS.
+            dict: Dictionary for specific date with the keys as per EXPECTED_KEYS.
 
         Raises:
             MissingDataError: If an earlier year was requested than data exists for or if the
@@ -149,7 +149,7 @@ class ReiDownloader(EnergyDownloader):
 
     @staticmethod
     @lru_cache(maxsize=None)
-    def _load_yearly_json(url: str) -> tuple[dict, pd.DatetimeIndex]:  # pd.DataFrame:
+    def _load_yearly_json(url: str) -> tuple[dict, pd.DatetimeIndex]:
         """Downloads the yearly JSON and slims dict down to keys of interest.
 
         The raw yearly JSON should have the following setup, which is ensured through checks:
