@@ -232,17 +232,27 @@ RenewBench-Crawler package.
 <summary><b>CEN (Chile)</b></summary>
 
 **Access**
-- Website: [CEN statistics (data in Excel format)](https://www.coordinador.cl/reportes-y-estadisticas/#Estadisticas),
-    [API site](https://portal.api.coordinador.cl/documentacion?service=sipubv2)
-- Requirements: personal API token
+- Website: [CEN Website](https://www.coordinador.cl/reportes-y-estadisticas/#Estadisticas), generation data
+   [archive (= "old")](https://www.coordinador.cl/reportes-y-estadisticas/#Estadisticas) and
+   [current (= "new")](https://www.coordinador.cl/operacion/graficos/operacion-real/generacion-real/),
+   [API guide](https://www.coordinador.cl/wp-content/uploads/2019/01/Uso-Api-SIP-Sistema-Informacion-Publica-v1.1.pdf)
+   and [API site](https://portal.api.coordinador.cl/documentacion?service=sipubv2)
+- Requirements: "old" data needs no authentification, but all data available via API,
+  which needs a personal API token
   1. Sign up to the [coordinador portal](https://portal.api.coordinador.cl/signup).
      - Select the "Información Pública (SIP)" plan
-  2. After confirming signup, login and navigate to the
-     ["Aplicaciones" tab](https://portal.api.coordinador.cl/admin/applications). If there
-     is no application with "Servicio" as "Información Pública (SIP)", create one using
-     the "Crear Aplicación" button for it.
-  3. Click on the "Nombre de la Aplicación" for the SIP service and look for the
-     long-digit combination under "Clave de usuario". This is your API token!
+  2. After confirming signup, login and navigate to
+     [the "Planes" tab](https://portal.api.coordinador.cl/planes), go to the field
+     "Plan Consulta de Datos Información Pública (SIP)" and press the button "Suscribirse
+     a Unidata(es) de Negocio". Confirm by pressing the red "Suscribirse" button. You
+     should now be part of the buisness unit.
+  3. In the "Planes" tab, the field "Plan Consulta de Datos Información Pública (SIP)" now
+     has the new button "Suscribirse al plan" button. Click on it, fill out the
+     required information - insert a name (`Nombre`) for your application/token and a
+     description (`Descripción`) detailling what it's for - and press the button "Crear
+     Aplicación".
+  4. The new window will show a field "Clave de usuario" with a long alphanumeric
+     string. This is your API token!
 - Limitations: 60 queries per hour
 - License: ? (s. terms and conditions of API account registration)
 
