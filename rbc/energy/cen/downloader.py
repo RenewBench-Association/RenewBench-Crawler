@@ -14,6 +14,7 @@ from requests import exceptions
 
 from rbc.energy.utils import (
     MAX_RATE_LIMIT_RETRIES,
+    MAX_RETRIES,
     WORKERS,
     DataStructureError,
     DownloadTask,
@@ -141,21 +142,31 @@ class CenDownloader(EnergyDownloader):
         }
 
         all_data: list = []
-        attempt_pagesize = 0
+        attempt_network = 0
         attempt_ratelimit = 0
+        attempt_pagesize = 0
 
         while True:
             try:
                 response = requests.get(URL_BASE, params=params, timeout=60)
                 status_code = response.status_code
+                attempt_network = 0
+
             except exceptions.RequestException as e:
                 # catch ALL requests errors locally (prevents crashing of parent thread!)
-                logger.warning(
-                    f"Network issue for {task.date} (Page {params['page']}): "
-                    f"{type(e).__name__}. Retrying page request in 5 seconds..."
-                )
-                time.sleep(5)
-                continue
+                if attempt_network < MAX_RETRIES:  # retry 3 times
+                    logger.warning(
+                        f"Network issue for {task.date} (Page {params['page']}): "
+                        f"{type(e).__name__}. Retrying page request in 5 seconds..."
+                    )
+                    time.sleep(5)
+                    attempt_network += 1
+                    continue
+                else:
+                    raise type(e)(
+                        f"Network retries exceeded by CenDownloader for {task.date} (Page "
+                        f"{params['page']}). Bubbling up to parent EnergyDownloader! {e}"
+                    ) from e  # reraise for parent to catch!
 
             if status_code != 200:
                 if status_code == 429:
