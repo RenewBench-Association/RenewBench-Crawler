@@ -178,7 +178,7 @@ def test_download_day_data(downloader: EntsoeDownloader, task: DownloadTask) -> 
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = downloader._build_task_path(task)
+        expected_file = downloader._build_task_path(task).with_suffix(".csv")
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
@@ -338,7 +338,9 @@ def test_save_task_data_single_tres(
     )
     downloader._save_task_data(task, df)
 
-    expected_file = downloader._build_task_path(task.update(temporal_resolution="1h"))
+    expected_file = downloader._build_task_path(
+        task.update(temporal_resolution="1h")
+    ).with_suffix(".csv")
     assert expected_file.is_file()
 
     saved_df = pd.read_csv(expected_file)
@@ -363,8 +365,12 @@ def test_save_task_data_two_tres(
     )
     downloader._save_task_data(task, df)
 
-    file_1h = downloader._build_task_path(task.update(temporal_resolution="1h"))
-    file_20min = downloader._build_task_path(task.update(temporal_resolution="20min"))
+    file_1h = downloader._build_task_path(
+        task.update(temporal_resolution="1h")
+    ).with_suffix(".csv")
+    file_20min = downloader._build_task_path(
+        task.update(temporal_resolution="20min")
+    ).with_suffix(".csv")
 
     assert file_1h.is_file()
     assert file_20min.is_file()
@@ -376,6 +382,15 @@ def test_save_task_data_two_tres(
     assert len(df_20min) == 1
     assert df_1h.iloc[0]["time_series.period.point.quantity"] == 10.0
     assert df_20min.iloc[0]["time_series.period.point.quantity"] == 20.0
+
+
+def test_save_task_data_invalid_format(
+    downloader: EntsoeDownloader, task: DownloadTask
+) -> None:
+    """Failure path for _save_task_data when provided data is not a pandas.DataFrame."""
+    non_df = {"timestamp": [f"{task.date}T00:00:00+00:00"]}
+    with pytest.raises(InvalidError, match="must be a DataFrame"):
+        downloader._save_task_data(task, non_df)
 
 
 def test_save_task_data_invalid_tres(

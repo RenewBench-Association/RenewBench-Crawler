@@ -224,7 +224,7 @@ def test_download_task_data(downloader: AesoDownloader, task: DownloadTask) -> N
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = downloader._build_task_path(task)
+        expected_file = downloader._build_task_path(task).with_suffix(".csv")
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)

@@ -3,6 +3,7 @@
 Shared helper functions for data downloaders
 """
 
+import json
 import os
 import pickle
 import re
@@ -258,8 +259,8 @@ class EnergyDownloader(ABC):
         """
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                df_gen = self._get_task_data(task=task)
-                self._save_task_data(task=task, df=df_gen)
+                data = self._get_task_data(task=task)
+                self._save_task_data(task, data)
                 return 1
 
             except (DataStructureError, RateLimitError, InvalidError) as e:  # kill run
@@ -269,8 +270,7 @@ class EnergyDownloader(ABC):
             except MissingDataError as e:  # handle missing data for task
                 logger.error(f"Missing data for '{task.identifier}': {e}")
 
-                task.validate_required_fields("date")
-                if pd.Timestamp(task.date).year == pd.Timestamp.now().year:
+                if task.dt.year == pd.Timestamp.now().year:
                     return 0  # current year task -> might become available later!
 
                 return 1  # skip task
@@ -304,27 +304,38 @@ class EnergyDownloader(ABC):
         return 1  # pragma: no cover
 
     @abstractmethod
-    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame:
+    def _get_task_data(self, task: DownloadTask) -> pd.DataFrame | dict:
         """Method to get the task's data (child classes MUST implement/overwrite this!).
 
         Args:
             task (DownloadTask): The metadata for a task to download data for.
 
         Returns:
-            DataFrame: The task's downloaded data (child classes MUST implement this!).
+            DataFrame | dict: The task's downloaded data (child classes MUST implement this!).
         """
 
-    def _save_task_data(self, task: DownloadTask, df: pd.DataFrame) -> None:
+    def _save_task_data(self, task: DownloadTask, data: pd.DataFrame | dict) -> None:
         """Save downloaded task data to disk.
 
         Functionality is separated here to allow child classes to overwrite (i.e. Entso-e).
 
         Args:
             task (DownloadTask): The metadata for the task that was downloaded.
-            df (pd.DataFrame): Downloaded dataframe for the task.
+            data (pd.DataFrame | dict): Downloaded data for the task.
         """
-        file_path = self._build_task_path(task)
-        write_df_to_csv(df=df, file_path=file_path)
+        base_path = self._build_task_path(task)
+
+        if isinstance(data, pd.DataFrame):
+            write_df_to_csv(df=data, file_path=base_path)
+
+        elif isinstance(data, dict):
+            write_dict_to_json(data=data, file_path=base_path)
+
+        else:
+            raise InvalidError(
+                f"Downloaded data for '{task.identifier}' has the invalid type "
+                f"'{type(data).__name__}'. No storing logic defined!"
+            )
 
     # ------------------------------------------------------------------
     # Path definition and checkpoint helpers (using DownloadTask)
@@ -357,23 +368,23 @@ class EnergyDownloader(ABC):
         os.replace(temp_path, self.checkpoint_path)
 
     def _build_task_path(self, task: DownloadTask) -> Path:
-        """Build the CSV file path to which the downloaded task data will be saved.
+        """Build the output file path to which the downloaded task data will be saved.
 
         Designed structure:
-        <output_path>/<temporal_resolution>/<optional ...>/<optional bz>/<date>.csv
+        <output_path>/<temporal_resolution>/<optional ...>/<optional bz>/<date>
 
         Args:
             task (DownloadTask): The metadata for a task to download data for.
 
         Returns:
-            Path: Path to the csv file.
+            Path: Path to the output file (with suffix-less stem).
         """
         parts: list[str | Path] = [self.output_path, task.temporal_resolution]
 
         if task.bidding_zone:
             parts.append(task.bidding_zone)
 
-        return Path(*parts, f"{task.date}.csv")
+        return Path(*parts, task.date)  # file path without a suffix!
 
     # --------------------------------------------
     # General helper methods
@@ -494,12 +505,26 @@ def write_df_to_csv(df: pd.DataFrame, file_path: Path, index: bool = False) -> N
         index (bool, optional): Whether to include the df index in the csv (True) or not
             (False). Defaults to False.
     """
-    if file_path.suffix != ".csv":
-        file_path = file_path.with_suffix(".csv")
-
+    file_path = file_path.with_suffix(".csv")
     file_path.parent.mkdir(parents=True, exist_ok=True)
+
     df.to_csv(file_path, index=index)
     logger.info(f"Successfully wrote dataframe to '{file_path}'")
+
+
+def write_dict_to_json(data: dict, file_path: Path) -> None:
+    """Write dictionary to json file.
+
+    Args:
+        data (dict): Dictionary to be stored in json file.
+        file_path (Path): Path to the json file.
+    """
+    file_path = file_path.with_suffix(".json")
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(file_path, "w") as f:
+        json.dump(data, f, indent=4)
+    logger.info(f"Successfully wrote dictionary to '{file_path}'")
 
 
 def load_df_from_file(

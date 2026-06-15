@@ -246,6 +246,18 @@ class OnsConfig(PathValidation, BaseModel):
     paths: Paths
 
 
+class ReiConfig(PathValidation, BaseModel):
+    """Configuration schema for the REI energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+    """
+
+    source: Literal["rei"] = "rei"
+    paths: Paths
+
+
 # ----------------------------------
 # Per-source schemas - WEATHER
 # ----------------------------------
@@ -313,6 +325,7 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "epias": EpiasConfig,
     "ieso": IesoConfig,
     "ons": OnsConfig,
+    "rei": ReiConfig,
     "barra2": Barra2Config,
     "era5": Era5Config,
     "icon_dream_eu": IconDreamEuConfig,

@@ -52,6 +52,7 @@ The RenewBench-Crawler repository is structured as follows:
 │   │   ├── epias/                # EPIAS (Turkey)
 │   │   ├── ieso/                 # IESO (Canada, Ontario)
 │   │   ├── ons/                  # ONS (Brazil)
+│   │   ├── rei/                  # REI (Japan)
 │   │   └── taipower/             # Taipower (Taiwan)
 │   └── weather/                # Weather data crawlers
 │       ├── barra/                # BARRA2 (Australia)
