@@ -39,7 +39,8 @@ def parse_arguments() -> Namespace:
         nargs="+",
         type=str,
         default=["1h", "5min"],  # these are the available resolutions
-        help=f"Temporal resolutions to download. Example: --temporal_resolutions 1h 5min. Default: {['1h', '5min']}",
+        help=f"Temporal resolutions to download. Example: --temporal_resolutions 1h 5min. "
+        f"Default: {['1h', '5min']}",
     )
     parser.add_argument(
         "--no-resume",
