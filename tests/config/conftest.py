@@ -25,6 +25,10 @@ def source_configs(tmp_path: Path) -> dict:
             "paths": {"dst_dir_raw": str(Path(tmp_path, "aeso"))},
             "access": {"api_key": "token"},
         },
+        "cen": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "cen"))},
+            "access": {"api_key": "token"},
+        },
         "eat": {"paths": {"dst_dir_raw": str(Path(tmp_path, "eat"))}},
         "eia": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "eia"))},

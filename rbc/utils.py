@@ -3,11 +3,12 @@
 Shared helper functions for rbc package
 """
 
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Type
+from typing import Any, Type
 
 from loguru import logger
 
@@ -34,6 +35,24 @@ def handle_exceptions(
     )
 
 
+def clean_record(record: dict[str, Any]) -> None:
+    """Masks sensitive keys in the log record's message body using regex.
+
+    Args:
+        record (dict): The log record with 'message' body containing sensitive values to mask.
+    """
+    sensitive_keys = ("token", "password", "secret", "key")
+    pattern = rf"(['\"]?(?:{'|'.join(sensitive_keys)})['\"]?\s*[:=]\s*)['\"]?([^'\"\s,\n\)}}]+)['\"]?"
+
+    # find and replace all parts of the log message that match the pattern
+    record["message"] = re.sub(
+        pattern=pattern,
+        repl=lambda m: f"{m.group(1)}'******'",
+        string=record["message"],
+        flags=re.IGNORECASE,  # ignore case
+    )
+
+
 def setup_logging(
     output_dir: Path,
     verbose: bool = False,
@@ -57,15 +76,17 @@ def setup_logging(
 
     # configure logger to have both a console sink and file logging sink
     logger.configure(
+        patcher=clean_record,  # automatically scrub sensitive data from message
         handlers=[
-            {"sink": sys.stderr, "level": log_level},
+            {"sink": sys.stderr, "level": log_level, "diagnose": False},
             {
                 "sink": log_path,
                 "level": log_level,
                 "retention": "30 days" if retention else None,  # delete files >30 days
                 "compression": "zip" if compression else None,  # compress logs to zip
+                "diagnose": False,
             },
-        ]
+        ],
     )
 
     # register the global exception hook

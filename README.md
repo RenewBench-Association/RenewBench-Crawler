@@ -45,6 +45,7 @@ The RenewBench-Crawler repository is structured as follows:
 │   │   ├── adme/                 # ADME (Uruguay)
 │   │   ├── aemo/                 # AEMO (Australia)
 │   │   ├── aeso/                 # AESO (Canada, Alberta)
+│   │   ├── cen/                  # CEN (Chile)
 │   │   ├── eat/                  # EA Te Mana Hiko (New Zealand)
 │   │   ├── eia/                  # EIA (US)
 │   │   ├── entsoe/               # ENTSO-e (EU)

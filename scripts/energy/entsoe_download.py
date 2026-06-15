@@ -6,6 +6,7 @@ Download data from ENTSO-E Transparency Platform for European bidding zones.
 
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
+from pprint import pformat
 
 from loguru import logger
 
@@ -71,8 +72,8 @@ def main() -> None:
 
     cfg = load_config(source=SOURCE, overrides=overrides)
     setup_logging(output_dir=cfg.paths.dst_dir_raw)
-    logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
-    logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
+    logger.info(f"Flags for download:\n{pformat(vars(args), sort_dicts=False)}")
+    logger.info(f"Config schema for download:\n{pformat(dict(cfg), sort_dicts=False)}")
 
     downloader = EntsoeDownloader(
         token=cfg.access.api_key,

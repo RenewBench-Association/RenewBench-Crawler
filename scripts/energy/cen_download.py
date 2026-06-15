@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""IESO DATA DOWNLOAD SCRIPT.
+"""CEN DATA DOWNLOAD SCRIPT.
 
-Download data from IESO website for Ontario, Canada.
+Download data from CEN website for Chile.
 """
 
 from argparse import ArgumentParser, Namespace
@@ -11,11 +11,11 @@ from pprint import pformat
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
-from rbc.energy.ieso import IesoDownloader
-from rbc.energy.ieso.downloader import MIN_YEAR
+from rbc.energy.cen import CenDownloader
+from rbc.energy.cen.downloader import MIN_YEAR
 from rbc.utils import setup_logging
 
-SOURCE = "ieso"
+SOURCE = "cen"
 
 
 def parse_arguments() -> Namespace:
@@ -24,7 +24,7 @@ def parse_arguments() -> Namespace:
     Returns:
         argparse.Namespace: Namespace parsed command line arguments.
     """
-    parser = ArgumentParser(prog="IESO data download")
+    parser = ArgumentParser(prog="CEN data download")
     parser.add_argument(
         "-y",
         "--years",
@@ -46,13 +46,14 @@ def parse_arguments() -> Namespace:
         "--cfg_options",
         action="append",
         help="Override YAML config values (supports nested keys). "
-        "Example: -o paths.dst_dir_raw=/your/path/",
+        "Example: -o paths.dst_dir_raw=/your/path/ -o "
+        "access.api_key=YOUR-SECRET-KEY",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Coordinating IESO data download."""
+    """Coordinating CEN data download."""
     args = parse_arguments()
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
 
@@ -61,7 +62,8 @@ def main() -> None:
     logger.info(f"Flags for download:\n{pformat(vars(args), sort_dicts=False)}")
     logger.info(f"Config schema for download:\n{pformat(dict(cfg), sort_dicts=False)}")
 
-    downloader = IesoDownloader(
+    downloader = CenDownloader(
+        token=cfg.access.api_key,
         output_path=cfg.paths.dst_dir_raw,
         years=args.years,
         resume=args.resume,

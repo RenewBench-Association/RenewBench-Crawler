@@ -15,7 +15,7 @@ RenewBench-Crawler package.
 | **USA**                  | EIA      | downloader &check; | hourly; per company      | API token         | [API browser](https://www.eia.gov/opendata/browser/), [API docs](https://www.eia.gov/opendata/documentation.php),<br> [API registration form](https://www.eia.gov/opendata/register.php)                                                                                                                               |
 | **Canada<br> (Alberta)** | AESO     | downloader &check; | hourly/5 min; per plant  | `box` API token   | [Website](https://www.aeso.ca/market/market-and-system-reporting/data-requests/historical-generation-data/), [Data hosting](https://aeso.app.box.com/s/qofgn9axnnw6uq3ip1goiq2ngb11txe5/folder/196731538687), <br> [API how-to](https://developer.box.com/guides/authentication/tokens/developer-tokens) (s. details!) |
 | **Canada<br> (Ontario)** | IESO     | downloader &check; | hourly; per plant        | public            | [Website](https://www.ieso.ca/power-data/data-directory)                                                                                                                                                                                                                                                               |
-| **Chile**                | CEN      | planned            |                          |                   |                                                                                                                                                                                                                                                                                                                        |
+| **Chile**                | CEN      | downloader &check; | hourly; per plant        | API token         | [Website](https://www.coordinador.cl/reportes-y-estadisticas/#Estadisticas), [API site](https://portal.api.coordinador.cl/documentacion?service=sipubv2), <br> [API usage docs](https://cartas.coordinador.cl/download_anexos/66c7447c35635715c87c4271/0)                                                              |
 | **Brazil**               | ONS      | downloader &check; | hourly; per plant        | public            | [Website](https://dados.ons.org.br/dataset/geracao-usina-2), Data hosting on AWS S3                                                                                                                                                                                                                                    |
 | **Uruguay**              | ADME     | downloader &check; | hourly; per plant        | public            | [Website](https://www.adme.com.uy/controlpanel.php), Data hosting [old](https://www.adme.com.uy/gpf_historico.php) / [new](https://www.adme.com.uy/panelControl/gpf.php)                                                                                                                                               |
 | **Australia**            | AEMO     | downloader &check; | hourly/5 min; per plant  | API token         | [Website](https://www.aemo.com.au/),<br> [Python package](https://github.com/opennem/openelectricity-python), [API docs](https://docs.openelectricity.org.au/)                                                                                                                                                         |
@@ -224,6 +224,101 @@ RenewBench-Crawler package.
 
   `Hour 1`, `Hour 2`, …, `Hour 24` – ending hour intervals (i.e. `00:00 - 01:00` to `23:00 to
   00:00`) and measurement type
+
+</details>
+
+
+<details>
+<summary><b>CEN (Chile)</b></summary>
+
+**Access**
+- Website: [CEN Website](https://www.coordinador.cl/reportes-y-estadisticas/#Estadisticas), generation data
+   [archive (= "old")](https://www.coordinador.cl/reportes-y-estadisticas/#Estadisticas) and
+   [current (= "new")](https://www.coordinador.cl/operacion/graficos/operacion-real/generacion-real/),
+   [API guide](https://www.coordinador.cl/wp-content/uploads/2019/01/Uso-Api-SIP-Sistema-Informacion-Publica-v1.1.pdf)
+   and [API site](https://portal.api.coordinador.cl/documentacion?service=sipubv2)
+- Requirements: "old" data needs no authentification, but all data available via API,
+  which needs a personal API token
+  1. Sign up to the [coordinador portal](https://portal.api.coordinador.cl/signup).
+     - Select the "Información Pública (SIP)" plan
+  2. After confirming signup, login and navigate to
+     [the "Planes" tab](https://portal.api.coordinador.cl/planes), go to the field
+     "Plan Consulta de Datos Información Pública (SIP)" and press the button "Suscribirse
+     a Unidata(es) de Negocio". Confirm by pressing the red "Suscribirse" button. You
+     should now be part of the buisness unit.
+  3. In the "Planes" tab, the field "Plan Consulta de Datos Información Pública (SIP)" now
+     has the new button "Suscribirse al plan" button. Click on it, fill out the
+     required information - insert a name (`Nombre`) for your application/token and a
+     description (`Descripción`) detailling what it's for - and press the button "Crear
+     Aplicación".
+  4. The new window will show a field "Clave de usuario" with a long alphanumeric
+     string. This is your API token!
+- Limitations: 60 queries per hour
+- License: ? (s. terms and conditions of API account registration)
+
+**Download & data structure**
+- Spatial resolution: per plant
+- Temporal resolution: hourly
+- Available data timespan: 2000 to now
+- Downloadable files: 1 `.xlsx` per multiple years / year (until 2025), API data
+- Files saved as **raw**: 1 `.csv` per day
+- Columns saved as **raw**:
+
+  `id_opreal` - internal operation record identifier
+
+  `llave_opreal` - unique operational real-time key/hash
+
+  `id_central` - power plant identifier
+
+  `central` - power plant name
+
+  `gen_real_mw` - real generation in MW
+
+  `fecha_hora` - timestamp start in local format (`YYYY-MM-DD HH:MM:SS`)
+
+  `hora` - hour of the day (1 to 24)
+
+  `potencia_maxima` - maximum capacity or gross maximum power of the plant in MW
+
+  `id_propietario` - asset owner/company identifier
+
+  `propietario` - name of the asset owner/company that owns the plant
+
+  `id_coordinado` - coordinated entity identifier (operator/legal entity registered with CEN)
+
+  `coordinado` - name of the coordinated entity/operator
+
+  `tipo_tecnologia` - technology type (e.g. `Térmico`, `Hidráulica`, etc)
+
+  `subtipo_tecnologia` - technology subtype (e.g. `Retiro`, `Inyección`, `Embalse`, etc)
+
+  `factor_ernc` - ERNC factor (indicates if the technology qualifies as Non-Conventional Renewable Energy)
+
+  `alcance` - scope classification (`global` or `partial`)
+
+  `valor_ernc` - ERNC compliance value or generation contribution qualified under renewable targets
+
+**STAC**
+
+- `measurement_type`: `'?_gross_output'`
+
+  No definitive proof for "as generated" (total gross production on-site, not net grid
+  injections) could be found, but:
+  - According to [the CNE](https://www.cne.cl/wp-content/uploads/2025/01/NTSyCS-Ene-2025.pdf):
+    - "Coordinated entities must supply the Coordinator with all Real-Time information deemed
+       necessary for the proper coordination of SI Real-Time operations."
+    - "the minimum set of variables to be monitored shall be as follows: a) Net active
+       power injected by each unit into the SI."
+  - According to the [API documentation](https://www.coordinador.cl/wp-content/uploads/2019/01/Uso-Api-SIP-Sistema-Informacion-Publica-v1.1.pdf):
+    "All endpoints shall deliver raw data—that is, data without aggregations or
+     transformations applied to the values ​​stored in the database."
+- `entity_type`: `'unit'` (?)
+
+  No definitive proof, but the data indicates this in two ways:
+  - values for `central` showing same name with different numbers, i.e. `'BESS Andes'`,
+    `'BESS Andes IV'`
+  - there are more unique `id_opreal` values than `central` names than unique `id_central`
+    values
 
 </details>
 

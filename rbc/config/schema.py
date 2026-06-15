@@ -154,6 +154,20 @@ class AesoConfig(PathValidation, AccessValidation, BaseModel):
     access: AccessAPI
 
 
+class CenConfig(PathValidation, AccessValidation, BaseModel):
+    """Configuration schema for the CEN energy data source.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (Paths): Paths pydantic model for paths.
+        access (AccessAPI): Access pydantic model for access settings.
+    """
+
+    source: Literal["cen"] = "cen"
+    paths: Paths
+    access: AccessAPI
+
+
 class EatConfig(PathValidation, BaseModel):
     """Configuration schema for the EAT energy data source.
 
@@ -304,6 +318,7 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "adme": AdmeConfig,
     "aemo": AemoConfig,
     "aeso": AesoConfig,
+    "cen": CenConfig,
     "eat": EatConfig,
     "eia": EiaConfig,
     "entsoe": EntsoeConfig,
