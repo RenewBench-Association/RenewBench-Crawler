@@ -59,7 +59,7 @@ def main() -> None:
     cfg = load_config(source=SOURCE, overrides=overrides)
     setup_logging(output_dir=cfg.paths.dst_dir_raw)
     logger.info(f"Flags for download:\n{pformat(vars(args), sort_dicts=False)}")
-    logger.info(f"Config schema download:\n{pformat(dict(cfg), sort_dicts=False)}")
+    logger.info(f"Config schema for download:\n{pformat(dict(cfg), sort_dicts=False)}")
 
     downloader = ReiDownloader(
         output_path=cfg.paths.dst_dir_raw,
