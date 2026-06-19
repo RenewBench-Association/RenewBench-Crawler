@@ -80,3 +80,75 @@ ACTIVE_ZONES_METADATA: dict[str, dict[str, int | str]] = {
 
 ACTIVE_ZONES = list(ACTIVE_ZONES_METADATA.keys())
 MIN_YEAR = min([int(v["start"]) for v in ACTIVE_ZONES_METADATA.values()])
+
+
+COLS_MAPPING = {
+    "timestamp": "timestamp",
+    "time_series.mkt_psrtype.power_system_resources.name": "Unit_Name",
+    "time_series.mkt_psrtype.power_system_resources.m_rid.value": "Unit_Code",
+    "time_series.mkt_psrtype.psr_type": "PSR_Type",
+    "time_series.mkt_psrtype.power_system_resources.nominal_p": "Capacity",
+    "time_series.period.point.quantity": "Generation_MW",
+    "time_series.period.point.secondary_quantity": "Consumption_MW",
+    "time_series.quantity_measure_unit_name": "Measurement_Unit",
+    "time_series.period.resolution": "Temporal_Resolution",
+}
+
+FUELTYPE_CODE_MAPPINGS = {
+    "B01": "biomass",
+    "B02": "coal",  # brown
+    "B03": "gas",  # coal-derived
+    "B04": "gas",
+    "B05": "coal",  # black
+    "B06": "oil",
+    "B07": "oil",  # shale
+    "B08": "peat",
+    "B09": "thermal",
+    "B10": "hydro",  # storage
+    "B11": "hydro",  # run-of-river
+    "B12": "hydro",  # reservoir
+    "B13": "marine",
+    "B14": "nuclear",
+    "B15": "renewable",
+    "B16": "solar",
+    "B17": "waste",
+    "B18": "wind",  # offshore
+    "B19": "wind",  # onshore
+    "B20": "other",
+    "B21": "link",  # AC
+    "B22": "link",  # DC
+    "B23": "substation",
+    "B24": "transformer",
+    "B25": "storage",
+}
+
+FUELTYPE_DEFINITION_MAPPINGS = {
+    "Biomass": "biomass",
+    "Fossil Brown coal/Lignite": "coal",
+    "Fossil Coal-derived gas": "gas",
+    "Fossil Gas": "gas",
+    "Fossil Hard coal": "coal",
+    "Fossil Oil": "oil",
+    "Fossil Oil shale": "oil",
+    "Fossil Peat": "peat",
+    "Geothermal": "thermal",
+    "Hydro Pumped Storage": "hydro",
+    "Hydro Run-of-river and poundage": "hydro",
+    "Hydro Water Reservoir": "hydro",
+    "Marine": "marine",
+    "Nuclear": "nuclear",
+    "Other renewable": "renewable",
+    "Solar": "solar",
+    "Waste": "waste",
+    "Wind Offshore": "wind",
+    "Wind Onshore": "wind",
+    "Other": "other",
+    "AC Link": "link",
+    "DC Link": "link",
+    "Substation": "substation",
+    "Transformer": "transformer",
+    "Energy storage": "storage",
+}
+
+# combine code and definition mappings into a single master dictionary
+FUELTYPE_MAPPINGS = {**FUELTYPE_CODE_MAPPINGS, **FUELTYPE_DEFINITION_MAPPINGS}
