@@ -22,7 +22,12 @@ from rbc.energy.rei.downloader import (
     TIMEZONE,
     URL_BASE,
 )
-from rbc.energy.utils import DataStructureError, DownloadTask, MissingDataError
+from rbc.energy.utils import (
+    DataStructureError,
+    DownloadTask,
+    InvalidError,
+    MissingDataError,
+)
 
 
 # ----------------------------------
@@ -505,6 +510,46 @@ def test_load_yearly_json_structural_failures(
 
         with pytest.raises(DataStructureError, match=expected_error_msg):
             downloader._load_yearly_json("dummy-url")
+
+
+@pytest.mark.parametrize(
+    "freq",
+    ["1h", "30min"],
+    ids=["saves_to_1h_folder", "saves_to_30min_folder"],
+)
+def test_save_task_data_dynamic_resolution_path(
+    downloader: ReiDownloader, task: DownloadTask, freq: str
+) -> None:
+    """Happy path for _save_task_data, validating correct dynamic path resolution.
+
+    Args:
+        downloader (ReiDownloader): Instance of ReiDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM).
+        freq (str): The frequency / intervals of the epochs.
+    """
+    mock_dict, _ = get_mock_yearly_json(task, num_epochs=3, freq=freq)
+
+    with patch("rbc.energy.rei.downloader.write_dict_to_json") as mock_write:
+        downloader._save_task_data(task, mock_dict)
+
+        passed_path = mock_write.call_args[1]["file_path"]
+
+        assert mock_write.call_count == 1
+        assert passed_path.parent.name == freq
+
+
+def test_save_task_data_invalid_type(
+    downloader: ReiDownloader, task: DownloadTask
+) -> None:
+    """Failure path for _save_task_data when incoming data is not a dictionary.
+
+    Args:
+        downloader (ReiDownloader): Instance of ReiDownloader class.
+        task(DownloadTask): The metadata of a downloading task, here: date (YYYY-MM).
+    """
+    invalid_data = pd.DataFrame([1, 2, 3])
+    with pytest.raises(InvalidError, match="must be a dictionary"):
+        downloader._save_task_data(task, invalid_data)
 
 
 # ----------------------------------
