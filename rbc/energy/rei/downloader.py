@@ -201,26 +201,6 @@ class ReiDownloader(EnergyDownloader):
             t_res = ReiDownloader._determine_temporal_resolution(ts_data, context=url)
             logger.info(f"REI data for {url} has a temporal resolution of {t_res}.")
 
-            # t_res_start = int((ts_data[1] - ts_data[0]).total_seconds() / 60)
-            # t_res_end = int((ts_data[-1] - ts_data[-2]).total_seconds() / 60)
-            # if t_res_start != t_res_end:
-            #     logger.warning(
-            #         f"REI data continuity issue detected for {url}: Expected the same "
-            #         f"temporal resolution throughout, but the JSON begins with "
-            #         f"{t_res_start} min intervals and ends with {t_res_end} min intervals."
-            #     )
-            # else:
-            #     logger.info(
-            #         f"REI data for {url} has a temporal resolution of {t_res_start} min."
-            #     )
-            #
-            # if t_res_start > 60:
-            #     raise DataStructureError(
-            #         f"REI data temporal resolution issue detected for {url}: Expected a "
-            #         f"finer resolution than 1h, but the JSON contains {t_res_start} min "
-            #         f"intervals."
-            #     )
-
             # slim down full yearly JSON to only get the expected keys
             relevant_data = {k: data[k] for k in EXPECTED_KEYS}
 

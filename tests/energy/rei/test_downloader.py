@@ -303,37 +303,6 @@ def test_get_task_data_missing_month_data(downloader: ReiDownloader) -> None:
             downloader._get_task_data(task_feb)
 
 
-# def test_get_task_data_warning_structural_gap(
-#     downloader: ReiDownloader, task: DownloadTask
-# ) -> None:
-#     """Happy path for "_get_task_data", checking warning is logged for non-contiguous ts.
-#
-#     Args:
-#         downloader (ReiDownloader): Instance of ReiDownloader class.
-#         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
-#     """
-#     mock_dict, mock_ts = get_mock_yearly_json(task, num_epochs=4)
-#
-#     # corrupt the middle timestamp so it drops out of the target month's mask
-#     ts_list = mock_ts.tolist()
-#     ts_list[2] = ts_list[2].replace(year=task.year + 5)
-#     corrupted_ts = pd.DatetimeIndex(ts_list)
-#
-#     captured_logs = []
-#     sink_id = logger.add(lambda msg: captured_logs.append(msg.record), level="WARNING")
-#
-#     try:
-#         with patch.object(downloader, "_load_yearly_json") as mock_load:
-#             mock_load.return_value = (mock_dict, corrupted_ts)
-#             downloader._get_task_data(task)
-#
-#         assert len(captured_logs) == 1
-#         assert "Data continuity issue detected" in captured_logs[0]["message"]
-#         assert "timestamps in range" in captured_logs[0]["message"]
-#     finally:
-#         logger.remove(sink_id)
-
-
 # ------------------------------------
 # Tests - Locking with _download_lock
 # ------------------------------------
