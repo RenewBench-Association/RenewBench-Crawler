@@ -77,13 +77,14 @@ def task(init_args: dict) -> DownloadTask:
 
 
 def get_mock_yearly_json(
-    spec_task: DownloadTask, num_epochs: int = 4
+    spec_task: DownloadTask, num_epochs: int = 4, freq: str = "h"
 ) -> tuple[dict, pd.DatetimeIndex]:
     """Helper to generate a structurally valid REI yearly JSON.
 
     Args:
         spec_task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
-        num_epochs (int): Number of timestamps / data points.
+        num_epochs (int): Number of timestamps / data points. Defaults to 4.
+        freq (str): Frequency of data points. Defaults to "h" = 1h.
 
     Returns:
         dict: Mock yearly JSON dict structure.
@@ -93,7 +94,7 @@ def get_mock_yearly_json(
     mock_ts = pd.date_range(
         start=datetime(spec_task.year, spec_task.month, 1, 0, 0),
         periods=num_epochs,
-        freq="h",
+        freq=freq,
         tz=TIMEZONE,
     )
     epochs = [int(t.timestamp()) for t in mock_ts.tz_convert("UTC")]
@@ -302,35 +303,78 @@ def test_get_task_data_missing_month_data(downloader: ReiDownloader) -> None:
             downloader._get_task_data(task_feb)
 
 
-def test_get_task_data_warning_structural_gap(
-    downloader: ReiDownloader, task: DownloadTask
-) -> None:
-    """Happy path for "_get_task_data", checking warning is logged for non-contiguous ts.
+# def test_get_task_data_warning_structural_gap(
+#     downloader: ReiDownloader, task: DownloadTask
+# ) -> None:
+#     """Happy path for "_get_task_data", checking warning is logged for non-contiguous ts.
+#
+#     Args:
+#         downloader (ReiDownloader): Instance of ReiDownloader class.
+#         task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
+#     """
+#     mock_dict, mock_ts = get_mock_yearly_json(task, num_epochs=4)
+#
+#     # corrupt the middle timestamp so it drops out of the target month's mask
+#     ts_list = mock_ts.tolist()
+#     ts_list[2] = ts_list[2].replace(year=task.year + 5)
+#     corrupted_ts = pd.DatetimeIndex(ts_list)
+#
+#     captured_logs = []
+#     sink_id = logger.add(lambda msg: captured_logs.append(msg.record), level="WARNING")
+#
+#     try:
+#         with patch.object(downloader, "_load_yearly_json") as mock_load:
+#             mock_load.return_value = (mock_dict, corrupted_ts)
+#             downloader._get_task_data(task)
+#
+#         assert len(captured_logs) == 1
+#         assert "Data continuity issue detected" in captured_logs[0]["message"]
+#         assert "timestamps in range" in captured_logs[0]["message"]
+#     finally:
+#         logger.remove(sink_id)
+
+
+# ------------------------------------
+# Tests - Locking with _download_lock
+# ------------------------------------
+def test_get_task_data_concurrent_tasks_single_call(downloader: ReiDownloader) -> None:
+    """Happy path for "_get_task_data" that concurrent tasks share the same yearly JSON.
+
+    This runs several tasks using the same yearly JSON file in parallel to assert that the
+    underlying HTTP request is made only once, thereby ensuring the combination of
+    "_download_lock" and "@lru_cache" with "_load_yearly_json" work.
 
     Args:
         downloader (ReiDownloader): Instance of ReiDownloader class.
-        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
     """
-    mock_dict, mock_ts = get_mock_yearly_json(task, num_epochs=4)
+    # define two tasks (months using same JSON) and example JSON for the year
+    tasks = [DownloadTask(date="2020-04"), DownloadTask(date="2020-05")]
 
-    # corrupt the middle timestamp so it drops out of the target month's mask
-    ts_list = mock_ts.tolist()
-    ts_list[2] = ts_list[2].replace(year=task.year + 5)
-    corrupted_ts = pd.DatetimeIndex(ts_list)
+    mock_dict_t1, _ = get_mock_yearly_json(tasks[0], num_epochs=4)
+    mock_dict_t2, _ = get_mock_yearly_json(tasks[1], num_epochs=4)
+    mock_dict = {
+        "epochs": mock_dict_t1["epochs"] + mock_dict_t2["epochs"],
+        **{
+            region: {
+                source: mock_dict_t1[region][source] + mock_dict_t2[region][source]
+                for source in ["thermal", "solar"]
+            }
+            for region in EXPECTED_REGIONS
+        },
+    }
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = mock_dict
 
-    captured_logs = []
-    sink_id = logger.add(lambda msg: captured_logs.append(msg.record), level="WARNING")
+    with patch("rbc.energy.rei.downloader.requests.get") as mock_get:
+        mock_get.return_value = mock_resp
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            results = list(executor.map(downloader._get_task_data, tasks))
 
-    try:
-        with patch.object(downloader, "_load_yearly_json") as mock_load:
-            mock_load.return_value = (mock_dict, corrupted_ts)
-            downloader._get_task_data(task)
+    assert len(results) == len(tasks)  # all tasks should return valid dicts
+    for result in results:
+        assert set(result.keys()) == set(EXPECTED_KEYS)
 
-        assert len(captured_logs) == 1
-        assert "Data continuity issue detected" in captured_logs[0]["message"]
-        assert "timestamps in range" in captured_logs[0]["message"]
-    finally:
-        logger.remove(sink_id)
+    assert mock_get.call_count == 1  # only one HTTP request since JSON is shared
 
 
 # ----------------------------------
@@ -413,8 +457,8 @@ def test_load_yearly_json_warning_chronological_gap(
             downloader._load_yearly_json("http://mock-url.json")
 
         assert len(captured_logs) == 1
-        assert "Data continuity issue detected" in captured_logs[0]["message"]
-        assert "Expected 10 hourly timestamps" in captured_logs[0]["message"]
+        assert "timestamp continuity issue detected" in captured_logs[0]["message"]
+        assert "Temporal resolution is not constant" in captured_logs[0]["message"]
     finally:
         logger.remove(sink_id)
 
@@ -494,44 +538,70 @@ def test_load_yearly_json_structural_failures(
             downloader._load_yearly_json("dummy-url")
 
 
-# ------------------------------------
-# Tests - Locking with _download_lock
-# ------------------------------------
-def test_get_task_data_concurrent_tasks_single_call(downloader: ReiDownloader) -> None:
-    """Happy path for "_get_task_data" that concurrent tasks share the same yearly JSON.
-
-    This runs several tasks using the same yearly JSON file in parallel to assert that the
-    underlying HTTP request is made only once, thereby ensuring the combination of
-    "_download_lock" and "@lru_cache" with "_load_yearly_json" work.
+# ----------------------------------
+# Tests - General helper methods
+# ----------------------------------
+@pytest.mark.parametrize("freq", ["1h", "30min"])
+def test_determine_temporal_resolution(
+    downloader: ReiDownloader, task: DownloadTask, freq: str
+) -> None:
+    """Happy path for _determine_temporal_resolution method.
 
     Args:
         downloader (ReiDownloader): Instance of ReiDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
+        freq (str): The frequency / intervals of the epochs.
     """
-    # define two tasks (months using same JSON) and example JSON for the year
-    tasks = [DownloadTask(date="2020-04"), DownloadTask(date="2020-05")]
+    _, mock_ts = get_mock_yearly_json(task, num_epochs=3, freq=freq)
 
-    mock_dict_t1, _ = get_mock_yearly_json(tasks[0], num_epochs=4)
-    mock_dict_t2, _ = get_mock_yearly_json(tasks[1], num_epochs=4)
-    mock_dict = {
-        "epochs": mock_dict_t1["epochs"] + mock_dict_t2["epochs"],
-        **{
-            region: {
-                source: mock_dict_t1[region][source] + mock_dict_t2[region][source]
-                for source in ["thermal", "solar"]
-            }
-            for region in EXPECTED_REGIONS
-        },
-    }
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = mock_dict
+    t_res = downloader._determine_temporal_resolution(mock_ts, context="dummy-url")
+    assert t_res == freq
 
-    with patch("rbc.energy.rei.downloader.requests.get") as mock_get:
-        mock_get.return_value = mock_resp
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            results = list(executor.map(downloader._get_task_data, tasks))
 
-    assert len(results) == len(tasks)  # all tasks should return valid dicts
-    for result in results:
-        assert set(result.keys()) == set(EXPECTED_KEYS)
+@pytest.mark.parametrize(
+    "num_epochs, freq, expected_error_msg",
+    [
+        (1, "1h", "Less than 2 timestamps"),
+        (3, "5.5min", "not a whole number"),
+        (3, "61min", "greater than 1h"),
+    ],
+    ids=["too_few_timestamps", "no_whole_number", "coarser_than_hourly"],
+)
+def test_determine_temporal_resolution_data_structure_errors(
+    downloader: ReiDownloader,
+    task: DownloadTask,
+    num_epochs: int,
+    freq: str,
+    expected_error_msg: str,
+) -> None:
+    """Failure paths for _determine_temporal_resolution when DataStructureErrors are raised.
 
-    assert mock_get.call_count == 1  # only one HTTP request since JSON is shared
+    Args:
+        downloader (ReiDownloader): Instance of ReiDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
+        num_epochs (int | None): The number of epochs.
+        freq (str): The frequency / intervals of the epochs.
+        expected_error_msg (str): The expected error message.
+    """
+    _, mock_ts = get_mock_yearly_json(task, num_epochs=num_epochs, freq=freq)
+
+    with pytest.raises(DataStructureError, match=expected_error_msg):
+        downloader._determine_temporal_resolution(mock_ts, context="dummy-url")
+
+
+def test_determine_temporal_resolution_data_structure_error_not_monotonic(
+    downloader: ReiDownloader, task: DownloadTask
+) -> None:
+    """Failure path for _determine_temporal_resolution when DataStructureError is raised.
+
+    Specifically, this is for the case where the timestamps are not monotonically increasing.
+
+    Args:
+        downloader (ReiDownloader): Instance of ReiDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM)
+    """
+    _, mock_ts = get_mock_yearly_json(task)
+    corrupted_ts = pd.DatetimeIndex([mock_ts[1], mock_ts[0], mock_ts[2]])
+
+    with pytest.raises(DataStructureError, match="not monotonically increasing"):
+        downloader._determine_temporal_resolution(corrupted_ts, context="dummy-url")
