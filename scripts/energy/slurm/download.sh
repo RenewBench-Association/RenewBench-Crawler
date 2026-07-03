@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=template	# generic name, can be replaced via flag in CL!
-#SBATCH --partition=cpu		# CPU partition on the HPC system. NOTE: Replace with the given partition name!
+#SBATCH --partition=cpu 	# CPU partition on the HPC system. NOTE: Replace with the given partition name!
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -29,8 +29,10 @@ timeout_handler() {
 trap 'timeout_handler' USR1
 
 # ---- 1. Environment setup ----
-cd $SLURM_SUBMIT_DIR	# set dir where job was submitted (should be repo root!)
-source setting_up.sh
+module purge
+cd $SLURM_SUBMIT_DIR		# set dir where job was submitted (should be "rbc" repo root!)
+source venv/bin/activate	# virtual environment for run. NOTE: Replace "venv" with correct name
+echo "Virtual environment activated..."
 
 # safe fallback for the timeout_handler when running script as standalone
 TIME_LIMIT=${TIME_LIMIT:-"02:00:00"}
