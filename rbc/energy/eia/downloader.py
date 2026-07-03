@@ -13,13 +13,13 @@ from loguru import logger
 from requests import exceptions
 
 from rbc.energy.utils import (
-    MAX_RATE_LIMIT_RETRIES,
+    MAX_RETRIES,
+    RATE_LIMIT_RETRY_DELAY,
     WORKERS,
     DataStructureError,
     DownloadTask,
     EnergyDownloader,
     MissingDataError,
-    RateLimitError,
 )
 
 URL_ROOT = "https://api.eia.gov/v2/"
@@ -104,8 +104,8 @@ class EiaDownloader(EnergyDownloader):
         Raises:
             ConnectionError/Timeout: If API issue occurred with connection or timeout or if
                 not all available data was downloaded.
-            HTTPError: If request response is not 200.
-            RateLimitError: If API rate limit has been exceeded.
+            HTTPError: If request response is not 200 or if the API rate limit has been
+                reached and the full task requires retrying.
             DataStructureError: If the EIA structure changed causing response parsing fail or
                 relevant columns to be missed (this will cause the entire run to be killed).
             MissingDataError: If the loaded dataframe is empty.
@@ -125,7 +125,7 @@ class EiaDownloader(EnergyDownloader):
             "length": 5000,  # This is the maximum possible to get at one time!
         }
 
-        all_data = []
+        all_data: list = []
         total_available = None
         limit = 5000
         attempt = 0
@@ -138,20 +138,25 @@ class EiaDownloader(EnergyDownloader):
 
             if response.status_code != 200:
                 if response.status_code == 429:
-                    if attempt < MAX_RATE_LIMIT_RETRIES:  # retry 6 times (= 1 min)
-                        logger.warning("Rate limit reached. Sleeping 10 seconds...")
-                        time.sleep(10)
+                    if attempt < MAX_RETRIES:  # retry 3 times
+                        logger.warning(
+                            f"EIA API rate limit reached (429) after retrieving "
+                            f"{len(all_data)} data elements. "
+                            f"Sleeping {RATE_LIMIT_RETRY_DELAY} seconds..."
+                        )
+                        time.sleep(RATE_LIMIT_RETRY_DELAY)
                         attempt += 1
                         continue
                     else:
-                        raise RateLimitError(
-                            "API rate limit has been exceeded and waiting 1 min "
-                            "doesn't help. You should wait for a brief cool-down "
-                            "period (EIA doesn't specify a duration), then retry!"
+                        raise exceptions.HTTPError(
+                            f"EIA API rate limit (429) persists for {task.date}: "
+                            f"{response.text[:200]}. Propagating for further handling...",
+                            response=response,
                         )
 
                 raise exceptions.HTTPError(
-                    f"API request failed: {response.status_code} - {response.text}"
+                    f"API request failed: {response.status_code} - {response.text}",
+                    response=response,
                 )
 
             try:

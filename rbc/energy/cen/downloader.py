@@ -13,14 +13,13 @@ from loguru import logger
 from requests import exceptions
 
 from rbc.energy.utils import (
-    MAX_RATE_LIMIT_RETRIES,
     MAX_RETRIES,
+    RATE_LIMIT_RETRY_DELAY,
     WORKERS,
     DataStructureError,
     DownloadTask,
     EnergyDownloader,
     MissingDataError,
-    RateLimitError,
 )
 
 URL_ROOT = "https://sipub.api.coordinador.cl/"
@@ -126,9 +125,9 @@ class CenDownloader(EnergyDownloader):
         Raises:
             ConnectionError/Timeout: If API issue occurred with connection or timeout or if
                 not all available data was downloaded.
-            HTTPError: If request response is not 200 or if the response is 500 (internal
-                error) despite reducing the page size number several times.
-            RateLimitError: If API rate limit has been exceeded.
+            HTTPError: If request response is not 200, if the response is 500 (internal
+                error) despite reducing the page size number several times or if the API
+                rate limit has been reached and the full task requires retrying.
             MissingDataError: If the requested data is an empty list or the loaded df empty.
             DataStructureError: If the CEN structure changed causing response parsing fail or
                 relevant columns to be missed (this will cause the entire run to be killed).
@@ -170,16 +169,19 @@ class CenDownloader(EnergyDownloader):
 
             if status_code != 200:
                 if status_code == 429:
-                    if attempt_ratelimit < MAX_RATE_LIMIT_RETRIES:  # retry 6 times
-                        logger.warning("Rate limit reached. Sleeping 15 seconds...")
-                        time.sleep(15)
+                    if attempt_ratelimit < MAX_RETRIES:  # retry 3 times
+                        logger.warning(
+                            f"CEN API rate limit reached (429) on page {params['page']}. "
+                            f"Sleeping {RATE_LIMIT_RETRY_DELAY} seconds..."
+                        )
+                        time.sleep(RATE_LIMIT_RETRY_DELAY)
                         attempt_ratelimit += 1
                         continue
                     else:
-                        raise RateLimitError(
-                            "API rate limit has been exceeded and waiting 1 min "
-                            "doesn't help. You should wait for a brief cool-down "
-                            "period (CEN doesn't specify a duration), then retry!"
+                        raise exceptions.HTTPError(
+                            f"CEN API rate limit (429) persists for {task.date}: "
+                            f"{response.text[:200]}. Propagating for further handling...",
+                            response=response,
                         )
 
                 if status_code == 500:
@@ -200,7 +202,8 @@ class CenDownloader(EnergyDownloader):
                         )
 
                 raise exceptions.HTTPError(
-                    f"API request failed: {status_code} - {response.text}"
+                    f"API request failed: {status_code} - {response.text}",
+                    response=response,
                 )
 
             try:

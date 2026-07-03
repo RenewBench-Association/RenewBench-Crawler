@@ -4,22 +4,26 @@ Remote API access of EPIAS Platform using the eptr2 package.
 """
 
 import math
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
+import requests
 from eptr2 import EPTR2
 from loguru import logger
 
 from rbc.energy.utils import (
-    WORKERS,
     DataStructureError,
     DownloadTask,
     EnergyDownloader,
     InvalidError,
     MissingDataError,
 )
+
+WORKERS = 2  # needs to be reduced to prevent repeated throttling errors
 
 MIN_YEAR = 2013
 EXPECTED_COLS = [
@@ -113,7 +117,9 @@ class EpiasDownloader(EnergyDownloader):
         start = task.date
         end = (task.dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
-        df_pp = self.eptr.call("pp-list-for-date-range", start_date=start, end_date=end)
+        df_pp = self._epias_call(
+            "pp-list-for-date-range", start_date=start, end_date=end
+        )
         if df_pp.empty:
             raise MissingDataError("No power plant data available! Skipping...")
 
@@ -122,7 +128,7 @@ class EpiasDownloader(EnergyDownloader):
         batches = np.array_split(df_pp["id"].values, num_batches)
 
         gen_data = [
-            self.eptr.call("rt-gen-bulk", date=start, pp_ids=b.tolist())
+            self._epias_call("rt-gen-bulk", date=start, pp_ids=b.tolist())
             for b in batches
         ]
 
@@ -138,3 +144,59 @@ class EpiasDownloader(EnergyDownloader):
             )
 
         return df_gen
+
+    def _epias_call(self, *args, **kwargs) -> Any:
+        """Wrap all eptr calls in order to transform any potential errors into HTTPError.
+
+        Eptr (EPIAS API) errors are returned in strange formats that the parent class can't
+        identify correctly. The two common examples include:
+        - Request failed with status code: 429
+            [d0d17...],
+            [429],
+            [Because of reaching Throttling limits(80 req/min) for specified gateway,
+             message is BLOCKED!]
+        - Request failed with status code: 401
+            {
+              "status" : "401 UNAUTHORIZED",
+              "correlationId" : "7b46b...",
+              ...
+              "errors" : [ {
+                "errorCode" : "AUTH009",
+                "errorMessage" : "Güvenlik bilgisi(TGT) hatalı!"
+              } ],
+              "body" : { }
+            }
+
+        Args:
+            args: Required arguments for eptr call.
+            kwargs: Additional arguments for eptr call.
+
+        Returns:
+            Any: eptr.call output
+
+        Raises:
+            HTTPError: All identifyable errors that occur during eptr calls
+                or reraises the original error if the status code can't be extracted.
+        """
+        try:
+            return self.eptr.call(*args, **kwargs)
+
+        except Exception as e:
+            # find the code via matching ('status code: XXX' OR '[XXX]' OR '"status" : "XXX"')
+            msg = str(e)
+            match = re.search(
+                r'status code[:\s]+(\d{3})|\[(\d{3})\]|"status"\s*:\s*"(\d{3})', msg
+            )
+            code = int(next(g for g in match.groups() if g)) if match else None
+
+            if code is not None:
+                resp = requests.Response()
+                resp.status_code = code
+                resp.reason = msg[:200]
+
+                raise requests.exceptions.HTTPError(
+                    f"EPIAS API error {code}: {msg[:200]}", response=resp
+                ) from e
+
+            logger.error(f"Unrecognised EPIAS error: {msg[:300]}")
+            raise  # propagate unknown error to parent class

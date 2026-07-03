@@ -26,6 +26,7 @@ ASYNC_WORKERS = 10
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 MAX_RATE_LIMIT_RETRIES = 6
+RATE_LIMIT_RETRY_DELAY = 15
 
 RETRY_ERRORS = (
     # requests / urllib3 (used by requests.get/head)
@@ -257,7 +258,10 @@ class EnergyDownloader(ABC):
         Returns:
             int: Status of the download (1 if successful, 0 if unsuccessful).
         """
-        for attempt in range(1, MAX_RETRIES + 1):
+        retry = 1
+        retry_ratelimit = 1
+
+        while True:
             try:
                 data = self._get_task_data(task=task)
                 self._save_task_data(task, data)
@@ -278,30 +282,58 @@ class EnergyDownloader(ABC):
             except self.RETRY_ERRORS as e:  # handle access failures
                 code = self._get_status_code(e)
 
-                if code:
-                    # 1. permanent missing data
-                    if code == 404:
-                        logger.warning(
-                            f"Data for '{task.identifier}' not found (404). Skipping."
-                        )
-                        return 1
-                    # 2. permanent client errors (400-499, except rate limits 429)
-                    if 400 <= code < 500 and code != 429:
-                        logger.error(
-                            f"Permanent error {code} for '{task.identifier}'. Skipping."
-                        )
-                        return 1
-
-                # 3. everything else (500s, Timeouts, 429s) -> Retry
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY)
-                else:
-                    logger.critical(
-                        f"Failed '{task.identifier}' after {MAX_RETRIES} attempts: {e}"
+                # 1. permanent missing data
+                if code == 404:
+                    logger.error(
+                        f"Error 404 for '{task.identifier}': Missing data. Skipping."
                     )
-                    return 0
+                    return 1
 
-        return 1  # pragma: no cover
+                # 2. auth-under-load / throttling errors -> patient retry, then leave as 0
+                if code in (401, 429):
+                    if retry_ratelimit <= MAX_RATE_LIMIT_RETRIES:
+                        wait = int(RATE_LIMIT_RETRY_DELAY * retry_ratelimit**1.5)
+                        logger.warning(
+                            f"Limit {code} for '{task.identifier}' (rate-limit attempt "
+                            f"{retry_ratelimit}/{MAX_RATE_LIMIT_RETRIES}). "
+                            f"Sleeping {wait}s."
+                        )
+                        retry_ratelimit += 1
+                        time.sleep(wait)
+                        continue
+
+                    logger.critical(
+                        f"Failed '{task.identifier}' after {MAX_RATE_LIMIT_RETRIES} "
+                        f"retry attempts: Rate/auth limit {code} persists. Retry in "
+                        f"next rerun...\n{e}"
+                    )
+                    return 0  # rerun next time!
+
+                # 3. permanent client errors (except 401 & rate limits 429)
+                if code is not None and 400 <= code < 500:
+                    logger.error(
+                        f"Client error {code} for '{task.identifier}'. Skipping."
+                    )
+                    return 1
+
+                # 4. everything else (500s/timeout/connection) -> classic retry, then leave 0
+                if retry <= MAX_RETRIES:
+                    logger.warning(
+                        f"Retry with {code} for '{task.identifier}' (attempt "
+                        f"{retry}/{MAX_RETRIES}). "
+                        f"Sleeping {RETRY_DELAY}s."
+                    )
+                    retry += 1
+                    time.sleep(RETRY_DELAY)
+                    continue
+
+                logger.critical(
+                    f"Failed '{task.identifier}' after {MAX_RETRIES} attempts: "
+                    f"500/Timeout error {code} persists. Retry in next rerun...\n{e}"
+                )
+                return 0  # rerun next time!
+
+        return 0  # pragma: no cover
 
     @abstractmethod
     def _get_task_data(self, task: DownloadTask) -> pd.DataFrame | dict:
