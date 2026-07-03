@@ -13,9 +13,11 @@ from loguru import logger
 from rapidfuzz import fuzz, process
 
 from rbc.coordinates.locator_eic import EICDirectoryLocator, lookup_eic_in_wikidata
+from rbc.coordinates.locator_gem import GEMLocator
 from rbc.coordinates.locator_osm_api import query_osm_country_plants
 from rbc.coordinates.locator_osmpp import OSMPPLocator
 from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.map import build_map
 from rbc.coordinates.mappings import (
     COUNTRY_ISO2_MAP,
     GENERIC_UNIT_TOKENS,
@@ -25,6 +27,7 @@ from rbc.coordinates.mappings import (
 from rbc.energy.entsoe.mappings import (
     ACTIVE_ZONES_METADATA,
     COLS_MAPPING,
+    FUELTYPE_CODE_MAPPINGS,
     FUELTYPE_MAPPINGS,
 )
 from rbc.energy.utils import MissingDataError, load_df_from_file
@@ -35,7 +38,14 @@ from rbc.energy.utils import MissingDataError, load_df_from_file
 class CoordinateLocator:
     """Coordinate locator orchestrator."""
 
-    def __init__(self, input_dir: Path, output_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        input_dir: Path,
+        output_dir: Path | None = None,
+        osm_update: bool = False,
+        osm_live: bool = False,
+        gem_dir: Path | None = None,
+    ) -> None:
         """Initialize CoordinateLocator class.
 
         NOTE: Abbreviations in the class are as follows
@@ -46,9 +56,21 @@ class CoordinateLocator:
             input_dir (Path): Path to the raw energy generation file (assuming CSV here).
             output_dir (Path, optional): Path to the directory where any output files may be
                 saved. Defaults to None.
+            osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
+                ``overpass_<CC>_plants.parquet`` file even if it already exists.
+                Corresponds to the ``--update`` / ``-u`` CLI flag.
+            osm_live (bool): Query Overpass live on every run, ignoring and not writing
+                any local file.  Corresponds to the ``--live`` CLI flag.
+            gem_dir (Path, optional): Directory containing manually downloaded Global
+                Energy Monitor (GEM) tracker xlsx files
+                (https://globalenergymonitor.org/download-data). When given, GEM is
+                used as an additional coordinate source alongside powerplantmatching
+                (PPM) in the ENTSOE enrichment pipeline. Defaults to None (GEM disabled).
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
+        self.osm_update = osm_update
+        self.osm_live = osm_live
         if not self.input_dir.is_dir():
             raise ValueError(f"Input directory '{input_dir}' is not a directory!")
 
@@ -63,8 +85,12 @@ class CoordinateLocator:
         self.df_pp = pd.DataFrame()
         self.df_openinfra = pd.DataFrame()
         self.ppmloc = PPMLocator()  # Europe only
+        self.eic_locator = EICDirectoryLocator(cache_dir=self.output_dir)  # europe only
         self.osmpploc = OSMPPLocator(output_dir=self.output_dir)  # Global
-        self.eic_locator = EICDirectoryLocator(cache_dir=self.output_dir)
+        self.gemloc = (
+            GEMLocator(gem_dir=gem_dir, cache_dir=self.output_dir) if gem_dir else None
+        )  # optional, requires manual download
+
         # Maps ENTSO-E unit name -> ordered alternative names for matching.
         # Order matters: original ENTSO-E name is always tried first, then EIC long
         # name, then EIC display name, then a WikiData label as final fallback.
@@ -116,9 +142,18 @@ class CoordinateLocator:
     def find_coordinates_using_pp_databases(self) -> pd.DataFrame | None:
         """Find coordinates using power plants databases (ppm / osmpp).
 
+        For ENTSOE data this delegates to the richer
+        :meth:`find_and_enrich_entsoe_coordinates` pipeline which performs
+        source-traceable enrichment through W_eicCodes, powerplantmatching and
+        OpenInfraMap.  All other operators follow the legacy matching path.
+
         Returns:
             pd.DataFrame: Dataframe of power plants and any identified coordinates.
         """
+        # ENTSOE: use the new enriched pipeline
+        if self.code_col == OPERATOR_METADATA["entsoe"]["code_col"]:
+            return self.find_and_enrich_entsoe_coordinates()
+
         # define relevant columns for matching df
         # rel_cols = [self.name_col, self.code_col] if self.code_col else [self.name_col]
         rel_cols = [self.name_col]
@@ -177,7 +212,7 @@ class CoordinateLocator:
                 if self.code_col:
                     df_new_additions = self._match_with_eic_wikidata(df_new_additions)
                 # --- 2. Name (& fuel type) matching
-                df_new_additions = self._match_with_name(df_new_additions)
+                # df_new_additions = self._match_with_name(df_new_additions)
                 # --- 3. OpenInfra / Overpass fallback for still unmatched rows
                 df_new_additions = self._match_with_openinfra(df_new_additions)
 
@@ -188,6 +223,428 @@ class CoordinateLocator:
                 self.log_match_stats()
 
         return self.df_matches
+
+    def find_and_enrich_entsoe_coordinates(self) -> pd.DataFrame:
+        """Run the full ENTSOE source-traceable enrichment pipeline.
+
+        All output columns are prefixed by their source so that the provenance of
+        every value is immediately clear:
+
+        - ``pp.*``            — from the raw energy production CSV files
+        - ``wcode.*``         — from the ENTSO-E W_eicCodes directory
+        - ``wcode.parent.*``  — parent production unit resolved from W_eicCodes
+        - ``ppm.*``           — from the PyPSA powerplantmatching database
+        - ``gem.*``           — from the Global Energy Monitor trackers (optional,
+                                requires ``gem_dir`` to be set)
+        - ``osm.*``           — from the OpenInfraMap / Overpass fallback
+        - ``lat``, ``lon``    — best available coordinates (ppm, then gem, then osm)
+        - ``match_source``    — one of: ppm_direct · ppm_parent_direct ·
+                                ppm_parent_entsoe_id · ppm_fuzzy_name · gem_direct ·
+                                gem_parent_direct · gem_parent_entsoe_id ·
+                                gem_fuzzy_name · osm · unmatched
+
+        Pipeline steps:
+            1.  Collect & deduplicate unique generation units across all CSVs.
+            2.  Add ``pp.fuel_type`` from :data:`FUELTYPE_CODE_MAPPINGS`.
+            3.  Enrich with W_eicCodes.csv → ``wcode.*`` columns.
+            4.  GEM/PPM direct match by unit EIC code or, if available, by the
+                EicParent code already stored in ``wcode.EicParent`` (GEM tried
+                first — unit ID then parent ID — PPM used as fallback).
+            5.  Fuzzy parent-unit search within W_eicCodes → ``wcode.parent.*``.
+            6.  GEM/PPM match via resolved parent EIC code.
+            7.  PPM/GEM fuzzy name match guarded by a fuel-type check.
+            8.  Fuel-type validation for all PPM/GEM-matched units.
+            9.  OpenInfraMap / Overpass fallback for still-unmatched units.
+            10. Finalise ``lat`` / ``lon`` and write ``enriched_units_<zone>.csv``.
+
+        Returns:
+            pd.DataFrame: Enriched dataframe, one row per unique generation unit.
+        """
+        zone_name = self.input_dir.name
+
+        # ------------------------------------------------------------------ #
+        # 1. Load and aggregate unique units across all CSVs                 #
+        # ------------------------------------------------------------------ #
+        all_dfs: list[pd.DataFrame] = []
+        for input_path in sorted(self.input_dir.glob("*.csv")):
+            all_dfs.append(load_df_from_file(input_path))
+
+        if not all_dfs:
+            logger.warning(f"No CSV files found in '{self.input_dir}'.")
+            return pd.DataFrame()
+
+        df_all = pd.concat(all_dfs, ignore_index=True)
+
+        rel_cols = [
+            c
+            for c in [self.name_col, self.code_col, self.fuel_col]
+            if c and c in df_all.columns
+        ]
+        df = (
+            df_all[rel_cols]
+            .drop_duplicates(subset=[self.code_col])
+            .reset_index(drop=True)
+        )
+
+        logger.info(
+            f"[{zone_name}] {len(df)} unique generation units found across {len(all_dfs)} CSV(s)."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 2. Rename production columns with pp. prefix + add pp.fuel_type    #
+        # ------------------------------------------------------------------ #
+        rename_map = {c: f"pp.{c}" for c in rel_cols}
+        df = df.rename(columns=rename_map)
+
+        pp_code_col = f"pp.{self.code_col}"
+        pp_name_col = f"pp.{self.name_col}"
+        pp_fuel_col = f"pp.{self.fuel_col}" if self.fuel_col else None
+
+        df["pp.fuel_type"] = None
+        if pp_fuel_col and pp_fuel_col in df.columns:
+            df["pp.fuel_type"] = df[pp_fuel_col].map(
+                lambda x: (
+                    FUELTYPE_CODE_MAPPINGS.get(str(x).strip()) if pd.notna(x) else None
+                )
+            )
+
+        # ------------------------------------------------------------------ #
+        # 3. Enrich with W_eicCodes (wcode.*)                                #
+        # ------------------------------------------------------------------ #
+        wcode_fields = list(self.eic_locator._WCODE_FIELDS)
+        for col in wcode_fields:
+            df[f"wcode.{col}"] = None
+
+        for idx, row in df.iterrows():
+            eic = row.get(pp_code_col)
+            if pd.isna(eic) or not str(eic).strip():
+                continue
+            full_row = self.eic_locator.lookup_full_row(str(eic).strip())
+            for col in wcode_fields:
+                df.at[idx, f"wcode.{col}"] = full_row.get(col)
+
+        wcode_populated = df["wcode.EicLongName"].notna().sum()
+        logger.info(
+            f"[{zone_name}] W_eicCodes enrichment: {wcode_populated}/{len(df)} units found in EIC directory."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 4. GEM/PPM direct match by unit EIC code or wcode.EicParent        #
+        # ------------------------------------------------------------------ #
+        ppm_cols = list(self.ppmloc._PPM_COLS)
+        for col in ppm_cols:
+            df[f"ppm.{col}"] = None
+        df["ppm.match_source"] = None
+
+        gem_cols = list(GEMLocator._GEM_COLS)
+        for col in gem_cols:
+            df[f"gem.{col}"] = None
+        df["gem.match_source"] = None
+
+        def _still_unmatched(frame: pd.DataFrame) -> pd.Series:
+            return frame["ppm.lat"].isna() & frame["gem.lat"].isna()
+
+        for idx, row in df[_still_unmatched(df)].iterrows():
+            eic = row.get(pp_code_col)
+            parent_eic = row.get("wcode.EicParent")
+            hit, source = None, None
+
+            # 1. GEM: try the unit (generation) EIC directly
+            if self.gemloc and pd.notna(eic) and str(eic).strip():
+                hit = self.gemloc.match_by_entsoe_id(str(eic).strip())
+                source = "gem_direct"
+
+            # 2. GEM: try the parent (production) EIC from wcode.EicParent
+            if (
+                hit is None
+                and self.gemloc
+                and pd.notna(parent_eic)
+                and str(parent_eic).strip()
+            ):
+                hit = self.gemloc.match_by_entsoe_id(str(parent_eic).strip())
+                source = "gem_parent_direct"
+
+            # 3. PPM fallback: unit EIC directly
+            if hit is None and pd.notna(eic) and str(eic).strip():
+                hit = self.ppmloc.match_by_entsoe_id(str(eic).strip())
+                source = "ppm_direct"
+
+            # 4. PPM fallback: parent EIC from wcode.EicParent
+            if hit is None and pd.notna(parent_eic) and str(parent_eic).strip():
+                hit = self.ppmloc.match_by_entsoe_id(str(parent_eic).strip())
+                source = "ppm_parent_direct"
+
+            if hit is not None:
+                if source is not None and source.startswith("gem"):
+                    for col in gem_cols:
+                        df.at[idx, f"gem.{col}"] = hit.get(col)
+                    df.at[idx, "gem.match_source"] = source
+                else:
+                    for col in ppm_cols:
+                        df.at[idx, f"ppm.{col}"] = hit.get(col)
+                    df.at[idx, "ppm.match_source"] = source
+
+        ppm_direct_count = df["ppm.lat"].notna().sum()
+        gem_direct_count = df["gem.lat"].notna().sum()
+        logger.info(
+            f"[{zone_name}] Direct/EicParent match: {gem_direct_count} via GEM, "
+            f"{ppm_direct_count} via PPM (out of {len(df)})."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 5. Fuzzy parent-unit matching within W_eicCodes (wcode.parent.*)   #
+        # ------------------------------------------------------------------ #
+        parent_meta = [
+            "EicCode",
+            "EicDisplayName",
+            "EicLongName",
+            "EicResponsibleParty",
+            "match_score",
+            "match_confidence",
+            "match_method",
+        ]
+        for col in parent_meta:
+            df[f"wcode.parent.{col}"] = None
+
+        for idx, row in df[_still_unmatched(df)].iterrows():
+            parent = self.eic_locator.find_parent_production_unit(
+                eic_parent=row.get("wcode.EicParent")
+                if pd.notna(row.get("wcode.EicParent"))
+                else None,
+                display_name=row.get("wcode.EicDisplayName")
+                if pd.notna(row.get("wcode.EicDisplayName"))
+                else None,
+                long_name=row.get("wcode.EicLongName")
+                if pd.notna(row.get("wcode.EicLongName"))
+                else None,
+                responsible_party=row.get("wcode.EicResponsibleParty")
+                if pd.notna(row.get("wcode.EicResponsibleParty"))
+                else None,
+            )
+            if parent is not None:
+                for col in parent_meta:
+                    df.at[idx, f"wcode.parent.{col}"] = parent.get(col)
+
+        parent_found = df["wcode.parent.EicCode"].notna().sum()
+        logger.info(
+            f"[{zone_name}] Fuzzy parent matching: {parent_found} parent production units resolved."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 6. GEM/PPM match via resolved parent EIC code                      #
+        # ------------------------------------------------------------------ #
+        for idx, row in df[_still_unmatched(df)].iterrows():
+            parent_eic = row.get("wcode.parent.EicCode")
+            if pd.isna(parent_eic) or not str(parent_eic).strip():
+                continue
+            parent_eic_str = str(parent_eic).strip()
+
+            hit = (
+                self.gemloc.match_by_entsoe_id(parent_eic_str) if self.gemloc else None
+            )
+            if hit is not None:
+                for col in gem_cols:
+                    df.at[idx, f"gem.{col}"] = hit.get(col)
+                df.at[idx, "gem.match_source"] = "gem_parent_entsoe_id"
+            else:
+                hit = self.ppmloc.match_by_entsoe_id(parent_eic_str)
+                if hit is not None:
+                    for col in ppm_cols:
+                        df.at[idx, f"ppm.{col}"] = hit.get(col)
+                    df.at[idx, "ppm.match_source"] = "ppm_parent_entsoe_id"
+
+        ppm_after_parent = df["ppm.lat"].notna().sum()
+        gem_after_parent = df["gem.lat"].notna().sum()
+        logger.info(
+            f"[{zone_name}] Match via parent EIC: "
+            f"{gem_after_parent - gem_direct_count} additional via GEM, "
+            f"{ppm_after_parent - ppm_direct_count} additional via PPM "
+            f"({ppm_after_parent + gem_after_parent} total)."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 7. PPM/GEM fuzzy name match                                        #
+        # ------------------------------------------------------------------ #
+        for idx, row in df[_still_unmatched(df)].iterrows():
+            # Priority order: wcode long name → parent long name → raw pp name
+            candidates = [
+                row.get("wcode.EicLongName"),
+                row.get("wcode.parent.EicLongName"),
+                row.get(pp_name_col),
+            ]
+            eg_fuel = row.get("pp.fuel_type")
+
+            for candidate in candidates:
+                if pd.isna(candidate) or not str(candidate).strip():
+                    continue
+                candidate_str = str(candidate).strip()
+
+                hit = self.ppmloc.fuzzy_match_by_name(candidate_str)
+                if hit is not None and self._is_fueltype_compatible(
+                    eg_fuel, hit.get("Fueltype")
+                ):
+                    for col in ppm_cols:
+                        df.at[idx, f"ppm.{col}"] = hit.get(col)
+                    df.at[idx, "ppm.match_source"] = "ppm_fuzzy_name"
+                    break
+
+                if self.gemloc:
+                    hit = self.gemloc.fuzzy_match_by_name(
+                        candidate_str, country=self.country, fuel_type=eg_fuel
+                    )
+                    if hit is not None and self._is_fueltype_compatible(
+                        eg_fuel, hit.get("Fueltype")
+                    ):
+                        for col in gem_cols:
+                            df.at[idx, f"gem.{col}"] = hit.get(col)
+                        df.at[idx, "gem.match_source"] = "gem_fuzzy_name"
+                        break
+
+        ppm_final = df["ppm.lat"].notna().sum()
+        gem_final = df["gem.lat"].notna().sum()
+        logger.info(
+            f"[{zone_name}] Fuzzy name match: "
+            f"{ppm_final - ppm_after_parent} additional via PPM, "
+            f"{gem_final - gem_after_parent} additional via GEM "
+            f"({ppm_final + gem_final} total)."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 8. Fuel-type validation for all PPM/GEM-matched units              #
+        # ------------------------------------------------------------------ #
+        df["fuel_type_match"] = None
+        df["fuel_type_match_level"] = None
+        matched_mask = df["ppm.lat"].notna() | df["gem.lat"].notna()
+        for idx, row in df[matched_mask].iterrows():
+            matched_fueltype = (
+                row.get("ppm.Fueltype")
+                if pd.notna(row.get("ppm.lat"))
+                else row.get("gem.Fueltype")
+            )
+            level = self._classify_fueltype_match(
+                row.get("pp.fuel_type"), matched_fueltype
+            )
+            df.at[idx, "fuel_type_match"] = level != "mismatch"
+            df.at[idx, "fuel_type_match_level"] = level
+
+        mismatches = (df["fuel_type_match_level"] == "mismatch").sum()
+        if mismatches:
+            logger.warning(
+                f"[{zone_name}] Fuel-type mismatch on {mismatches} matched unit(s) — "
+                f"verify these rows manually."
+            )
+
+        # ------------------------------------------------------------------ #
+        # 9. OpenInfraMap / Overpass fallback                                #
+        # ------------------------------------------------------------------ #
+        osm_out_cols = ["lat", "lon", "id", "type", "url", "geometry"]
+        for col in osm_out_cols:
+            df[f"osm.{col}"] = None
+
+        unmatched_mask = _still_unmatched(df)
+        if unmatched_mask.any():
+            logger.info(
+                f"[{zone_name}] OpenInfra fallback for {unmatched_mask.sum()} unmatched units..."
+            )
+            country_code = self._country_to_iso2(self.country)
+            if country_code:
+                if self.df_openinfra.empty:
+                    self.df_openinfra = query_osm_country_plants(
+                        country_code,
+                        cache_dir=self.input_dir,
+                        force_update=self.osm_update,
+                        live=self.osm_live,
+                    )
+
+                if not self.df_openinfra.empty:
+                    # Populate _enriched_names from wcode data so OpenInfra matching
+                    # benefits from official names instead of raw ENTSO-E unit codes.
+                    for _, row in df[unmatched_mask].iterrows():
+                        raw_name = str(row.get(pp_name_col, "") or "")
+                        if not raw_name:
+                            continue
+                        alt_names: list[str] = []
+                        for name_src in (
+                            "wcode.EicLongName",
+                            "wcode.EicDisplayName",
+                            "wcode.parent.EicLongName",
+                        ):
+                            n = row.get(name_src)
+                            if (
+                                pd.notna(n)
+                                and str(n).strip()
+                                and str(n).strip() != raw_name
+                            ):
+                                alt_names.append(str(n).strip())
+                        if alt_names:
+                            self._enriched_names[raw_name] = alt_names
+
+                    # Build a temporary DataFrame with the column names that
+                    # _match_with_openinfra expects (self.name_col, self.fuel_col, lat, lon).
+                    df_osm_input = df[unmatched_mask][[pp_name_col]].copy()
+                    df_osm_input = df_osm_input.rename(
+                        columns={pp_name_col: self.name_col}
+                    )
+                    if self.fuel_col:
+                        df_osm_input[self.fuel_col] = df[unmatched_mask][
+                            "pp.fuel_type"
+                        ].values
+                    df_osm_input["lat"] = None
+                    df_osm_input["lon"] = None
+
+                    df_osm_result = self._match_with_openinfra(df_osm_input)
+                    osm_matched = df_osm_result[df_osm_result["lat"].notna()]
+
+                    for _, osm_row in osm_matched.iterrows():
+                        name_val = osm_row[self.name_col]
+                        target_idx = df.index[df[pp_name_col] == name_val]
+                        if len(target_idx) == 0:
+                            continue
+                        i = target_idx[0]
+                        df.at[i, "osm.lat"] = osm_row.get("lat")
+                        df.at[i, "osm.lon"] = osm_row.get("lon")
+                        df.at[i, "osm.id"] = osm_row.get("osm_id")
+                        df.at[i, "osm.type"] = osm_row.get("osm_type")
+                        df.at[i, "osm.url"] = osm_row.get("osm_url")
+                        df.at[i, "osm.geometry"] = osm_row.get("osm_geometry")
+
+            osm_matched_count = df["osm.lat"].notna().sum()
+            logger.info(
+                f"[{zone_name}] OpenInfra fallback: {osm_matched_count} additional units matched."
+            )
+
+        # ------------------------------------------------------------------ #
+        # 10. Finalise lat / lon, match_source, and write output CSV         #
+        # ------------------------------------------------------------------ #
+        df["lat"] = (
+            df["ppm.lat"].combine_first(df["gem.lat"]).combine_first(df["osm.lat"])
+        )
+        df["lon"] = (
+            df["ppm.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
+        )
+
+        osm_derived_source = df.apply(
+            lambda r: "osm" if pd.notna(r.get("osm.lat")) else "unmatched", axis=1
+        )
+        df["match_source"] = (
+            df["ppm.match_source"]
+            .combine_first(df["gem.match_source"])
+            .combine_first(osm_derived_source)
+        )
+
+        total_matched = df["lat"].notna().sum()
+        logger.info(
+            f"[{zone_name}] Enrichment complete: {total_matched}/{len(df)} units with coordinates. "
+            f"Sources: {df['match_source'].value_counts().to_dict()}"
+        )
+
+        if self.output_dir:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            out_path = self.output_dir / f"enriched_units_{zone_name}.csv"
+            df.to_csv(out_path, index=False)
+            logger.info(f"[{zone_name}] Enriched units written to '{out_path}'.")
+
+        return df
 
     def _match_with_eic_code(self, df_eg_unique: pd.DataFrame) -> pd.DataFrame:
         """Find coordinates for powerplants via the EIC (ENTSO-e) code.
@@ -547,7 +1004,12 @@ class CoordinateLocator:
                 return df_eg_unique
 
             if self.df_openinfra.empty:
-                self.df_openinfra = query_osm_country_plants(country_code)
+                self.df_openinfra = query_osm_country_plants(
+                    country_code,
+                    cache_dir=self.input_dir,
+                    force_update=self.osm_update,
+                    live=self.osm_live,
+                )
 
             if self.df_openinfra.empty:
                 logger.warning(
@@ -814,7 +1276,7 @@ class CoordinateLocator:
         return None
 
     @staticmethod
-    def _is_fueltype_compatible(eg_type: str, pp_type: str) -> bool:
+    def _is_fueltype_compatible(eg_type: str | None, pp_type: str | None) -> bool:
         """Validate if the eg fuel type matches the pp database fuel type.
 
         Handles basic string cleaning and empty values gracefully.
@@ -839,6 +1301,29 @@ class CoordinateLocator:
         raw = str(value).strip()
         mapped = FUELTYPE_MAPPINGS.get(raw, raw)
         return str(mapped).lower().strip()
+
+    @staticmethod
+    def _classify_fueltype_match(eg_type: str | None, pp_type: str | None) -> str:
+        """Classify the fuel-type agreement between an energy-generation record and PPM.
+
+        Args:
+            eg_type: Canonical fuel type from the energy production data (e.g. ``"wind"``).
+            pp_type: Fuel type string from powerplantmatching (e.g. ``"Wind"``).
+
+        Returns:
+            ``"exact"``      — both normalize to the same label.
+            ``"compatible"`` — one contains the other, or one side is missing.
+            ``"mismatch"``   — clearly different fuel types.
+        """
+        eg = CoordinateLocator._normalize_fueltype_label(eg_type)
+        pp = CoordinateLocator._normalize_fueltype_label(pp_type)
+        if not eg or not pp:
+            return "compatible"
+        if eg == pp:
+            return "exact"
+        if eg in pp or pp in eg:
+            return "compatible"
+        return "mismatch"
 
     @staticmethod
     def _renaming_stuff_in_entsoe_df(df_eg: pd.DataFrame) -> pd.DataFrame:
@@ -943,12 +1428,161 @@ class CoordinateLocator:
         )
 
 
+def _collect_zone_dirs(
+    input_paths: Path | str | list[Path | str],
+) -> list[Path]:
+    """Resolve one or more input paths into a flat, sorted list of zone directories.
+
+    Three input shapes are accepted:
+
+    - **Single zone folder** — a directory that directly contains the CSV data
+      files (no subdirectories).  Treated as one zone.
+    - **Container folder** — a directory whose immediate children are zone
+      directories.  All subdirectories are collected as individual zones.
+    - **List** — any mix of the two shapes above.  Each element is resolved
+      independently and the results are concatenated.
+
+    Args:
+        input_paths: A single ``Path`` / ``str``, or a list thereof.
+
+    Returns:
+        list[Path]: Deduplicated, sorted list of resolved zone directories.
+    """
+    if isinstance(input_paths, (str, Path)):
+        candidates = [Path(input_paths)]
+    else:
+        candidates = [Path(p) for p in input_paths]
+
+    zone_dirs: list[Path] = []
+    for path in candidates:
+        if not path.is_dir():
+            logger.warning(f"'{path}' is not a directory — skipping.")
+            continue
+        subdirs = sorted(p for p in path.iterdir() if p.is_dir())
+        if subdirs:
+            # path is a container → collect its immediate subdirectories
+            zone_dirs.extend(subdirs)
+        else:
+            # path is a leaf zone directory
+            zone_dirs.append(path)
+
+    # deduplicate while preserving order
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for d in zone_dirs:
+        resolved = d.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(d)
+    return unique
+
+
 if "__main__" == __name__:
-    input_dir = Path(
-        "../testdata/energy/entsoe/1h/10YPT-REN------W/"
-    )  # THIS NEEDS TO BE A REAL PATH!!!
+    import argparse
 
-    cl = CoordinateLocator(input_dir=input_dir)
-    df_coords = cl.find_coordinates_using_pp_databases()
+    parser = argparse.ArgumentParser(
+        description="Find coordinates for power plants and render an interactive map."
+    )
+    parser.add_argument(
+        "--update",
+        "-u",
+        action="store_true",
+        help=(
+            "Re-fetch OSM power plant data from Overpass and overwrite the local "
+            "overpass_<CC>_plants.parquet file, even if it already exists."
+        ),
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "Query the Overpass API live on every run. "
+            "The local OSM file is neither read nor written."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=Path("../testdata/coordinates/"),
+        help="Directory where enriched_units_<zone>.csv files are written.",
+    )
+    parser.add_argument(
+        "--gem-dir",
+        type=Path,
+        default=Path("../testdata/coordinates/gem-data"),
+        help=(
+            "Directory containing manually downloaded Global Energy Monitor (GEM) "
+            "tracker xlsx files (https://globalenergymonitor.org/download-data). "
+            "When given, GEM is used as an additional coordinate source alongside "
+            "powerplantmatching in the ENTSOE enrichment pipeline. Pass an empty "
+            "string or a non-existent path to disable GEM matching."
+        ),
+    )
+    args = parser.parse_args()
+    gem_dir = args.gem_dir if args.gem_dir and args.gem_dir.is_dir() else None
+    if args.gem_dir and gem_dir is None:
+        logger.warning(
+            f"--gem-dir '{args.gem_dir}' is not a directory — GEM matching disabled."
+        )
 
-    print(df_coords)
+    # --- configure input here: pick ONE of the three forms ---
+    #
+    # 1) Container folder — every subdirectory becomes one zone:
+    input_paths: Path | str | list[Path | str] = Path("../testdata/energy/entsoe/1h/")
+    #
+    # 2) Single zone folder:
+    # input_paths = Path("../testdata/energy/entsoe/1h/10YFI-1--------U/")
+    # input_paths = Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/")
+
+    #
+    # 3) Explicit list of zone folders (mix of single zones and containers allowed):
+    # input_paths = [
+    #    Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/"),
+    #    Path("../testdata/energy/entsoe/1h/10Y1001A1001A990/"),
+    #    Path("../testdata/energy/entsoe/1h/10Y1001C--00100H/"),
+    #    Path("../testdata/energy/entsoe/1h/10YAL-KESH-----5/"),
+    #    Path("../testdata/energy/entsoe/1h/10YAT-APG------L/"),
+    #    Path("../testdata/energy/entsoe/1h/10YBA-JPCC-----D/"),
+    #    Path("../testdata/energy/entsoe/1h/10YNL----------L/"),
+    # ]
+
+    zone_dirs = _collect_zone_dirs(input_paths)
+    dataframes: list[pd.DataFrame] = []
+    labels: list[str] = []
+
+    for zone_dir in zone_dirs:
+        folder_name = zone_dir.name
+        label = folder_name[3:5]  # e.g. "10YLV-1001A00074" → "LV"
+        try:
+            cl = CoordinateLocator(
+                input_dir=zone_dir,
+                output_dir=args.output,
+                osm_update=args.update,
+                osm_live=args.live,
+                gem_dir=gem_dir,
+            )
+            df = cl.find_coordinates_using_pp_databases()
+            if df is not None and not df.empty:
+                dataframes.append(df)
+                labels.append(label)
+                logger.info(
+                    f"[{label}] {folder_name}: "
+                    f"{df['lat'].notna().sum()}/{len(df)} matched."
+                )
+        except Exception as e:
+            logger.warning(f"[{label}] {folder_name}: skipped — {e}")
+
+    if dataframes:
+        # build_map works best with a name column; for ENTSOE the name col is prefixed
+        map_dfs = []
+        for df_map in dataframes:
+            # Provide a flat 'Name' column for the map if not already present
+            name_col_long = OPERATOR_METADATA["entsoe"]["entity_col"]
+            if f"pp.{name_col_long}" in df_map.columns and "Name" not in df_map.columns:
+                df_map = df_map.copy()
+                df_map["Name"] = df_map[f"pp.{name_col_long}"]
+            map_dfs.append(df_map)
+        build_map(map_dfs, labels=labels)
+    else:
+        logger.warning("No results found for the given input paths.")

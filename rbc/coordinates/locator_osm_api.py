@@ -107,6 +107,32 @@ def _cache_file(cache_dir: Path, country_code: str) -> Path:
     return cache_dir / f"overpass_{country_code.upper()}_plants.json"
 
 
+def _parquet_file(cache_dir: Path, country_code: str) -> Path:
+    return cache_dir / f"overpass_{country_code.upper()}_plants.parquet"
+
+
+def _load_parquet(parquet_path: Path) -> pd.DataFrame | None:
+    try:
+        df = pd.read_parquet(parquet_path)
+        logger.info(
+            f"Loaded {len(df)} OSM rows from local parquet for "
+            f"'{parquet_path.stem.split('_')[1]}'."
+        )
+        return df
+    except Exception as e:
+        logger.warning(f"Could not read parquet '{parquet_path}': {e}")
+        return None
+
+
+def _save_parquet(parquet_path: Path, df: pd.DataFrame) -> None:
+    try:
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(parquet_path, index=False)
+        logger.info(f"OSM plant data saved → {parquet_path} ({len(df)} rows)")
+    except Exception as e:
+        logger.warning(f"Could not write parquet '{parquet_path}': {e}")
+
+
 def _load_cached_overpass(cache_path: Path) -> dict | None:
     try:
         with cache_path.open("r", encoding="utf-8") as f:
@@ -187,19 +213,23 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
 def query_osm_country_plants(
     country_code: str = "FR",
     cache_dir: Path | str | None = None,
+    force_update: bool = False,
+    live: bool = False,
 ) -> pd.DataFrame:
     """Queries Overpass API for power plants in a specific country.
 
-    This takes long and is a work in progres... Which query is the most suitable one?
-    Could also search for name - but often comes up empty...
+    By default the result is cached as ``overpass_<CC>_plants.parquet`` inside
+    ``cache_dir`` and loaded from there on subsequent calls.
 
     Args:
-        country_code (str, optional): Country ISO code.
-        cache_dir (Path | str | None, optional): Directory to read/write a cached
-            Overpass JSON response. When provided, a successful response is saved
-            as ``overpass_<COUNTRY>_plants.json`` and reused on subsequent calls.
-            All Overpass endpoints are tried in order before falling back to a
-            stale cache when all fail.
+        country_code (str, optional): ISO 3166-1 alpha-2 country code.
+        cache_dir (Path | str | None, optional): Directory for the local OSM power
+            plant files.  When provided a ``.parquet`` file is written on the first
+            successful fetch and read back on all subsequent calls.
+        force_update (bool): Ignore any existing local file and re-fetch from
+            Overpass, then overwrite it.  Corresponds to ``--update``.
+        live (bool): Query Overpass directly without reading or writing any local
+            file.  Corresponds to ``--live``.
 
     Returns:
         pd.DataFrame: DataFrame of power plants in given country.
@@ -222,18 +252,30 @@ def query_osm_country_plants(
     """
 
     cache_path = None
-    if cache_dir is not None:
-        cache_path = _cache_file(Path(cache_dir), country_code)
-        if cache_path.exists():
-            cached = _load_cached_overpass(cache_path)
-            if isinstance(cached, dict):
-                df_cached = _elements_to_df(cached)
-                if not df_cached.empty:
-                    logger.info(
-                        f"Loaded {len(df_cached)} OSM rows from cache for "
-                        f"country '{country_code}'."
-                    )
-                    return df_cached
+    parquet_path = None
+    if not live and cache_dir is not None:
+        resolved_dir = Path(cache_dir)
+        parquet_path = _parquet_file(resolved_dir, country_code)
+        cache_path = _cache_file(resolved_dir, country_code)
+
+        if not force_update:
+            # Fast path: local parquet (processed DataFrame, loads in milliseconds)
+            if parquet_path.exists():
+                df_parquet = _load_parquet(parquet_path)
+                if df_parquet is not None and not df_parquet.empty:
+                    return df_parquet
+
+            # Fallback: raw JSON cache (re-parse on load)
+            if cache_path.exists():
+                cached = _load_cached_overpass(cache_path)
+                if isinstance(cached, dict):
+                    df_cached = _elements_to_df(cached)
+                    if not df_cached.empty:
+                        logger.info(
+                            f"Loaded {len(df_cached)} OSM rows from JSON cache for "
+                            f"country '{country_code}'."
+                        )
+                        return df_cached
 
     for endpoint in OVERPASS_URLS:
         try:
@@ -246,8 +288,11 @@ def query_osm_country_plants(
             response.raise_for_status()
             data = response.json()
             df = _elements_to_df(data)
-            if cache_path is not None and not df.empty:
-                _save_cached_overpass(cache_path, data)
+            if not df.empty and not live:
+                if parquet_path is not None:
+                    _save_parquet(parquet_path, df)
+                if cache_path is not None:
+                    _save_cached_overpass(cache_path, data)
             logger.info(
                 f"Overpass endpoint '{endpoint}' returned {len(df)} rows "
                 f"for '{country_code}'."
@@ -259,7 +304,7 @@ def query_osm_country_plants(
                 f"Overpass endpoint '{endpoint}' failed for '{country_code}': {e}"
             )
 
-    if cache_path is not None and cache_path.exists():
+    if not live and cache_path is not None and cache_path.exists():
         cached = _load_cached_overpass(cache_path)
         if isinstance(cached, dict):
             df_cached = _elements_to_df(cached)
