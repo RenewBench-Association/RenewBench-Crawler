@@ -4,6 +4,7 @@ This folder contains all scripts for running the various crawler-related downloa
 
 - Relevant parameters that require user definitions are handled by per-source config YAML files, located at `configs/energy/<SOURCE>.yaml`. These can be individually overwritten with the `--cfg_options` flag, but it's best to just set the values once directly in the YAML!
 - All scripts are designed to be run from the repo root!
+- All scripts require a virtual environment to have been set up (using Python3.11 or 3.12) with the rbc-required packages installed (`pip install .`)!
 
 ## Data download
 
@@ -36,11 +37,16 @@ To run a single or all downloaders via Slurm, you can use the related bash scrip
 2. The following lines need to be amended in the `download.sh` script:
 	- `#SBATCH --partition=cpu`: define the correct CPU partition name
 	- `#SBATCH --output=slurm_logs/%x_%j.log`: if desired, define a more concrete path for the slurm logs
+	- `source venv/bin/activate`: if the virtual environment is not named "venv" and located in the rbc repo root, redefine path.
+
+### Single download
 
 To submit a single source downloader job, you can do:
 ```
 $ sbatch --job-name=<SOURCE> --time=<TIME_LIMIT> --requeue --export="SOURCE=<SOURCE>,TIME_LIMIT=<TIME_LIMIT>" scripts/energy/slurm/download.sh
 ```
+
+### All downloads
 
 To run all downloaders, you can simply do:
 ```
@@ -50,4 +56,21 @@ $ bash scripts/energy/slurm/download_all.sh
 > [!NOTE]
 >
 > If you wish to run a specific subset of downloaders, you can amend the `SOURCES` definition at the beginning of the `download_all.sh` script.
+
+
+## Download evaluation
+
+To evaluate how successful the raw data crawling was, you can run the `evaluate_downloads.py` script. For each downloader, this inspects:
+- the `status.pickle` file to check for successful ("1") and unsuccessful ("0") tasks
+- the stored CSV / JSON files to find data gaps based on the range of dates one would expect from the file names and those expected by the `status.pickle` file.
+
+To run the script, simply do:
+```
+$ python3.12 -m scripts.energy.evaluate_downloads
+```
+
+Per default, all downloaders are evaluated and only the unsuccessful ("0") tasks in the pickle inspected. Alternatively, the following options can be set via flags:
+
+- `-s <SOURCE>`: evaluate only a specific downloader or list of downloaders, i.e. `-s aemo aeso`
+- `-a`: get an overview of all pickle data including the successful ("1") tasks.
 
