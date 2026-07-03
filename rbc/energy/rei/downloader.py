@@ -18,7 +18,9 @@ from rbc.energy.utils import (
     DataStructureError,
     DownloadTask,
     EnergyDownloader,
+    InvalidError,
     MissingDataError,
+    write_dict_to_json,
 )
 
 TIMEZONE = ZoneInfo("Asia/Tokyo")
@@ -72,7 +74,7 @@ class ReiDownloader(EnergyDownloader):
         logger.info(f"REI Downloader initialized for:\n- years:\t\t{years}")
 
     def download_data(self) -> None:
-        """Parse data for all given years from REI site and save to CSV."""
+        """Parse data for all given years from REI site and save to JSON."""
         tasks = [DownloadTask(date=d) for d in self._get_month_list()]
 
         logger.info(
@@ -130,7 +132,7 @@ class ReiDownloader(EnergyDownloader):
 
         if len(matching_indices) != (end_idx - start_idx):
             logger.warning(
-                f"Data continuity issue detected for {task.year}-{task.month}: "
+                f"REI timestamp continuity issue detected for {task.year}-{task.month}: "
                 f"{len(matching_indices)} timestamps in range of {end_idx - start_idx}!"
             )
 
@@ -175,8 +177,9 @@ class ReiDownloader(EnergyDownloader):
         Raises:
             DataStructureError: If downloaded data is missing any of the expected regions
                 or columns (incl. the "epochs" column), if the data in "epochs" cannot
-                be converted to datetime-like values, if region data is not a dictionary, or
-                if the energy generation values don't match the number of timestamps.
+                be converted to datetime-like values, if region data is not a dictionary,
+                if there are issues with the intervals (s. _determine_temporal_resolution)
+                or if the amount of energy generation values doesn't match the epoch number.
         """
         response = requests.get(url, timeout=120)
         response.raise_for_status()  # errors are propagated to _download_task in parent
@@ -193,14 +196,10 @@ class ReiDownloader(EnergyDownloader):
             # get timestamps from epoch for monthly slicing later
             ts_data = pd.DatetimeIndex(pd.to_datetime(data["epochs"], unit="s"))
             ts_data = ts_data.tz_localize("UTC").tz_convert(TIMEZONE)
-            hours = len(ts_data)
+            num_ts = len(ts_data)  # number of timestamps
 
-            expected_hours = int((ts_data[-1] - ts_data[0]) / pd.Timedelta(hours=1)) + 1
-            if hours != expected_hours:
-                logger.warning(
-                    f"Data continuity issue detected for {url}: Expected {expected_hours} "
-                    f"hourly timestamps for the year, but the JSON contains {hours} hours."
-                )
+            t_res = ReiDownloader._determine_temporal_resolution(ts_data, context=url)
+            logger.info(f"REI data for {url} has a temporal resolution of {t_res}.")
 
             # slim down full yearly JSON to only get the expected keys
             relevant_data = {k: data[k] for k in EXPECTED_KEYS}
@@ -213,11 +212,11 @@ class ReiDownloader(EnergyDownloader):
                         f"Region '{r}' data is no longer a dictionary!"
                     )
                 for ft, ft_data in r_data.items():
-                    if len(ft_data) != hours:
+                    if len(ft_data) != num_ts:
                         raise DataStructureError(
                             f"REI file structure change detected for '{url}'! "
                             f"Data for region '{r}', fueltype '{ft}' has {len(ft_data)} "
-                            f"entries, but there are {hours} timestamps!"
+                            f"entries, but there are {num_ts} timestamps!"
                         )
 
         except KeyError as e:
@@ -232,3 +231,76 @@ class ReiDownloader(EnergyDownloader):
             )
 
         return relevant_data, ts_data
+
+    def _save_task_data(self, task: DownloadTask, data: pd.DataFrame | dict) -> None:
+        """Save REI downloaded task data to disk, splitting by temporal resolution.
+
+        The JSON file does not have specific temporal resolutions specified, but the
+        UNIX epochs (timestamps) vary from hourly intervals (up until 2024-03) to half
+        hourly intervals (2024-04 onwards). This means the task definition needs to be
+        adapted to ensure correct saving.
+
+        Args:
+            task (DownloadTask): The metadata for the task that was downloaded.
+            data (pd.DataFrame | dict): Downloaded dataframe for the task.
+        """
+        if not isinstance(data, dict):
+            raise InvalidError(
+                f"REI data for '{task.identifier}' must be a dictionary, "
+                f"got '{type(data).__name__}'."
+            )
+
+        ts_data = pd.DatetimeIndex(pd.to_datetime(data["epochs"], unit="s"))
+        ts_data = ts_data.tz_localize("UTC").tz_convert(TIMEZONE)
+        t_res = self._determine_temporal_resolution(ts_data, context=task.identifier)
+
+        updated_task = task.update(temporal_resolution=t_res)
+        base_path = self._build_task_path(updated_task)
+        write_dict_to_json(data=data, file_path=base_path)
+
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
+    @staticmethod
+    def _determine_temporal_resolution(ts_data: pd.DatetimeIndex, context: str) -> str:
+        """Determines the temporal resolution from a list of timestamps.
+
+        Args:
+            ts_data (pd.DatetimeIndex): List of timestamps.
+            context (str): Context (like URL or task info) for log/error messages.
+
+        Returns:
+            str: Temporal resolution string, e.g. "1h" or "30min".
+
+        Raises:
+            DataStructureError: If there are fewer than two timestamps,
+                if they aren't monotonically increasing,
+                if the determined temporal resolution is not a whole number
+                or has grown to be coarser than 1h.
+        """
+        msg = f"REI timestamp continuity issue detected for {context}"
+
+        if len(ts_data) < 2:
+            raise DataStructureError(f"{msg}: Less than 2 timestamps!")
+        if not ts_data.is_monotonic_increasing:
+            raise DataStructureError(f"{msg}: Timestamps not monotonically increasing!")
+
+        ts_diffs = pd.Series(ts_data[1:] - ts_data[:-1])
+        ts_diff = ts_diffs.mode().iloc[0]  # most common Timedelta interval
+        t_res = ts_diff.total_seconds() / 60
+
+        if (ts_diffs != ts_diff).any():
+            logger.warning(f"{msg}: Temporal resolution is not constant!")
+
+        if t_res % 1 != 0:
+            raise DataStructureError(
+                f"{msg}: Temporal resolution {t_res}min not a whole number!"
+            )
+
+        t_res = int(t_res)
+        if t_res > 60:
+            raise DataStructureError(
+                f"{msg}: Temporal resolution {t_res}min is greater than 1h!"
+            )
+
+        return "1h" if t_res == 60 else f"{t_res}min"
