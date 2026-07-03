@@ -387,7 +387,12 @@ def test_save_task_data_two_tres(
 def test_save_task_data_invalid_format(
     downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
-    """Failure path for _save_task_data when provided data is not a pandas.DataFrame."""
+    """Failure path for _save_task_data when provided data is not a pandas.DataFrame.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
     non_df = {"timestamp": [f"{task.date}T00:00:00+00:00"]}
     with pytest.raises(InvalidError, match="must be a DataFrame"):
         downloader._save_task_data(task, non_df)
@@ -396,7 +401,12 @@ def test_save_task_data_invalid_format(
 def test_save_task_data_invalid_tres(
     downloader: EntsoeDownloader, task: DownloadTask
 ) -> None:
-    """Failure path for _save_task_data when provided temporal resolution isn't supported."""
+    """Failure path for _save_task_data when provided temporal resolution isn't supported.
+
+    Args:
+        downloader (EntsoeDownloader): Instance of EntsoeDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD), bz
+    """
     df = pd.DataFrame(
         {
             "timestamp": [f"{task.date}T00:00:00+00:00"],
