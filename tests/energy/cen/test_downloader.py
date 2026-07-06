@@ -12,12 +12,10 @@ from requests import exceptions
 from rbc.energy.cen import CenDownloader
 from rbc.energy.cen.downloader import EXPECTED_COLS
 from rbc.energy.utils import (
-    MAX_RATE_LIMIT_RETRIES,
     MAX_RETRIES,
     DataStructureError,
     DownloadTask,
     MissingDataError,
-    RateLimitError,
 )
 
 
@@ -332,6 +330,7 @@ def test_download_task_data_retry_exhaustion(
     """Failure path for "_get_task_data" method when the TOTAL network error limit is reached.
 
     Not just of the CenDownloader, but in "_download_task_data" of EnergyDownloader as well!
+    This tests its "4. everything else (500s/timeout/connection) -> classic retry" path.
 
     Args:
         downloader (CenDownloader): Instance of CenDownloader class.
@@ -341,12 +340,16 @@ def test_download_task_data_retry_exhaustion(
         patch("rbc.energy.cen.downloader.requests.get") as mock_get,
         patch("rbc.energy.cen.downloader.time.sleep") as mock_sleep,
     ):
-        mock_get.side_effect = [exceptions.HTTPError("Connection dropped")] * 20
+        mock_get.side_effect = [exceptions.HTTPError("Connection dropped")] * (
+            (1 + MAX_RETRIES) * (1 + MAX_RETRIES)
+        )
 
         status = downloader._download_task_data(task)
 
-        assert mock_get.call_count == 12  # child: 1+3 tries, parent: 3 tries => 12
-        assert mock_sleep.call_count == 11  # child: 3x per try = 9, parent: 2x => 11
+        # task (run through child) -> C: 4 attempts, P: (1st + 3 reruns) => 4 * 4 = 16
+        assert mock_get.call_count == 16
+        # sleep (in child & parent) -> C: 3 retries, P: (1st + 3 reruns) + 3 direct call => 15
+        assert mock_sleep.call_count == 15
         assert status == 0  # parent will have to give up and define as unfulfilled (0)
 
 
@@ -364,13 +367,13 @@ def test_get_task_data_rate_limit_fail(
         patch("rbc.energy.cen.downloader.time.sleep") as mock_sleep,
     ):
         resp_429 = MagicMock(status_code=429)
-        mock_get.side_effect = [resp_429] * (MAX_RATE_LIMIT_RETRIES + 1)
+        mock_get.side_effect = [resp_429] * (MAX_RETRIES + 1)
 
-        with pytest.raises(RateLimitError, match="rate limit has been exceeded"):
+        with pytest.raises(exceptions.HTTPError, match="CEN API rate limit"):
             downloader._get_task_data(task)
 
-        assert mock_get.call_count == MAX_RATE_LIMIT_RETRIES + 1
-        assert mock_sleep.call_count == MAX_RATE_LIMIT_RETRIES
+        assert mock_get.call_count == MAX_RETRIES + 1
+        assert mock_sleep.call_count == MAX_RETRIES
 
 
 def test_get_task_data_server_overload(

@@ -145,6 +145,9 @@ class EpiasDownloader(EnergyDownloader):
 
         return df_gen
 
+    # --------------------------------------------
+    # Helper methods
+    # --------------------------------------------
     def _epias_call(self, *args, **kwargs) -> Any:
         """Wrap all eptr calls in order to transform any potential errors into HTTPError.
 

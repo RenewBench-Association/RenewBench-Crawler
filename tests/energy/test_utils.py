@@ -13,6 +13,7 @@ import pytest
 from requests import exceptions
 
 from rbc.energy.utils import (
+    MAX_RATE_LIMIT_RETRIES,
     MAX_RETRIES,
     DataStructureError,
     DownloadTask,
@@ -168,11 +169,13 @@ class TestEnergyDownloaderThreading:
     @pytest.mark.parametrize(
         "code, expected_status, expected_sleep_calls",
         [
-            (None, 0, MAX_RETRIES - 1),
-            (300, 0, MAX_RETRIES - 1),
+            (None, 0, MAX_RETRIES),
+            (500, 0, MAX_RETRIES),
             (404, 1, 0),
+            (401, 0, MAX_RATE_LIMIT_RETRIES),
             (400, 1, 0),
         ],
+        ids=["no_code", "server_error", "missing_data", "rate_limit", "client_error"],
     )
     def test_threading_error_catching(
         self,
@@ -207,9 +210,7 @@ class TestEnergyDownloaderThreading:
                 with pytest.raises(SystemExit):
                     downloader._threading_wrapper(task)
 
-        mock_exit.assert_called_once_with(
-            1
-        )  # assert outside "with"-block for correct exec
+        mock_exit.assert_called_once_with(1)  # assert outside "with" for correct exec
 
         # 2. Test missing data (MissingDataError -> status 0 = current year, status 1 = prior)
         downloader.checkpoint = {}
@@ -220,8 +221,8 @@ class TestEnergyDownloaderThreading:
                 assert downloader.checkpoint[task.identifier] == expected_error_status
                 mock_save.assert_called_once()
 
-        # 3. Test HTTPError
-        # no code: (->0), retry: code=300 (->0), missing: code=404 (->1), client: code=400 (->1)
+        # 3. Test RETRY_ERRORS (HTTPError)
+        # no code OR server=500: ->0, missing=404: ->1, ratelimit=429: ->0, client=400 ->1
         downloader.checkpoint = {}
         with patch.object(
             downloader, "_get_task_data", side_effect=exceptions.HTTPError("")

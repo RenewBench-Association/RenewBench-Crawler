@@ -154,12 +154,12 @@ class CenDownloader(EnergyDownloader):
             except exceptions.RequestException as e:
                 # catch ALL requests errors locally (prevents crashing of parent thread!)
                 if attempt_network < MAX_RETRIES:  # retry 3 times
+                    attempt_network += 1
                     logger.warning(
                         f"Network issue for {task.date} (Page {params['page']}): "
                         f"{type(e).__name__}. Retrying page request in 5 seconds..."
                     )
                     time.sleep(5)
-                    attempt_network += 1
                     continue
                 else:
                     raise type(e)(
@@ -170,12 +170,12 @@ class CenDownloader(EnergyDownloader):
             if status_code != 200:
                 if status_code == 429:
                     if attempt_ratelimit < MAX_RETRIES:  # retry 3 times
+                        attempt_ratelimit += 1
                         logger.warning(
                             f"CEN API rate limit reached (429) on page {params['page']}. "
                             f"Sleeping {RATE_LIMIT_RETRY_DELAY} seconds..."
                         )
                         time.sleep(RATE_LIMIT_RETRY_DELAY)
-                        attempt_ratelimit += 1
                         continue
                     else:
                         raise exceptions.HTTPError(
@@ -186,6 +186,7 @@ class CenDownloader(EnergyDownloader):
 
                 if status_code == 500:
                     if attempt_pagesize < 3:
+                        attempt_pagesize += 1
                         logger.warning(
                             "Server overload (too much data requested at once). Halving "
                             "page size and restarting date task..."
@@ -193,7 +194,6 @@ class CenDownloader(EnergyDownloader):
                         params["pageSize"] = int(int(params["pageSize"]) / 2)
                         params["page"] = 1  # reset back to the beginning!
                         all_data = []  # clear already accumulated data so no duplicates
-                        attempt_pagesize += 1
                         continue
                     else:
                         raise exceptions.HTTPError(

@@ -258,8 +258,8 @@ class EnergyDownloader(ABC):
         Returns:
             int: Status of the download (1 if successful, 0 if unsuccessful).
         """
-        retry = 1
-        retry_ratelimit = 1
+        reruns = 0  # num of task reruns (retries) due to error
+        reruns_ratelimit = 0  # num of task reruns (retries) due to rate limits
 
         while True:
             try:
@@ -291,14 +291,14 @@ class EnergyDownloader(ABC):
 
                 # 2. auth-under-load / throttling errors -> patient retry, then leave as 0
                 if code in (401, 429):
-                    if retry_ratelimit <= MAX_RATE_LIMIT_RETRIES:
-                        wait = int(RATE_LIMIT_RETRY_DELAY * retry_ratelimit**1.5)
+                    if reruns_ratelimit < MAX_RATE_LIMIT_RETRIES:
+                        reruns_ratelimit += 1
+                        wait = int(RATE_LIMIT_RETRY_DELAY * reruns_ratelimit**1.5)
                         logger.warning(
                             f"Limit {code} for '{task.identifier}' (rate-limit attempt "
-                            f"{retry_ratelimit}/{MAX_RATE_LIMIT_RETRIES}). "
+                            f"{reruns_ratelimit}/{MAX_RATE_LIMIT_RETRIES}). "
                             f"Sleeping {wait}s."
                         )
-                        retry_ratelimit += 1
                         time.sleep(wait)
                         continue
 
@@ -317,19 +317,18 @@ class EnergyDownloader(ABC):
                     return 1
 
                 # 4. everything else (500s/timeout/connection) -> classic retry, then leave 0
-                if retry <= MAX_RETRIES:
+                if reruns < MAX_RETRIES:
+                    reruns += 1
                     logger.warning(
-                        f"Retry with {code} for '{task.identifier}' (attempt "
-                        f"{retry}/{MAX_RETRIES}). "
-                        f"Sleeping {RETRY_DELAY}s."
+                        f"Retry due to error (code: {code}) for '{task.identifier}' "
+                        f"(attempt {reruns}/{MAX_RETRIES}). Sleeping {RETRY_DELAY}s."
                     )
-                    retry += 1
                     time.sleep(RETRY_DELAY)
                     continue
 
                 logger.critical(
                     f"Failed '{task.identifier}' after {MAX_RETRIES} attempts: "
-                    f"500/Timeout error {code} persists. Retry in next rerun...\n{e}"
+                    f"500/Timeout error (code {code}) persists. Retry in next rerun...\n{e}"
                 )
                 return 0  # rerun next time!
 

@@ -11,11 +11,10 @@ from requests import exceptions
 
 from rbc.energy.eia import EiaDownloader
 from rbc.energy.utils import (
-    MAX_RATE_LIMIT_RETRIES,
+    MAX_RETRIES,
     DataStructureError,
     DownloadTask,
     MissingDataError,
-    RateLimitError,
 )
 
 
@@ -272,15 +271,13 @@ def test_get_task_data_rate_limit_fail(
         patch("rbc.energy.eia.downloader.requests.get") as mock_get,
         patch("rbc.energy.eia.downloader.time.sleep") as mock_sleep,
     ):
-        mock_get.side_effect = [MagicMock(status_code=429)] * (
-            MAX_RATE_LIMIT_RETRIES + 1
-        )
+        mock_get.side_effect = [MagicMock(status_code=429)] * (MAX_RETRIES + 1)
 
-        with pytest.raises(RateLimitError, match="limit has been exceeded"):
+        with pytest.raises(exceptions.HTTPError, match="EIA API rate limit"):
             downloader._get_task_data(task)
 
-        assert mock_get.call_count == MAX_RATE_LIMIT_RETRIES + 1
-        assert mock_sleep.call_count == MAX_RATE_LIMIT_RETRIES
+        assert mock_get.call_count == MAX_RETRIES + 1
+        assert mock_sleep.call_count == MAX_RETRIES
 
 
 @pytest.mark.parametrize("return_val", [{}, {"response": {}}])
