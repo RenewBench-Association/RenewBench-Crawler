@@ -12,7 +12,10 @@ import pandas as pd
 from loguru import logger
 from rapidfuzz import fuzz, process
 
-from rbc.coordinates.locator_eic import EICDirectoryLocator, lookup_eic_in_wikidata
+from rbc.coordinates.locator_eic import (
+    EICDirectoryLocator,
+    _alpha_prefix,
+)
 from rbc.coordinates.locator_gem import GEMLocator
 from rbc.coordinates.locator_osm_api import query_osm_country_plants
 from rbc.coordinates.locator_osmpp import OSMPPLocator
@@ -20,6 +23,7 @@ from rbc.coordinates.locator_ppm import PPMLocator
 from rbc.coordinates.map import build_map
 from rbc.coordinates.mappings import (
     COUNTRY_ISO2_MAP,
+    COUNTRY_PLANT_NAME_EXPANSIONS,
     GENERIC_UNIT_TOKENS,
     OPERATOR_METADATA,
     PLANT_NAME_EXPANSIONS,
@@ -93,7 +97,7 @@ class CoordinateLocator:
 
         # Maps ENTSO-E unit name -> ordered alternative names for matching.
         # Order matters: original ENTSO-E name is always tried first, then EIC long
-        # name, then EIC display name, then a WikiData label as final fallback.
+        # name, then EIC display name.
         self._enriched_names: dict[str, list[str]] = {}
 
         try:
@@ -134,6 +138,14 @@ class CoordinateLocator:
         # this works regardless of ppm or osmpp due to same column names
         self.pp_names = self.df_pp["Name"].unique().tolist()
         self.pp_types = self.df_pp["Fueltype"].unique().tolist()
+
+        # Country-specific plant-name-token expansions layered on top of the
+        # global defaults (e.g. Estonian "elektrijaam" -> "soojuselektrijaam").
+        country_code = self._country_to_iso2(self.country)
+        self._plant_name_expansions: dict[str, str] = {
+            **PLANT_NAME_EXPANSIONS,
+            **COUNTRY_PLANT_NAME_EXPANSIONS.get(country_code or "", {}),
+        }
 
         logger.info(
             f"CoordinateLocator initalized for: {self.operator} ({self.country})"
@@ -208,12 +220,7 @@ class CoordinateLocator:
                 # --- 1. EIC code matching (against ppm CSV entsoe_id_list)
                 if self.code_col == OPERATOR_METADATA["entsoe"]["code_col"]:
                     df_new_additions = self._match_with_eic_code(df_new_additions)
-                # --- 1.5. WikiData EIC lookup (direct coords) + EIC directory name enrichment
-                if self.code_col:
-                    df_new_additions = self._match_with_eic_wikidata(df_new_additions)
-                # --- 2. Name (& fuel type) matching
-                # df_new_additions = self._match_with_name(df_new_additions)
-                # --- 3. OpenInfra / Overpass fallback for still unmatched rows
+                # --- 2. OpenInfra / Overpass fallback for still unmatched rows
                 df_new_additions = self._match_with_openinfra(df_new_additions)
 
                 # update total identified matches
@@ -237,11 +244,14 @@ class CoordinateLocator:
         - ``gem.*``           — from the Global Energy Monitor trackers (optional,
                                 requires ``gem_dir`` to be set)
         - ``osm.*``           — from the OpenInfraMap / Overpass fallback
-        - ``lat``, ``lon``    — best available coordinates (ppm, then gem, then osm)
+        - ``sibling.*``       — coordinates inherited from another already-matched
+                                unit of the same physical plant (same EicParent)
+        - ``lat``, ``lon``    — best available coordinates (ppm, then gem, then
+                                osm, then sibling)
         - ``match_source``    — one of: ppm_direct · ppm_parent_direct ·
                                 ppm_parent_entsoe_id · ppm_fuzzy_name · gem_direct ·
                                 gem_parent_direct · gem_parent_entsoe_id ·
-                                gem_fuzzy_name · osm · unmatched
+                                gem_fuzzy_name · osm · sibling_unit · unmatched
 
         Pipeline steps:
             1.  Collect & deduplicate unique generation units across all CSVs.
@@ -255,7 +265,11 @@ class CoordinateLocator:
             7.  PPM/GEM fuzzy name match guarded by a fuel-type check.
             8.  Fuel-type validation for all PPM/GEM-matched units.
             9.  OpenInfraMap / Overpass fallback for still-unmatched units.
-            10. Finalise ``lat`` / ``lon`` and write ``enriched_units_<zone>.csv``.
+            10. Sibling-unit fallback: units sharing the same EicParent (i.e. the
+                same physical plant) as an already-matched unit inherit that
+                unit's coordinates, e.g. an unnamed extra generator block of a
+                plant whose other blocks were already matched.
+            11. Finalise ``lat`` / ``lon`` and write ``enriched_units_<zone>.csv``.
 
         Returns:
             pd.DataFrame: Enriched dataframe, one row per unique generation unit.
@@ -433,9 +447,17 @@ class CoordinateLocator:
         # ------------------------------------------------------------------ #
         # 6. GEM/PPM match via resolved parent EIC code                      #
         # ------------------------------------------------------------------ #
+        # Only trust "high" confidence parent resolutions (direct EicParent
+        # lookup, or a fuzzy match scoring >= 90) for this direct/unguarded EIC
+        # code lookup. "medium" confidence guesses (e.g. a display-name-prefix
+        # match built on a short, generic plant-type abbreviation) are too easy
+        # to get wrong across countries and must go through fuzzy name + fuel
+        # validation (step 7) instead, where a fuel-type mismatch can veto them.
         for idx, row in df[_still_unmatched(df)].iterrows():
             parent_eic = row.get("wcode.parent.EicCode")
             if pd.isna(parent_eic) or not str(parent_eic).strip():
+                continue
+            if row.get("wcode.parent.match_confidence") != "high":
                 continue
             parent_eic_str = str(parent_eic).strip()
 
@@ -474,31 +496,49 @@ class CoordinateLocator:
             ]
             eg_fuel = row.get("pp.fuel_type")
 
+            matched = False
             for candidate in candidates:
                 if pd.isna(candidate) or not str(candidate).strip():
                     continue
                 candidate_str = str(candidate).strip()
 
-                hit = self.ppmloc.fuzzy_match_by_name(candidate_str)
-                if hit is not None and self._is_fueltype_compatible(
-                    eg_fuel, hit.get("Fueltype")
-                ):
-                    for col in ppm_cols:
-                        df.at[idx, f"ppm.{col}"] = hit.get(col)
-                    df.at[idx, "ppm.match_source"] = "ppm_fuzzy_name"
-                    break
+                # Also try the name with a trailing glued unit-suffix stripped
+                # (e.g. "ENGURIUNIT_5" -> "enguri"), which the space-tokenized
+                # _strip_numeric_name_tokens can't catch since there's no
+                # separator between the plant name and the unit suffix.
+                stripped_unit_suffix = self._strip_trailing_unit_suffix(candidate_str)
+                name_variants = [candidate_str]
+                if stripped_unit_suffix:
+                    name_variants.append(stripped_unit_suffix)
 
-                if self.gemloc:
-                    hit = self.gemloc.fuzzy_match_by_name(
-                        candidate_str, country=self.country, fuel_type=eg_fuel
+                for name_variant in name_variants:
+                    hit = self.ppmloc.fuzzy_match_by_name(
+                        name_variant, country=self.country
                     )
                     if hit is not None and self._is_fueltype_compatible(
                         eg_fuel, hit.get("Fueltype")
                     ):
-                        for col in gem_cols:
-                            df.at[idx, f"gem.{col}"] = hit.get(col)
-                        df.at[idx, "gem.match_source"] = "gem_fuzzy_name"
+                        for col in ppm_cols:
+                            df.at[idx, f"ppm.{col}"] = hit.get(col)
+                        df.at[idx, "ppm.match_source"] = "ppm_fuzzy_name"
+                        matched = True
                         break
+
+                    if self.gemloc:
+                        hit = self.gemloc.fuzzy_match_by_name(
+                            name_variant, country=self.country, fuel_type=eg_fuel
+                        )
+                        if hit is not None and self._is_fueltype_compatible(
+                            eg_fuel, hit.get("Fueltype")
+                        ):
+                            for col in gem_cols:
+                                df.at[idx, f"gem.{col}"] = hit.get(col)
+                            df.at[idx, "gem.match_source"] = "gem_fuzzy_name"
+                            matched = True
+                            break
+
+                if matched:
+                    break
 
         ppm_final = df["ppm.lat"].notna().sum()
         gem_final = df["gem.lat"].notna().sum()
@@ -614,17 +654,131 @@ class CoordinateLocator:
             )
 
         # ------------------------------------------------------------------ #
-        # 10. Finalise lat / lon, match_source, and write output CSV         #
+        # 10. Sibling-unit fallback: reuse a co-located unit's coordinates   #
         # ------------------------------------------------------------------ #
-        df["lat"] = (
+        # Some units have no usable name of their own (e.g. an extra generator
+        # block added later) but share the same physical plant — identified via
+        # the EicParent code — with another unit that was already matched by any
+        # of the previous steps. Rather than re-guessing a name for OSM/PPM/GEM
+        # matching, simply inherit that sibling's coordinates.
+        df["sibling.lat"] = None
+        df["sibling.lon"] = None
+        df["sibling.match_source"] = None
+
+        interim_lat = (
             df["ppm.lat"].combine_first(df["gem.lat"]).combine_first(df["osm.lat"])
         )
-        df["lon"] = (
+        interim_lon = (
             df["ppm.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
         )
 
+        def _clean_str_series(series: pd.Series) -> pd.Series:
+            return series.map(
+                lambda v: str(v).strip() if pd.notna(v) and str(v).strip() else None
+            )
+
+        # 1. Prefer the officially declared parent EIC (wcode.EicParent).
+        eic_parent = _clean_str_series(df["wcode.EicParent"])
+
+        # 2. Fall back to the fuzzy-resolved parent EIC (wcode.parent.EicCode) —
+        # but ONLY when it actually differs from the unit's own EIC code. When
+        # the EIC directory has no distinct "Production Unit" entry for a plant,
+        # find_parent_production_unit() falls back to matching a unit against
+        # itself (self-reference), which must not be treated as a shared key.
+        own_eic = _clean_str_series(df[pp_code_col]) if pp_code_col in df else None
+        parent_eic_resolved = _clean_str_series(df["wcode.parent.EicCode"])
+        distinct_parent_eic = pd.Series(
+            [
+                p if p is not None and (own_eic is None or p != o) else None
+                for p, o in zip(
+                    parent_eic_resolved,
+                    own_eic if own_eic is not None else [None] * len(df),
+                )
+            ],
+            index=df.index,
+        )
+
+        # 3. Group by the plant "base name" derived from the official EIC long
+        # name with its trailing unit-suffix token stripped (e.g. "Balti G09" /
+        # "Balti G10" / "Balti G11" -> "balti"). This reliably identifies units
+        # of the same physical plant even when no distinct parent EIC entry
+        # exists at all (e.g. Balti/Eesti in Estonia), and copes with
+        # inconsistent EicDisplayName formatting (e.g. "BEJ_G09" vs "BEJG10").
+        def _plant_base_key(long_name: str | None) -> str | None:
+            normalized = self._normalize_name(long_name)
+            if not normalized:
+                return None
+            tokens = normalized.split()
+            if len(tokens) > 1 and re.fullmatch(r"[a-z]{1,4}\d+", tokens[-1]):
+                tokens = tokens[:-1]
+            base = " ".join(tokens).strip()
+            return base or None
+
+        long_name_key = df["wcode.EicLongName"].map(_plant_base_key)
+        long_name_key = long_name_key.map(lambda k: f"long_name:{k}" if k else None)
+
+        # 4. Last resort: group by the shared alphabetic prefix of the official
+        # EIC display name (e.g. "BEJ_G09"/"BEJ_G11" -> "BEJ").
+        display_prefix = df["wcode.EicDisplayName"].map(
+            lambda v: _alpha_prefix(v) if pd.notna(v) else ""
+        )
+        display_prefix = display_prefix.map(
+            lambda p: f"display_prefix:{p}" if len(p) >= 3 else None
+        )
+
+        plant_group_key = (
+            eic_parent.combine_first(distinct_parent_eic)
+            .combine_first(long_name_key)
+            .combine_first(display_prefix)
+        )
+
+        has_group_key = plant_group_key.notna()
+        already_matched = interim_lat.notna()
+
+        sibling_lookup = (
+            pd.DataFrame(
+                {
+                    "_key": plant_group_key[already_matched & has_group_key],
+                    "_lat": interim_lat[already_matched & has_group_key],
+                    "_lon": interim_lon[already_matched & has_group_key],
+                    "_name": df.loc[already_matched & has_group_key, pp_name_col],
+                }
+            )
+            .dropna(subset=["_key"])
+            .drop_duplicates(subset=["_key"])
+            .set_index("_key")
+        )
+
+        needs_sibling = ~already_matched & has_group_key
+        for idx in df.index[needs_sibling]:
+            key = plant_group_key.at[idx]
+            if key in sibling_lookup.index:
+                sib = sibling_lookup.loc[key]
+                df.at[idx, "sibling.lat"] = sib["_lat"]
+                df.at[idx, "sibling.lon"] = sib["_lon"]
+                df.at[idx, "sibling.match_source"] = f"sibling_of:{sib['_name']}"
+
+        sibling_matched_count = df["sibling.lat"].notna().sum()
+        logger.info(
+            f"[{zone_name}] Sibling-unit fallback: {sibling_matched_count} additional "
+            f"units matched via a co-located sibling unit."
+        )
+
+        # ------------------------------------------------------------------ #
+        # 11. Finalise lat / lon, match_source, and write output CSV         #
+        # ------------------------------------------------------------------ #
+        df["lat"] = interim_lat.combine_first(df["sibling.lat"])
+        df["lon"] = interim_lon.combine_first(df["sibling.lon"])
+
         osm_derived_source = df.apply(
-            lambda r: "osm" if pd.notna(r.get("osm.lat")) else "unmatched", axis=1
+            lambda r: (
+                "osm"
+                if pd.notna(r.get("osm.lat"))
+                else "sibling_unit"
+                if pd.notna(r.get("sibling.lat"))
+                else "unmatched"
+            ),
+            axis=1,
         )
         df["match_source"] = (
             df["ppm.match_source"]
@@ -715,266 +869,6 @@ class CoordinateLocator:
     #             f"{similarity}:\n{row}"
     #         )
 
-    def _match_with_name(self, df_eg_unique: pd.DataFrame) -> pd.DataFrame:
-        """Find coordinates for powerplants via fuzzy name matching.
-
-        Compare pp names from eg data to ones in the pp database. If match is
-        found, validated fuel type to see if they are similar (to not accidentally match a
-        pp that has a similar name but is actually producing entirely different).
-
-        NOTE: I would expect this to do better... Probably necessary to tweak fuzzy matching!
-        F.e. for Poland 11 out of 131 plants are matched...
-
-        Args:
-            df_eg_unique (pd.DataFrame): Dataframe of unique pps from energy generation
-                with cols: [rel_cols, lat, lon]
-
-        Returns:
-            pd.DataFrame: Original input dataframe including any newly matched coordinates
-                with cols: [rel_cols, lat, lon]
-        """
-        try:
-            # --- focus ONLY on rows that haven't been matched yet
-            df_unmatched = df_eg_unique[df_eg_unique["lat"].isna()].copy()
-            if df_unmatched.empty:
-                logger.info("All plants already matched. Skipping name matching.")
-                return df_eg_unique
-
-            # --- batch fuzzy match with ordered candidate names per row:
-            # 1) original ENTSO-E unit name
-            # 2) EIC long name
-            # 3) EIC display name
-            # 4) WikiData label (if available)
-            def _pick_best_pp_match(row: pd.Series) -> pd.Series:
-                source_name = str(row[self.name_col])
-                alt_names = self._enriched_names.get(source_name, [])
-
-                best_match = None
-                best_score = -1.0
-                best_source = "raw"
-
-                ordered_candidates: list[tuple[str | None, str]] = [
-                    (source_name, "raw")
-                ]
-                for idx, alt_name in enumerate(alt_names):
-                    source_tag = (
-                        "eic_long_name"
-                        if idx == 0
-                        else "eic_display_name"
-                        if idx == 1
-                        else "wikidata_name"
-                    )
-                    ordered_candidates.append((alt_name, source_tag))
-
-                expanded_candidates: list[tuple[str | None, str]] = []
-                for candidate_name, source_tag in ordered_candidates:
-                    expanded_candidates.append((candidate_name, source_tag))
-                    stripped_name = self._strip_numeric_name_tokens(candidate_name)
-                    stripped_tag = f"{source_tag}_no_numbers"
-                    if stripped_name and stripped_name != candidate_name:
-                        expanded_candidates.append((stripped_name, stripped_tag))
-
-                for candidate_name, source_tag in expanded_candidates:
-                    if not candidate_name or pd.isna(candidate_name):
-                        continue
-                    match = process.extractOne(
-                        str(candidate_name).lower(),
-                        self.pp_names,
-                        scorer=fuzz.WRatio,
-                    )
-                    if match and float(match[1]) > best_score:
-                        best_match = str(match[0])
-                        best_score = float(match[1])
-                        best_source = source_tag
-
-                if best_match and best_score > 80:
-                    return pd.Series(
-                        {
-                            "matched_pp_name": best_match,
-                            "matched_score": best_score,
-                            "matched_name_source": best_source,
-                        }
-                    )
-
-                return pd.Series(
-                    {
-                        "matched_pp_name": None,
-                        "matched_score": None,
-                        "matched_name_source": None,
-                    }
-                )
-
-            df_unmatched[
-                ["matched_pp_name", "matched_score", "matched_name_source"]
-            ] = df_unmatched.apply(_pick_best_pp_match, axis=1)
-            df_unmatched = df_unmatched.dropna(subset=["matched_pp_name"])
-
-            if not df_unmatched.empty:
-                num_enriched_used = int(
-                    (df_unmatched["matched_name_source"] != "raw").sum()
-                )
-                if num_enriched_used > 0:
-                    logger.info(
-                        f"Name matching used alternative enriched names for {num_enriched_used} "
-                        "plants."
-                    )
-
-            # --- pull fuel types and coordinates from self.df_pp using the matched names
-            df_pp_lookup = self.df_pp[["Name", "Fueltype", "lat", "lon"]].rename(
-                columns={"Fueltype": "pp_fueltype"}
-            )
-            df_pp_lookup = df_pp_lookup.drop_duplicates(subset=["Name"])  # 1-to-1 match
-
-            # --- merge fuzzy mapping to get target data coordinates and fuel types
-            df_candidates = pd.merge(
-                df_unmatched.drop(columns=["lat", "lon"]),  # drop to avoid double cols!
-                df_pp_lookup,
-                left_on="matched_pp_name",
-                right_on="Name",
-                how="inner",
-            )
-
-            # !!! FUEL TYPE GUARDRAIL !!!
-            # --- filter out rows where a name matched but fuel type is completely mismatched
-            if self.fuel_col:
-                is_valid_fuel = df_candidates.apply(
-                    lambda row: self._is_fueltype_compatible(
-                        row[self.fuel_col], row["pp_fueltype"]
-                    ),
-                    axis=1,
-                )
-                df_candidates = df_candidates[is_valid_fuel]
-
-            # convert back to an indexable lookup table for combine_first
-            df_new_matches = df_candidates.set_index(self.name_col)[["lat", "lon"]]
-
-            # --- patch the validated coordinates into the main dataframe
-            df_output = df_eg_unique.set_index(self.name_col)
-            df_output = df_output.combine_first(df_new_matches).reset_index()
-
-            # --- log stats
-            num_old_matches = df_eg_unique["lat"].notna().sum()
-            num_all_matches = df_output["lat"].notna().sum()
-            num_new_matches = int(num_all_matches - num_old_matches)
-            self.match_stats["_match_with_name"] = num_new_matches
-            logger.info(
-                f"Successfully matched {num_new_matches} NEW pp (out of {len(df_eg_unique)} "
-                f"total) via fuzzy name + fuel type matching!"
-            )
-            return df_output
-
-        except Exception as e:
-            logger.warning(
-                f"Error in attempt to find matches via Name + Fuel validation: {e}"
-            )
-            return df_eg_unique
-
-    def _match_with_eic_wikidata(self, df_eg_unique: pd.DataFrame) -> pd.DataFrame:
-        """Find coordinates or enrich names via EIC code lookup against WikiData and the ENTSO-E EIC directory.
-
-        Two sub-strategies run for each still-unmatched plant that has an EIC code:
-
-        1. ENTSO-E EIC directory (no API key, fast, offline-capable):
-           Looks up the official registered display name for the unit's EIC code.
-           The enriched name is stored so that the subsequent OpenInfra fuzzy-matching
-           step can use it instead of the often-generic ENTSO-E unit name.
-
-        2. WikiData (P3179 = EIC code, P625 = coordinates):
-           If coordinates are found in WikiData they are written directly to lat/lon,
-           skipping the name-matching steps entirely.  If only a label is returned it
-           is stored as an enriched name for OpenInfra matching.
-
-        Args:
-            df_eg_unique (pd.DataFrame): Dataframe of unique pps from energy generation
-                with cols: [rel_cols, lat, lon, osm_*]
-
-        Returns:
-            pd.DataFrame: Input dataframe with any newly found coordinates filled in.
-        """
-        try:
-            df_unmatched = df_eg_unique[df_eg_unique["lat"].isna()].copy()
-            df_with_code = df_unmatched[df_unmatched[self.code_col].notna()]
-            if df_with_code.empty:
-                return df_eg_unique
-
-            logger.info(
-                f"EIC lookup: querying WikiData + EIC directory for "
-                f"{len(df_with_code)} unmatched plants with EIC codes..."
-            )
-
-            new_coords: dict[str, dict] = {}  # plant_name → {lat, lon, osm_url}
-
-            for _, row in df_with_code.iterrows():
-                eic = str(row[self.code_col]).strip()
-                plant_name = str(row[self.name_col])
-
-                # --- Strategy 1: EIC directory -> ordered name enrichment
-                official_names = self.eic_locator.lookup_names(eic)
-                if official_names:
-                    ordered_names = [
-                        name for name in official_names if name != plant_name
-                    ]
-                    if ordered_names:
-                        self._enriched_names[plant_name] = ordered_names
-                        logger.debug(
-                            f"  EIC directory: '{plant_name}' -> official names {ordered_names}"
-                        )
-
-                # --- Strategy 2: WikiData → direct coordinates (or label enrichment)
-                wd = lookup_eic_in_wikidata(eic)
-                if wd is None:
-                    continue
-
-                if wd.get("name"):
-                    existing_names = self._enriched_names.get(plant_name, [])
-                    wd_name = str(wd["name"])
-                    if wd_name != plant_name and wd_name not in existing_names:
-                        self._enriched_names[plant_name] = existing_names + [wd_name]
-                        logger.debug(
-                            f"  WikiData: '{plant_name}' -> label '{wd['name']}'"
-                        )
-
-                if wd.get("lat") is not None and wd.get("lon") is not None:
-                    new_coords[plant_name] = {
-                        "lat": wd["lat"],
-                        "lon": wd["lon"],
-                        "osm_url": wd.get("wikidata_url"),  # WikiData URL stored here
-                    }
-                    logger.info(
-                        f"  WikiData: direct coordinates for '{plant_name}' "
-                        f"({wd['lat']:.4f}, {wd['lon']:.4f})"
-                    )
-
-            num_enriched = len(self._enriched_names)
-            if not new_coords:
-                self.match_stats["_match_with_eic_wikidata"] = 0
-                logger.info(
-                    f"EIC lookup: 0 direct coordinate matches. "
-                    f"{num_enriched} unit names enriched for downstream matching."
-                )
-                return df_eg_unique
-
-            df_new_matches = pd.DataFrame(
-                [{self.name_col: name, **coords} for name, coords in new_coords.items()]
-            ).set_index(self.name_col)
-
-            df_output = df_eg_unique.set_index(self.name_col)
-            df_output = df_output.combine_first(df_new_matches).reset_index()
-
-            num_new = int(
-                df_output["lat"].notna().sum() - df_eg_unique["lat"].notna().sum()
-            )
-            self.match_stats["_match_with_eic_wikidata"] = num_new
-            logger.info(
-                f"EIC lookup: {num_new} direct coordinate matches via WikiData. "
-                f"{num_enriched} unit names enriched for downstream matching."
-            )
-            return df_output
-
-        except Exception as e:
-            logger.warning(f"Error in EIC WikiData/directory matching: {e}")
-            return df_eg_unique
-
     def _match_with_openinfra(self, df_eg_unique: pd.DataFrame) -> pd.DataFrame:
         """Find coordinates for powerplants via OpenInfra/Overpass OSM records.
 
@@ -1041,7 +935,7 @@ class CoordinateLocator:
             # normalize + expand plant-type tokens for more robust Balkan matching
             df_lookup["name_norm"] = df_lookup["Name"].apply(
                 lambda n: self._expand_plant_name_tokens(
-                    self._normalize_name(n), PLANT_NAME_EXPANSIONS
+                    self._normalize_name(n), self._plant_name_expansions
                 )
             )
             df_lookup = df_lookup[df_lookup["name_norm"] != ""]
@@ -1053,7 +947,7 @@ class CoordinateLocator:
             # that happen to be a single word (e.g. "Sloecentrale" → "sloecentrale") must
             # NOT be dropped.
             _generic_single_tokens = frozenset(
-                v for v in PLANT_NAME_EXPANSIONS.values() if len(v.split()) == 1
+                v for v in self._plant_name_expansions.values() if len(v.split()) == 1
             )
             df_lookup = df_lookup[
                 ~(
@@ -1074,13 +968,7 @@ class CoordinateLocator:
                 alt_names = self._enriched_names.get(plant_name, [])
                 ordered_candidates: list[tuple[str, str]] = [(plant_name, "raw")]
                 for idx, alt_name in enumerate(alt_names):
-                    source_tag = (
-                        "eic_long_name"
-                        if idx == 0
-                        else "eic_display_name"
-                        if idx == 1
-                        else "wikidata_name"
-                    )
+                    source_tag = "eic_long_name" if idx == 0 else "eic_display_name"
                     ordered_candidates.append((alt_name, source_tag))
 
                 expanded_candidates: list[tuple[str, str]] = []
@@ -1100,7 +988,7 @@ class CoordinateLocator:
                 for candidate_name, candidate_source in expanded_candidates:
                     raw_norm = self._normalize_name(candidate_name)
                     target_norm = self._expand_plant_name_tokens(
-                        raw_norm, PLANT_NAME_EXPANSIONS
+                        raw_norm, self._plant_name_expansions
                     )
                     if not target_norm:
                         continue
@@ -1408,6 +1296,28 @@ class CoordinateLocator:
         ]
         return " ".join(tokens).strip()
 
+    @classmethod
+    def _strip_trailing_unit_suffix(cls, value: str | None) -> str:
+        """Strip a trailing unit-suffix glued directly onto the plant name.
+
+        Some ENTSO-E naming conventions concatenate the unit suffix directly onto
+        the plant name with no separating space/underscore (e.g.
+        ``"ENGURIUNIT_5"`` -> ``"enguri"``), which the space-tokenized
+        :meth:`_strip_numeric_name_tokens` cannot catch since "enguriunit" and "5"
+        would otherwise remain a single glued token.
+
+        Returns:
+            str: The name with the trailing unit-suffix removed, or ``""`` if the
+                name doesn't end in a recognized unit-suffix (no fallback needed).
+        """
+        normalized = cls._normalize_name(value)
+        if not normalized:
+            return ""
+
+        unit_words = "|".join(token for token in GENERIC_UNIT_TOKENS if len(token) > 1)
+        stripped = re.sub(rf"(?:{unit_words})\s*\d*$", "", normalized).strip()
+        return stripped if stripped and stripped != normalized else ""
+
     @staticmethod
     def _country_to_iso2(country: str | None) -> str | None:
         """Map country name aliases used in datasets to ISO-2 country code."""
@@ -1529,23 +1439,39 @@ if "__main__" == __name__:
     # --- configure input here: pick ONE of the three forms ---
     #
     # 1) Container folder — every subdirectory becomes one zone:
-    input_paths: Path | str | list[Path | str] = Path("../testdata/energy/entsoe/1h/")
+    # input_paths: Path | str | list[Path | str] = Path("../testdata/energy/entsoe/1h/")
     #
     # 2) Single zone folder:
-    # input_paths = Path("../testdata/energy/entsoe/1h/10YFI-1--------U/")
-    # input_paths = Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/")
+    # input_paths = Path("../testdata/energy/entsoe/1h/10Y1001A1001A39I/")
 
     #
     # 3) Explicit list of zone folders (mix of single zones and containers allowed):
-    # input_paths = [
-    #    Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/"),
-    #    Path("../testdata/energy/entsoe/1h/10Y1001A1001A990/"),
-    #    Path("../testdata/energy/entsoe/1h/10Y1001C--00100H/"),
-    #    Path("../testdata/energy/entsoe/1h/10YAL-KESH-----5/"),
-    #    Path("../testdata/energy/entsoe/1h/10YAT-APG------L/"),
-    #    Path("../testdata/energy/entsoe/1h/10YBA-JPCC-----D/"),
-    #    Path("../testdata/energy/entsoe/1h/10YNL----------L/"),
-    # ]
+    input_paths: Path | str | list[Path | str] = [
+        Path("../testdata/energy/entsoe/1h/10Y1001A1001A39I/"),
+        Path("../testdata/energy/entsoe/1h/10Y1001A1001A990/"),
+        Path("../testdata/energy/entsoe/1h/10Y1001A1001B012/"),
+        Path("../testdata/energy/entsoe/1h/10Y1001C--00100H/"),
+        Path("../testdata/energy/entsoe/1h/10YAL-KESH-----5/"),
+        Path("../testdata/energy/entsoe/1h/10YAT-APG------L/"),
+        Path("../testdata/energy/entsoe/1h/10YBA-JPCC-----D/"),
+        Path("../testdata/energy/entsoe/1h/10YBE----------2/"),
+        Path("../testdata/energy/entsoe/1h/10YCA-BULGARIA-R/"),
+        Path("../testdata/energy/entsoe/1h/10YCH-SWISSGRIDZ/"),
+        Path("../testdata/energy/entsoe/1h/10YCS-CG-TSO---S/"),
+        Path("../testdata/energy/entsoe/1h/10YCS-SERBIATSOV/"),
+        Path("../testdata/energy/entsoe/1h/10YDE-ENBW-----N/"),
+        Path("../testdata/energy/entsoe/1h/10YDE-EON------1/"),
+        Path("../testdata/energy/entsoe/1h/10YDE-RWENET---I/"),
+        Path("../testdata/energy/entsoe/1h/10YDE-VE-------2/"),
+        Path("../testdata/energy/entsoe/1h/10YFI-1--------U/"),
+        Path("../testdata/energy/entsoe/1h/10YGR-HTSO-----Y/"),
+        Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/"),
+        Path("../testdata/energy/entsoe/1h/10YMK-MEPSO----8/"),
+        Path("../testdata/energy/entsoe/1h/10YNL----------L/"),
+        Path("../testdata/energy/entsoe/1h/10YPT-REN------W/"),
+        Path("../testdata/energy/entsoe/1h/10YSE-1--------K/"),
+        Path("../testdata/energy/entsoe/1h/10YSK-SEPS-----K/"),
+    ]
 
     zone_dirs = _collect_zone_dirs(input_paths)
     dataframes: list[pd.DataFrame] = []

@@ -136,6 +136,7 @@ class PPMLocator:
     def fuzzy_match_by_name(
         self,
         name: str | None,
+        country: str | None = None,
         threshold: int = 85,
     ) -> dict | None:
         """Fuzzy-match a plant name against the powerplantmatching database.
@@ -145,6 +146,10 @@ class PPMLocator:
 
         Args:
             name (str | None): Plant name to search for.
+            country (str | None): Restrict candidates to this country, if given.
+                Strongly recommended — searching the full (pan-European) database
+                without a country filter risks matching a similarly-named plant in
+                a completely different country.
             threshold (int): Minimum WRatio score (0–100) to accept a match.
                 Defaults to 85.
 
@@ -156,6 +161,11 @@ class PPMLocator:
             return None
 
         df_with_coords = self.df_europe.dropna(subset=["lat", "lon"])
+        if country:
+            df_with_coords = df_with_coords[
+                df_with_coords["Country"].astype(str).str.strip().str.lower()
+                == str(country).strip().lower()
+            ]
         if df_with_coords.empty:
             return None
 

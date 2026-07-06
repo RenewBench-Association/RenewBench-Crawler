@@ -177,6 +177,7 @@ class GEMLocator:
         "gem_location_id",
         "plant_name",
         "unit_name",
+        "other_names",
         "Country",
         "Fueltype",
         "Capacity",
@@ -272,7 +273,19 @@ class GEMLocator:
                 df_raw, aliases.get("gem_unit_id", [])
             )
             df_norm["gem_location_id"] = _first_present_str(df_raw, ["GEM location ID"])
-            df_norm["Country"] = _first_present_str(df_raw, ["Country/Area"])
+            # Most trackers use "Country/Area"; the Hydropower tracker instead uses
+            # "Country/Area 1" / "Country/Area 2" to support binational plants — fall
+            # back to the primary one so country filtering doesn't silently drop
+            # every hydro-tracker row (e.g. GEM's "Enguri hydroelectric plant").
+            df_norm["Country"] = _first_present_str(
+                df_raw, ["Country/Area", "Country/Area 1"]
+            )
+            # Comma-separated alternate/historic/local names (e.g. "Les Awirs,
+            # Centrale des Awirs, Flemalle") — often includes names that better
+            # match ENTSO-E/OSM naming than the official "plant_name".
+            df_norm["other_names"] = _first_present_str(
+                df_raw, ["Other Name(s)", "Other name(s)"]
+            )
             df_norm["Capacity"] = pd.to_numeric(
                 _first_present(df_raw, ["Capacity (MW)", "Unit Capacity (MW)"]),
                 errors="coerce",
@@ -366,6 +379,13 @@ class GEMLocator:
         by *country* first (when given) is important to avoid cross-country name
         collisions (e.g. generically-named plants like "Riga" duplicated by unit).
 
+        Candidates include both each row's official ``plant_name`` and every
+        individual alternate name from GEM's "Other Name(s)" column (e.g. GEM
+        lists Belgium's "Flemalle CCGT" under ``plant_name`` "Awirs" with
+        ``other_names`` "Les Awirs, Centrale des Awirs, Flemalle") — this often
+        includes local/historic names that match ENTSO-E/OSM naming better than
+        the official plant name.
+
         Args:
             name (str | None): Plant name to search for.
             country (str | None): Restrict candidates to this country, if given.
@@ -392,13 +412,33 @@ class GEMLocator:
         if df_candidates.empty:
             return None
 
-        pp_names: list[str] = df_candidates["plant_name"].dropna().tolist()
-        if not pp_names:
+        # Build the candidate name list: each plant's official name, plus every
+        # individual alternate name split out of "other_names". Track the source
+        # row label for each candidate string so a hit on an alternate name can
+        # still be resolved back to its row.
+        candidate_names: list[str] = []
+        candidate_row_labels: list[object] = []
+        for row_label, plant_name, other_names in zip(
+            df_candidates.index,
+            df_candidates["plant_name"],
+            df_candidates.get("other_names", pd.Series(dtype="string")),
+        ):
+            if pd.notna(plant_name) and str(plant_name).strip():
+                candidate_names.append(str(plant_name).strip())
+                candidate_row_labels.append(row_label)
+            if pd.notna(other_names) and str(other_names).strip():
+                for alt_name in str(other_names).split(","):
+                    alt_name = alt_name.strip()
+                    if alt_name:
+                        candidate_names.append(alt_name)
+                        candidate_row_labels.append(row_label)
+
+        if not candidate_names:
             return None
-        pp_names_lower = [n.lower() for n in pp_names]
+        candidate_names_lower = [n.lower() for n in candidate_names]
 
         matches = process.extract(
-            str(name).lower(), pp_names_lower, scorer=fuzz.WRatio, limit=5
+            str(name).lower(), candidate_names_lower, scorer=fuzz.WRatio, limit=5
         )
         if not matches or float(matches[0][1]) < threshold:
             return None
@@ -412,20 +452,22 @@ class GEMLocator:
                 f"Candidates: {[t[0] for t in tied]}"
             )
 
-        matched_lower = str(matches[0][0])
-        try:
-            original_name = pp_names[pp_names_lower.index(matched_lower)]
-        except ValueError:
-            return None
+        # rapidfuzz's process.extract returns (choice, score, index_in_choices) —
+        # use that index directly to resolve the row, since candidate strings
+        # (especially short alternate names) aren't guaranteed unique.
+        matched_index = int(matches[0][2])
+        row_label = candidate_row_labels[matched_index]
+        matched_name = candidate_names[matched_index]
 
-        rows = df_candidates[df_candidates["plant_name"] == original_name]
-        if rows.empty:
-            return None
-
-        row = rows.iloc[0]
+        row = df_candidates.loc[row_label]
         result = {
             col: (row[col] if col in row.index else None) for col in self._GEM_COLS
         }
         result["gem_match_score"] = top_score
         result["gem_tie_count"] = len(tied)
+        if matched_name != str(row.get("plant_name", "")).strip():
+            logger.debug(
+                f"GEMLocator: '{name}' matched via alternate name "
+                f"'{matched_name}' (plant_name='{row.get('plant_name')}')"
+            )
         return result

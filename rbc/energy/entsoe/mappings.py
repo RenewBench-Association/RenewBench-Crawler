@@ -148,6 +148,15 @@ FUELTYPE_DEFINITION_MAPPINGS = {
     "Substation": "substation",
     "Transformer": "transformer",
     "Energy storage": "storage",
+    # Battery storage sites are commonly tagged/labelled just "battery" by OSM
+    # (plant:source=battery) and "Battery"/"Battery Storage" by GEM/PPM, while
+    # ENTSO-E's own code/definition (B25 / "Energy storage") normalizes to
+    # "storage" — map these synonyms to the same canonical label so the
+    # fuel-type guardrail doesn't reject legitimate battery-storage matches.
+    "battery": "storage",
+    "Battery": "storage",
+    "battery storage": "storage",
+    "Battery Storage": "storage",
 }
 
 # combine code and definition mappings into a single master dictionary

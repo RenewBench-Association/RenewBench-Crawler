@@ -1,25 +1,15 @@
 """EIC code-based coordinate and name locators.
 
-Two strategies for enriching poorly-named ENTSO-E generation units:
-
-1. EICDirectoryLocator
-   Downloads ENTSO-E's public EIC code registry (no API key required) and provides
-   official display-name lookup by EIC code.  The result is used to replace generic
-   unit names such as "Unit 10" with their official plant name before downstream
-   fuzzy matching against OSM/OpenInfra.
-
-2. lookup_eic_in_wikidata
-   Queries the WikiData SPARQL endpoint using property P3179 (EIC code) and P625
-   (coordinate location).  When coordinates are found they are returned directly,
-   bypassing name matching entirely.  When only a label is found it is used as an
-   enriched name for downstream matching.
+Provides official display-name lookup by EIC code using ENTSO-E's public EIC code
+registry (no API key required). The result is used to replace generic unit names
+such as "Unit 10" with their official plant name before downstream fuzzy matching
+against OSM/OpenInfra.
 """
 
 from __future__ import annotations
 
 import io
 import re
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -34,7 +24,6 @@ EIC_DIRECTORY_URL = (
 _EIC_COL = "EicCode"
 _DISPLAY_NAME_COL = "EicDisplayName"
 _LONG_NAME_COL = "EicLongName"
-WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 _HEADER = {
     "User-Agent": (
         "RenewBench Association "
@@ -351,9 +340,17 @@ class EICDirectoryLocator:
                 df_prefix_candidates = exact_candidates
                 base_score = 95.0
             else:
+                # Require a reasonably long shared prefix (not just an exact
+                # containment) to avoid false groupings via generic plant-type
+                # abbreviations shared by many unrelated plants across countries
+                # (e.g. "HPP" for "Hydro Power Plant" — "HPPENGURIUNIT" (Georgia)
+                # trivially startswith "HPP", which would otherwise wrongly match
+                # e.g. Bulgaria's "HPP_SESTRIMO").
+                min_prefix_overlap = 5
                 contains_mask = prod_prefixes.apply(
                     lambda p: (
                         bool(p)
+                        and min(len(p), len(child_prefix)) >= min_prefix_overlap
                         and (p.startswith(child_prefix) or child_prefix.startswith(p))
                     )
                 )
@@ -493,64 +490,3 @@ class EICDirectoryLocator:
             "match_confidence": confidence,
             "match_method": "fuzzy",
         }
-
-
-def lookup_eic_in_wikidata(
-    eic_code: str,
-    delay_s: float = 0.5,
-) -> dict[str, str | float | None] | None:
-    """Query WikiData SPARQL for a power plant identified by EIC code (P3179).
-
-    Tries to retrieve:
-    - Coordinates directly via property P625 (best case: no further matching needed).
-    - English label as fallback for downstream name-based matching.
-
-    Args:
-        eic_code (str): The EIC code to look up (e.g. "49W0000000000415").
-        delay_s (float): Courtesy pause before the HTTP request to avoid WikiData
-            rate limits.  Defaults to 0.5 s.
-
-    Returns:
-        dict with keys 'name', 'lat', 'lon', 'wikidata_url', or None if not found.
-    """
-    if not eic_code or pd.isna(eic_code):
-        return None
-
-    time.sleep(delay_s)
-
-    query = f"""
-    SELECT ?item ?name ?lat ?lon WHERE {{
-      ?item wdt:P3179 "{str(eic_code).strip()}" .
-      OPTIONAL {{ ?item rdfs:label ?name . FILTER(LANG(?name) = "en") }}
-      OPTIONAL {{
-        ?item wdt:P625 ?coord .
-        BIND(geof:latitude(?coord)  AS ?lat)
-        BIND(geof:longitude(?coord) AS ?lon)
-      }}
-    }} LIMIT 1
-    """
-
-    try:
-        resp = requests.get(
-            WIKIDATA_SPARQL_URL,
-            params={"query": query, "format": "json"},
-            headers=_HEADER,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        bindings = resp.json().get("results", {}).get("bindings", [])
-
-        if not bindings:
-            return None
-
-        r = bindings[0]
-        return {
-            "name": r.get("name", {}).get("value"),
-            "lat": float(r["lat"]["value"]) if "lat" in r else None,
-            "lon": float(r["lon"]["value"]) if "lon" in r else None,
-            "wikidata_url": r.get("item", {}).get("value"),
-        }
-
-    except Exception as e:
-        logger.debug(f"WikiData lookup failed for EIC '{eic_code}': {e}")
-        return None

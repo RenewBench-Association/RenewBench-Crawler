@@ -37,6 +37,29 @@ PLANT_NAME_EXPANSIONS: dict[str, str] = {
     "nuklearna": "nuclear",
     "elektrana": "power plant",
     "elektrane": "power plant",
+    # --- Battery storage: keep the original abbreviation but also append
+    # "battery" as an additional keyword, since OSM/GEM/PPM commonly label
+    # storage sites "Battery ..." rather than "BESS ..." (e.g. ENTSO-E/local
+    # names like "BESS Andes" vs. OSM's "Andes Battery Storage").
+    "bess": "bess battery",
+}
+
+
+# Country-specific additions/overrides for PLANT_NAME_EXPANSIONS, keyed by ISO
+# 3166-1 alpha-2 country code (see COUNTRY_ISO2_MAP below). Applied on top of
+# the global PLANT_NAME_EXPANSIONS so that ambiguous or otherwise-incorrect
+# generic tokens can be refined per country without affecting other countries.
+COUNTRY_PLANT_NAME_EXPANSIONS: dict[str, dict[str, str]] = {
+    "EE": {
+        # ENTSO-E unit names use the generic Estonian word for "power plant"
+        # (e.g. "Balti Elektrijaam"), while OSM names the same stations with the
+        # more specific "soojuselektrijaam" ("thermal power plant", e.g. "Balti
+        # Soojuselektrijaam", "Eesti Soojuselektrijaam"). Expanding to the
+        # specific term lets fuzzy matching bridge the two sources.
+        "elektrijaam": "soojuselektrijaam",
+        "elektrijaama": "soojuselektrijaam",
+        "elektrijaamad": "soojuselektrijaam",
+    },
 }
 
 
