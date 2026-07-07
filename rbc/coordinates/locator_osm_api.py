@@ -205,7 +205,7 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
             )
 
     df = pd.DataFrame(results)
-    if df.empty:
+    if len(df) == 0:
         return _empty_osm_df()
     return df
 
@@ -262,7 +262,7 @@ def query_osm_country_plants(
             # Fast path: local parquet (processed DataFrame, loads in milliseconds)
             if parquet_path.exists():
                 df_parquet = _load_parquet(parquet_path)
-                if df_parquet is not None and not df_parquet.empty:
+                if df_parquet is not None and len(df_parquet) > 0:
                     return df_parquet
 
             # Fallback: raw JSON cache (re-parse on load)
@@ -270,7 +270,7 @@ def query_osm_country_plants(
                 cached = _load_cached_overpass(cache_path)
                 if isinstance(cached, dict):
                     df_cached = _elements_to_df(cached)
-                    if not df_cached.empty:
+                    if len(df_cached) > 0:
                         logger.info(
                             f"Loaded {len(df_cached)} OSM rows from JSON cache for "
                             f"country '{country_code}'."
@@ -288,7 +288,7 @@ def query_osm_country_plants(
             response.raise_for_status()
             data = response.json()
             df = _elements_to_df(data)
-            if not df.empty and not live:
+            if len(df) > 0 and not live:
                 if parquet_path is not None:
                     _save_parquet(parquet_path, df)
                 if cache_path is not None:
@@ -308,7 +308,7 @@ def query_osm_country_plants(
         cached = _load_cached_overpass(cache_path)
         if isinstance(cached, dict):
             df_cached = _elements_to_df(cached)
-            if not df_cached.empty:
+            if len(df_cached) > 0:
                 logger.warning(
                     f"All Overpass endpoints failed for '{country_code}'. "
                     "Using stale cached OSM data."

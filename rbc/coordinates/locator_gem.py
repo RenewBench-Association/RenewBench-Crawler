@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pandas as pd
 from loguru import logger
-from rapidfuzz import fuzz, process
 
 # Regex used to pull ENTSO-E EIC codes out of GEM's "Other IDs (...)" multi-value
 # strings, e.g. "ENTSO-E: 43W-RTEC-2-GG1-B, Beyond Fossil Fuels: LV-3-1"
@@ -170,8 +169,8 @@ class GEMLocator:
         df_gem (pd.DataFrame): Combined, normalized GEM data across all trackers found.
     """
 
-    # Columns included in the full-row dicts returned by match_by_entsoe_id /
-    # fuzzy_match_by_name. Mirrors PPMLocator._PPM_COLS.
+    # Columns included in the full-row dicts returned by match_by_entsoe_id.
+    # Mirrors PPMLocator._PPM_COLS.
     _GEM_COLS: tuple[str, ...] = (
         "gem_unit_id",
         "gem_location_id",
@@ -199,7 +198,9 @@ class GEMLocator:
         self.gem_dir = Path(gem_dir)
         self.cache_dir = Path(cache_dir) if cache_dir else self.gem_dir
         self.df_gem: pd.DataFrame = pd.DataFrame()
+        self._entsoe_id_index: dict[str, int] = {}
         self._load()
+        self._build_entsoe_id_index()
 
     # ------------------------------------------------------------------
     # Loading & normalization
@@ -322,14 +323,26 @@ class GEMLocator:
 
         return pd.concat(normalized_dfs, ignore_index=True)
 
-    def _entsoe_ids_for_row(self, row: pd.Series) -> list[str]:
-        """Extract all ENTSO-E EIC codes referenced by a combined GEM row."""
-        ids: list[str] = []
-        for col in ("_other_ids_unit", "_other_ids_location"):
-            val = row.get(col)
-            if isinstance(val, str):
-                ids.extend(_ENTSOE_ID_PATTERN.findall(val))
-        return ids
+    def _build_entsoe_id_index(self) -> None:
+        """Pre-compute an ENTSO-E EIC code -> row-position index, once.
+
+        ``match_by_entsoe_id`` used to run a full-dataframe ``.apply()`` (with a
+        regex extraction per row) on *every* call, i.e. an O(n) scan repeated for
+        every unit being matched. Building this index once at load time turns
+        each lookup into an O(1) dict access instead.
+        """
+        if len(self.df_gem) == 0:
+            return
+
+        index: dict[str, int] = {}
+        unit_ids = self.df_gem.get("_other_ids_unit", pd.Series(dtype=object))
+        location_ids = self.df_gem.get("_other_ids_location", pd.Series(dtype=object))
+        for pos, (unit_val, location_val) in enumerate(zip(unit_ids, location_ids)):
+            for val in (unit_val, location_val):
+                if isinstance(val, str):
+                    for eic in _ENTSOE_ID_PATTERN.findall(val):
+                        index.setdefault(eic, pos)
+        self._entsoe_id_index = index
 
     # ------------------------------------------------------------------
     # Public API
@@ -339,8 +352,8 @@ class GEMLocator:
         """Find a power plant by its ENTSO-E EIC code and return the row as a dict.
 
         Extracts ENTSO-E codes from GEM's "Other IDs (unit)" / "Other IDs (location)"
-        columns on demand (not pre-computed, since only a subset of trackers carry
-        these references).
+        columns via a pre-computed index (built once in :meth:`_build_entsoe_id_index`)
+        so repeated lookups are O(1) instead of re-scanning the whole dataframe.
 
         Args:
             entsoe_id (str | None): ENTSO-E EIC code to search for.
@@ -349,125 +362,16 @@ class GEMLocator:
             dict with keys from :attr:`_GEM_COLS`, or ``None`` if not found or the
             matched row has no coordinates.
         """
-        if self.df_gem.empty or not entsoe_id or pd.isna(entsoe_id):
+        if len(self.df_gem) == 0 or not entsoe_id or pd.isna(entsoe_id):
             return None
 
         target = str(entsoe_id).strip()
-        mask = self.df_gem.apply(
-            lambda row: target in self._entsoe_ids_for_row(row), axis=1
-        )
-        hits = self.df_gem[mask]
-        if hits.empty:
+        pos = self._entsoe_id_index.get(target)
+        if pos is None:
             return None
 
-        row = hits.iloc[0]
+        row = self.df_gem.iloc[pos]
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None
 
         return {col: (row[col] if col in row.index else None) for col in self._GEM_COLS}
-
-    def fuzzy_match_by_name(
-        self,
-        name: str | None,
-        country: str | None = None,
-        fuel_type: str | None = None,
-        threshold: int = 85,
-    ) -> dict | None:
-        """Fuzzy-match a plant name against the combined GEM database.
-
-        Uses ``fuzz.WRatio``. Only rows with coordinates are considered. Filtering
-        by *country* first (when given) is important to avoid cross-country name
-        collisions (e.g. generically-named plants like "Riga" duplicated by unit).
-
-        Candidates include both each row's official ``plant_name`` and every
-        individual alternate name from GEM's "Other Name(s)" column (e.g. GEM
-        lists Belgium's "Flemalle CCGT" under ``plant_name`` "Awirs" with
-        ``other_names`` "Les Awirs, Centrale des Awirs, Flemalle") — this often
-        includes local/historic names that match ENTSO-E/OSM naming better than
-        the official plant name.
-
-        Args:
-            name (str | None): Plant name to search for.
-            country (str | None): Restrict candidates to this country, if given.
-            fuel_type (str | None): Currently unused for filtering (reserved for a
-                future guardrail); fuel-type compatibility should be validated by
-                the caller using the returned ``Fueltype``.
-            threshold (int): Minimum WRatio score (0-100) to accept a match.
-                Defaults to 85.
-
-        Returns:
-            dict with keys from :attr:`_GEM_COLS` plus ``"gem_match_score"`` and
-            ``"gem_tie_count"`` (number of other rows tied at the same top score),
-            or ``None`` if no match above *threshold* was found.
-        """
-        if self.df_gem.empty or not name or pd.isna(name):
-            return None
-
-        df_candidates = self.df_gem.dropna(subset=["lat", "lon"])
-        if country:
-            df_candidates = df_candidates[
-                df_candidates["Country"].astype(str).str.strip().str.lower()
-                == str(country).strip().lower()
-            ]
-        if df_candidates.empty:
-            return None
-
-        # Build the candidate name list: each plant's official name, plus every
-        # individual alternate name split out of "other_names". Track the source
-        # row label for each candidate string so a hit on an alternate name can
-        # still be resolved back to its row.
-        candidate_names: list[str] = []
-        candidate_row_labels: list[object] = []
-        for row_label, plant_name, other_names in zip(
-            df_candidates.index,
-            df_candidates["plant_name"],
-            df_candidates.get("other_names", pd.Series(dtype="string")),
-        ):
-            if pd.notna(plant_name) and str(plant_name).strip():
-                candidate_names.append(str(plant_name).strip())
-                candidate_row_labels.append(row_label)
-            if pd.notna(other_names) and str(other_names).strip():
-                for alt_name in str(other_names).split(","):
-                    alt_name = alt_name.strip()
-                    if alt_name:
-                        candidate_names.append(alt_name)
-                        candidate_row_labels.append(row_label)
-
-        if not candidate_names:
-            return None
-        candidate_names_lower = [n.lower() for n in candidate_names]
-
-        matches = process.extract(
-            str(name).lower(), candidate_names_lower, scorer=fuzz.WRatio, limit=5
-        )
-        if not matches or float(matches[0][1]) < threshold:
-            return None
-
-        top_score = float(matches[0][1])
-        tied = [m for m in matches if float(m[1]) == top_score]
-        if len(tied) > 1:
-            logger.warning(
-                f"GEMLocator: fuzzy name match for '{name}' has {len(tied)} tied "
-                f"candidates at score {top_score:.0f} — using the first one. "
-                f"Candidates: {[t[0] for t in tied]}"
-            )
-
-        # rapidfuzz's process.extract returns (choice, score, index_in_choices) —
-        # use that index directly to resolve the row, since candidate strings
-        # (especially short alternate names) aren't guaranteed unique.
-        matched_index = int(matches[0][2])
-        row_label = candidate_row_labels[matched_index]
-        matched_name = candidate_names[matched_index]
-
-        row = df_candidates.loc[row_label]
-        result = {
-            col: (row[col] if col in row.index else None) for col in self._GEM_COLS
-        }
-        result["gem_match_score"] = top_score
-        result["gem_tie_count"] = len(tied)
-        if matched_name != str(row.get("plant_name", "")).strip():
-            logger.debug(
-                f"GEMLocator: '{name}' matched via alternate name "
-                f"'{matched_name}' (plant_name='{row.get('plant_name')}')"
-            )
-        return result

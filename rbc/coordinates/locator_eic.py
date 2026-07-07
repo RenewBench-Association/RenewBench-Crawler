@@ -75,6 +75,10 @@ class EICDirectoryLocator:
         self._eic_col: str | None = None
         self._display_name_col: str | None = None
         self._long_name_col: str | None = None
+        self._eic_index: dict[str, int] = {}
+        self._df_prod_cache: pd.DataFrame | None = None
+        self._prod_prefixes_cache: pd.Series | None = None
+        self._prod_candidates_cache: list[str] | None = None
         self._load()
 
     # ------------------------------------------------------------------
@@ -122,6 +126,7 @@ class EICDirectoryLocator:
             if _LONG_NAME_COL in self.df_eic.columns:
                 self._long_name_col = _LONG_NAME_COL
             logger.info(f"EICDirectoryLocator initialized: {len(self.df_eic)} entries")
+            self._build_eic_index()
             return
 
         # Fallback: case-insensitive detection for cached files with different format.
@@ -151,54 +156,29 @@ class EICDirectoryLocator:
                 "EICDirectoryLocator: could not identify required columns. "
                 f"Available: {list(self.df_eic.columns)}"
             )
+        self._build_eic_index()
+
+    def _build_eic_index(self) -> None:
+        """Pre-compute an EIC-code -> row-position index, once.
+
+        ``lookup_full_row`` used to run a full string-compare scan
+        (``.str.strip() == target``) over the whole 30k+ row directory on
+        *every* call. Building this index once at load time turns each lookup
+        into an O(1) dict access instead (first occurrence wins, same as the
+        previous ``hits.iloc[0]`` behaviour).
+        """
+        if len(self.df_eic) == 0 or not self._eic_col:
+            return
+
+        index: dict[str, int] = {}
+        for pos, code in enumerate(self.df_eic[self._eic_col]):
+            if pd.notna(code):
+                index.setdefault(str(code).strip(), pos)
+        self._eic_index = index
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    def lookup_names(self, eic_code: str) -> list[str]:
-        """Return ordered official names for an EIC code.
-
-        The order is chosen for downstream matching quality:
-        1. EicLongName
-        2. EicDisplayName
-
-        Args:
-            eic_code (str): ENTSO-E EIC code to look up.
-
-        Returns:
-            list[str]: Ordered unique non-empty name candidates.
-        """
-        if self.df_eic.empty or not self._eic_col or not eic_code:
-            return []
-
-        mask = self.df_eic[self._eic_col].str.strip() == str(eic_code).strip()
-        hits = self.df_eic[mask]
-        if hits.empty:
-            return []
-
-        row = hits.iloc[0]
-        names: list[str] = []
-        for col in (self._long_name_col, self._display_name_col):
-            if col and col in row.index:
-                val = row[col]
-                if pd.notna(val):
-                    name = str(val).strip()
-                    if name and name not in names:
-                        names.append(name)
-        return names
-
-    def lookup_name(self, eic_code: str) -> str | None:
-        """Return the best official name for an EIC code, or None if not found.
-
-        Args:
-            eic_code (str): ENTSO-E EIC code to look up.
-
-        Returns:
-            str | None: Best official name (LongName preferred), or None if not found.
-        """
-        names = self.lookup_names(eic_code)
-        return names[0] if names else None
 
     # Fields returned by lookup_full_row
     _WCODE_FIELDS: tuple[str, ...] = (
@@ -221,15 +201,14 @@ class EICDirectoryLocator:
             EicResponsibleParty, EicStatus, EicTypeFunctionList.  Values are
             stripped strings or None.  Returns an empty dict if not found.
         """
-        if self.df_eic.empty or not self._eic_col or not eic_code:
+        if len(self.df_eic) == 0 or not self._eic_col or not eic_code:
             return {}
 
-        mask = self.df_eic[self._eic_col].str.strip() == str(eic_code).strip()
-        hits = self.df_eic[mask]
-        if hits.empty:
+        pos = self._eic_index.get(str(eic_code).strip())
+        if pos is None:
             return {}
 
-        row = hits.iloc[0]
+        row = self.df_eic.iloc[pos]
         result: dict[str, str | None] = {}
         for col in self._WCODE_FIELDS:
             if col in row.index:
@@ -282,7 +261,7 @@ class EICDirectoryLocator:
             (``"direct_parent"`` / ``"display_prefix"`` / ``"fuzzy"``); or ``None`` if
             no match was found.
         """
-        if self.df_eic.empty or not self._eic_col:
+        if len(self.df_eic) == 0 or not self._eic_col:
             return None
 
         # --- Strategy 1: direct parent EIC lookup ---
@@ -312,11 +291,16 @@ class EICDirectoryLocator:
             )
             self._prod_type_logged = True
 
-        prod_mask = self.df_eic[type_col].str.contains(
-            r"Production.?Unit|A26", na=False, regex=True, case=False
-        )
-        df_prod = self.df_eic[prod_mask].copy()
-        if df_prod.empty:
+        # The Production Unit subset (and everything derived from it below) is
+        # static — it doesn't depend on the function arguments — so it's computed
+        # once and cached instead of being rebuilt on every call.
+        if self._df_prod_cache is None:
+            prod_mask = self.df_eic[type_col].str.contains(
+                r"Production.?Unit|A26", na=False, regex=True, case=False
+            )
+            self._df_prod_cache = self.df_eic[prod_mask].copy()
+        df_prod = self._df_prod_cache
+        if len(df_prod) == 0:
             logger.debug(
                 "EICDirectoryLocator: no Production Unit entries found in EIC "
                 "directory for fuzzy parent matching."
@@ -333,10 +317,14 @@ class EICDirectoryLocator:
         prefix_score = -1.0
         child_prefix = _alpha_prefix(display_name)
         if child_prefix and len(child_prefix) >= 3 and self._display_name_col:
-            prod_prefixes = df_prod[self._display_name_col].apply(_alpha_prefix)
+            if self._prod_prefixes_cache is None:
+                self._prod_prefixes_cache = df_prod[self._display_name_col].apply(
+                    _alpha_prefix
+                )
+            prod_prefixes = self._prod_prefixes_cache
             exact_candidates = df_prod[prod_prefixes == child_prefix]
 
-            if not exact_candidates.empty:
+            if len(exact_candidates) > 0:
                 df_prefix_candidates = exact_candidates
                 base_score = 95.0
             else:
@@ -414,17 +402,21 @@ class EICDirectoryLocator:
             }
 
         # --- Strategy 2b: fuzzy match against Production Unit entries ---
-        # Build candidate name list from production unit long/display names
-        candidates: list[str] = []
-        for col in (self._long_name_col, self._display_name_col):
-            if col and col in df_prod.columns:
-                candidates.extend(df_prod[col].dropna().str.strip().tolist())
-        seen: set[str] = set()
-        unique_candidates: list[str] = []
-        for c in candidates:
-            if c and c not in seen:
-                seen.add(c)
-                unique_candidates.append(c)
+        # Build candidate name list from production unit long/display names (cached,
+        # since it's static and would otherwise be rebuilt on every call).
+        if self._prod_candidates_cache is None:
+            candidates: list[str] = []
+            for col in (self._long_name_col, self._display_name_col):
+                if col and col in df_prod.columns:
+                    candidates.extend(df_prod[col].dropna().str.strip().tolist())
+            seen: set[str] = set()
+            unique_candidates: list[str] = []
+            for c in candidates:
+                if c and c not in seen:
+                    seen.add(c)
+                    unique_candidates.append(c)
+            self._prod_candidates_cache = unique_candidates
+        unique_candidates = self._prod_candidates_cache
         if not unique_candidates:
             return None
 
@@ -454,7 +446,7 @@ class EICDirectoryLocator:
         for col in (self._long_name_col, self._display_name_col):
             if col and col in df_prod.columns:
                 matches = df_prod[df_prod[col].str.strip() == best_match_name]
-                if not matches.empty:
+                if len(matches) > 0:
                     hit_row = matches.iloc[0]
                     break
         if hit_row is None:

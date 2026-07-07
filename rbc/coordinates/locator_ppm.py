@@ -7,7 +7,6 @@ import ast
 
 import pandas as pd
 from loguru import logger
-from rapidfuzz import fuzz, process
 
 # import powerplantmatching as ppm
 
@@ -24,7 +23,23 @@ class PPMLocator:
         self.df_europe["entsoe_id_list"] = self.df_europe["projectID"].apply(
             self._extract_entsoe_code_list
         )
+        self._entsoe_id_index = self._build_entsoe_id_index()
         logger.info("PPMLocator initialized")
+
+    def _build_entsoe_id_index(self) -> dict[str, int]:
+        """Pre-compute an ENTSO-E EIC code -> row-position index, once.
+
+        ``match_by_entsoe_id`` used to call ``self.df_europe.explode(...)`` — an
+        O(n) operation over the whole (pan-European) PPM dataframe — on *every*
+        lookup. Building this index once at load time turns each lookup into an
+        O(1) dict access instead, without changing which row is matched (first
+        occurrence in row order is kept, same as before).
+        """
+        index: dict[str, int] = {}
+        for pos, id_list in enumerate(self.df_europe["entsoe_id_list"]):
+            for eic in id_list:
+                index.setdefault(eic, pos)
+        return index
 
     def get_pp_df_from_static_csv(self, country: str) -> pd.DataFrame:
         """Gets power plant df of all energy entities in a given country from static csv.
@@ -80,8 +95,8 @@ class PPMLocator:
 
         return []
 
-    # Columns included in the full-row dicts returned by match_by_entsoe_id /
-    # fuzzy_match_by_name.  Must match the actual PPM CSV column names.
+    # Columns included in the full-row dicts returned by match_by_entsoe_id.
+    # Must match the actual PPM CSV column names.
     _PPM_COLS: tuple[str, ...] = (
         "id",
         "Name",
@@ -108,7 +123,8 @@ class PPMLocator:
         """Find a power plant by its ENTSOE EIC code and return the full row as a dict.
 
         Searches the pre-computed ``entsoe_id_list`` column (one EIC code per row after
-        exploding the ``projectID`` dict-string) for an exact match.
+        exploding the ``projectID`` dict-string) for an exact match via a pre-built
+        EIC -> row-position index (see :meth:`_build_entsoe_id_index`).
 
         Args:
             entsoe_id (str | None): ENTSOE EIC code to search for (e.g.
@@ -122,76 +138,12 @@ class PPMLocator:
             return None
 
         target = str(entsoe_id).strip()
-        df_exploded = self.df_europe.explode("entsoe_id_list")
-        hits = df_exploded[df_exploded["entsoe_id_list"] == target]
-        if hits.empty:
+        pos = self._entsoe_id_index.get(target)
+        if pos is None:
             return None
 
-        row = hits.iloc[0]
+        row = self.df_europe.iloc[pos]
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
         return {col: (row[col] if col in row.index else None) for col in self._PPM_COLS}
-
-    def fuzzy_match_by_name(
-        self,
-        name: str | None,
-        country: str | None = None,
-        threshold: int = 85,
-    ) -> dict | None:
-        """Fuzzy-match a plant name against the powerplantmatching database.
-
-        Uses ``fuzz.WRatio`` for robust cross-language matching.  Only rows that
-        already have coordinates are considered.
-
-        Args:
-            name (str | None): Plant name to search for.
-            country (str | None): Restrict candidates to this country, if given.
-                Strongly recommended — searching the full (pan-European) database
-                without a country filter risks matching a similarly-named plant in
-                a completely different country.
-            threshold (int): Minimum WRatio score (0–100) to accept a match.
-                Defaults to 85.
-
-        Returns:
-            dict with keys from :attr:`_PPM_COLS` plus ``"ppm_match_score"``,
-            or ``None`` if no match above *threshold* was found.
-        """
-        if not name or pd.isna(name):
-            return None
-
-        df_with_coords = self.df_europe.dropna(subset=["lat", "lon"])
-        if country:
-            df_with_coords = df_with_coords[
-                df_with_coords["Country"].astype(str).str.strip().str.lower()
-                == str(country).strip().lower()
-            ]
-        if df_with_coords.empty:
-            return None
-
-        pp_names: list[str] = df_with_coords["Name"].dropna().tolist()
-        pp_names_lower = [n.lower() for n in pp_names]
-
-        hit = process.extractOne(str(name).lower(), pp_names_lower, scorer=fuzz.WRatio)
-        if not hit or float(hit[1]) < threshold:
-            return None
-
-        matched_lower = str(hit[0])
-        score = float(hit[1])
-
-        # Recover the original (non-lowercased) name for the DataFrame lookup
-        try:
-            original_name = pp_names[pp_names_lower.index(matched_lower)]
-        except ValueError:
-            return None
-
-        rows = df_with_coords[df_with_coords["Name"] == original_name]
-        if rows.empty:
-            return None
-
-        row = rows.iloc[0]
-        result = {
-            col: (row[col] if col in row.index else None) for col in self._PPM_COLS
-        }
-        result["ppm_match_score"] = score
-        return result

@@ -295,7 +295,7 @@ def _build_unmatched_sidebar_html(
         else:
             unmatched = df[df["lat"].isna() | df["lon"].isna()].copy()
 
-        if unmatched.empty:
+        if len(unmatched) == 0:
             continue
 
         total_unmatched += len(unmatched)
@@ -564,7 +564,7 @@ def build_map(
     # --- auto-detect name / fuel / match_source columns from the first non-empty DataFrame
     match_source_col: str | None = None
     for df in dfs:
-        if df.empty:
+        if len(df) == 0:
             continue
         cols_lower = {c.lower(): c for c in df.columns}
         if name_col is None:
@@ -620,7 +620,7 @@ def build_map(
 
         for df, label in zip(dfs, labels):
             matched = df.dropna(subset=["lat", "lon"])
-            if matched.empty:
+            if len(matched) == 0:
                 continue
             matched = matched.copy()
             if match_source_col and match_source_col in matched.columns:
@@ -680,7 +680,7 @@ def build_map(
         # Legacy mode: one FeatureGroup per dataset, coloured by fuel type
         for idx, (df, label) in enumerate(zip(dfs, labels)):
             matched = df.dropna(subset=["lat", "lon"])
-            if matched.empty:
+            if len(matched) == 0:
                 logger.info(f"'{label}': no matched rows — layer skipped.")
                 continue
 
@@ -782,5 +782,5 @@ if __name__ == "__main__":
     input_dir = Path("data/testdata/entsoe/1h/10YNL----------L")
     cl = CoordinateLocator(input_dir=input_dir, output_dir=Path("data/testdata/entsoe"))
     df = cl.find_coordinates_using_pp_databases()
-    if df is not None and not df.empty:
+    if df is not None and len(df) > 0:
         build_map(df, labels=["Netherlands (ENTSO-E)"])

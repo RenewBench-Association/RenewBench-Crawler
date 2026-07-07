@@ -212,3 +212,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Claude stuff:
+.claude/
+REFACTOR_CONTEXT_CHECKPOINT.md
+rbc/testdata

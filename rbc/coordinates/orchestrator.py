@@ -28,9 +28,9 @@ from rbc.coordinates.mappings import (
     OPERATOR_METADATA,
     PLANT_NAME_EXPANSIONS,
 )
+from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.energy.entsoe.mappings import (
     ACTIVE_ZONES_METADATA,
-    COLS_MAPPING,
     FUELTYPE_CODE_MAPPINGS,
     FUELTYPE_MAPPINGS,
 )
@@ -49,6 +49,10 @@ class CoordinateLocator:
         osm_update: bool = False,
         osm_live: bool = False,
         gem_dir: Path | None = None,
+        ppmloc: PPMLocator | None = None,
+        eic_locator: EICDirectoryLocator | None = None,
+        osmpploc: OSMPPLocator | None = None,
+        gemloc: GEMLocator | None = None,
     ) -> None:
         """Initialize CoordinateLocator class.
 
@@ -70,6 +74,18 @@ class CoordinateLocator:
                 (https://globalenergymonitor.org/download-data). When given, GEM is
                 used as an additional coordinate source alongside powerplantmatching
                 (PPM) in the ENTSOE enrichment pipeline. Defaults to None (GEM disabled).
+                Ignored when *gemloc* is given directly.
+            ppmloc (PPMLocator, optional): Pre-built PPM locator to reuse (e.g. across
+                multiple zones in a single run) instead of constructing a new one,
+                which re-downloads the pan-European PPM CSV. Defaults to None (a new
+                instance is created).
+            eic_locator (EICDirectoryLocator, optional): Pre-built EIC directory
+                locator to reuse. Defaults to None (a new instance is created).
+            osmpploc (OSMPPLocator, optional): Pre-built OSM powerplant locator to
+                reuse. Defaults to None (a new instance is created).
+            gemloc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
+                None, in which case a new instance is created from *gem_dir* (or GEM
+                stays disabled if *gem_dir* is also None).
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -88,12 +104,28 @@ class CoordinateLocator:
         # get public pp information
         self.df_pp = pd.DataFrame()
         self.df_openinfra = pd.DataFrame()
-        self.ppmloc = PPMLocator()  # Europe only
-        self.eic_locator = EICDirectoryLocator(cache_dir=self.output_dir)  # europe only
-        self.osmpploc = OSMPPLocator(output_dir=self.output_dir)  # Global
-        self.gemloc = (
-            GEMLocator(gem_dir=gem_dir, cache_dir=self.output_dir) if gem_dir else None
-        )  # optional, requires manual download
+        # Locators are expensive to construct (network/CSV/parquet reads), so
+        # callers processing multiple zones in one run should build them once and
+        # pass them in here to be shared, rather than paying that cost per zone.
+        self.ppmloc = ppmloc if ppmloc is not None else PPMLocator()  # Europe only
+        self.eic_locator = (
+            eic_locator
+            if eic_locator is not None
+            else EICDirectoryLocator(cache_dir=self.output_dir)
+        )  # europe only
+        self.osmpploc = (
+            osmpploc
+            if osmpploc is not None
+            else OSMPPLocator(output_dir=self.output_dir)
+        )  # Global
+        if gemloc is not None:
+            self.gemloc: GEMLocator | None = gemloc
+        else:
+            self.gemloc = (
+                GEMLocator(gem_dir=gem_dir, cache_dir=self.output_dir)
+                if gem_dir
+                else None
+            )  # optional, requires manual download
 
         # Maps ENTSO-E unit name -> ordered alternative names for matching.
         # Order matters: original ENTSO-E name is always tried first, then EIC long
@@ -175,7 +207,7 @@ class CoordinateLocator:
             rel_cols.append(self.fuel_col)
 
         # FAILSAFE: if the pp database df is empty, exit immediately!
-        if self.df_pp.empty:
+        if len(self.df_pp) == 0:
             logger.warning(
                 f"No reference powerplant dataframe available for '{self.country}'! "
                 f"Returning structured empty dataframe."
@@ -188,17 +220,11 @@ class CoordinateLocator:
         for input_path in self.input_dir.glob("*.csv"):  # this won't work for JSONs...
             df_eg = load_df_from_file(input_path)
 
-            # ---- in case it's from entsoe, do some redefinitions (to be removed later!)
-
-            # TODO: This does not make any sense, I comment it out for now, but if you rename it here, the df_unique below will not have the correct column names anymore, so the code will break.
-            # if self.code_col == OPERATOR_METADATA["entsoe"]["code_col"]:
-            #    df_eg = self._renaming_stuff_in_entsoe_df(df_eg)
-
             # 1. get current eg file's unique pps - df with only "rel_cols"
             df_unique = df_eg[rel_cols].drop_duplicates(subset=[self.name_col])
 
             # 2. find new additions
-            if self.df_matches.empty:  # first run: everything is new
+            if len(self.df_matches) == 0:  # first run: everything is new
                 df_new_additions = df_unique.copy()
 
             else:  # next runs: only pps NOT already in df are new
@@ -208,7 +234,7 @@ class CoordinateLocator:
                 df_new_additions = df_unique[is_new_plant].copy()
 
             # 3. process ONLY the new additions
-            if not df_new_additions.empty:
+            if len(df_new_additions) > 0:
                 df_new_additions["lat"] = None
                 df_new_additions["lon"] = None
                 df_new_additions["osm_id"] = None
@@ -262,14 +288,14 @@ class CoordinateLocator:
                 first — unit ID then parent ID — PPM used as fallback).
             5.  Fuzzy parent-unit search within W_eicCodes → ``wcode.parent.*``.
             6.  GEM/PPM match via resolved parent EIC code.
-            7.  PPM/GEM fuzzy name match guarded by a fuel-type check.
-            8.  Fuel-type validation for all PPM/GEM-matched units.
-            9.  OpenInfraMap / Overpass fallback for still-unmatched units.
-            10. Sibling-unit fallback: units sharing the same EicParent (i.e. the
+            7.  NameMatrixMatcher: unified PPM/GEM/OSM fuzzy name matching with
+                enhanced fuzzy matrix matching across all data sources.
+            8.  Fuel-type validation for all matched units (from any source).
+            9.  Sibling-unit fallback: units sharing the same EicParent (i.e. the
                 same physical plant) as an already-matched unit inherit that
                 unit's coordinates, e.g. an unnamed extra generator block of a
                 plant whose other blocks were already matched.
-            11. Finalise ``lat`` / ``lon`` and write ``enriched_units_<zone>.csv``.
+            10. Finalise ``lat`` / ``lon`` and write ``enriched_units_<zone>.csv``.
 
         Returns:
             pd.DataFrame: Enriched dataframe, one row per unique generation unit.
@@ -485,82 +511,137 @@ class CoordinateLocator:
         )
 
         # ------------------------------------------------------------------ #
-        # 7. PPM/GEM fuzzy name match                                        #
+        # 7. NameMatrixMatcher: unified PPM/GEM/OSM fuzzy name matching        #
         # ------------------------------------------------------------------ #
+        # Initialize NameMatrixMatcher with all available data sources
+        country_code = self._country_to_iso2(self.country)
+
+        # Ensure OSM data is loaded
+        if country_code and len(self.df_openinfra) == 0:
+            self.df_openinfra = query_osm_country_plants(
+                country_code,
+                cache_dir=self.input_dir,
+                force_update=self.osm_update,
+                live=self.osm_live,
+            )
+
+        # Create unified matcher with all data sources
+        matcher = NameMatrixMatcher(
+            country=self.country,
+            country_code=country_code,
+            ppm_locator=self.ppmloc,
+            gem_locator=self.gemloc,
+            osm_df=self.df_openinfra if len(self.df_openinfra) > 0 else None,
+        )
+
+        # Add alternative names from wcode data
+        for _, row in df[_still_unmatched(df)].iterrows():
+            raw_name = str(row.get(pp_name_col, "") or "")
+            if not raw_name:
+                continue
+            alt_names: list[str] = []
+            for name_src in (
+                "wcode.EicLongName",
+                "wcode.EicDisplayName",
+                "wcode.parent.EicLongName",
+            ):
+                n = row.get(name_src)
+                if pd.notna(n) and str(n).strip() and str(n).strip() != raw_name:
+                    alt_names.append(str(n).strip())
+            if alt_names:
+                matcher.add_alternative_names(raw_name, alt_names)
+
+        # Build the unified matrix
+        matcher.build_matrix()
+
+        # Process unmatched units with NameMatrixMatcher
         for idx, row in df[_still_unmatched(df)].iterrows():
-            # Priority order: wcode long name → parent long name → raw pp name
-            candidates = [
+            eg_fuel = row.get("pp.fuel_type")
+
+            # Priority order: wcode long name -> parent long name -> raw pp name
+            name_candidates = [
                 row.get("wcode.EicLongName"),
                 row.get("wcode.parent.EicLongName"),
                 row.get(pp_name_col),
             ]
-            eg_fuel = row.get("pp.fuel_type")
 
-            matched = False
-            for candidate in candidates:
-                if pd.isna(candidate) or not str(candidate).strip():
+            for name_candidate in name_candidates:
+                if pd.isna(name_candidate) or not str(name_candidate).strip():
                     continue
-                candidate_str = str(candidate).strip()
 
-                # Also try the name with a trailing glued unit-suffix stripped
-                # (e.g. "ENGURIUNIT_5" -> "enguri"), which the space-tokenized
-                # _strip_numeric_name_tokens can't catch since there's no
-                # separator between the plant name and the unit suffix.
-                stripped_unit_suffix = self._strip_trailing_unit_suffix(candidate_str)
-                name_variants = [candidate_str]
-                if stripped_unit_suffix:
-                    name_variants.append(stripped_unit_suffix)
+                result = matcher.match(
+                    target_name=str(name_candidate).strip(),
+                    fuel_type=eg_fuel,
+                    threshold=75,  # Lower threshold to catch more matches with enhanced fuzzy matching
+                )
 
-                for name_variant in name_variants:
-                    hit = self.ppmloc.fuzzy_match_by_name(
-                        name_variant, country=self.country
-                    )
-                    if hit is not None and self._is_fueltype_compatible(
-                        eg_fuel, hit.get("Fueltype")
-                    ):
-                        for col in ppm_cols:
-                            df.at[idx, f"ppm.{col}"] = hit.get(col)
-                        df.at[idx, "ppm.match_source"] = "ppm_fuzzy_name"
-                        matched = True
-                        break
+                if result.matched and result.candidate:
+                    candidate = result.candidate
 
-                    if self.gemloc:
-                        hit = self.gemloc.fuzzy_match_by_name(
-                            name_variant, country=self.country, fuel_type=eg_fuel
-                        )
-                        if hit is not None and self._is_fueltype_compatible(
-                            eg_fuel, hit.get("Fueltype")
-                        ):
-                            for col in gem_cols:
-                                df.at[idx, f"gem.{col}"] = hit.get(col)
-                            df.at[idx, "gem.match_source"] = "gem_fuzzy_name"
-                            matched = True
-                            break
+                    if candidate.source == "ppm":
+                        # Use the candidate data we have from the matrix matcher
+                        # This is more efficient than searching again
+                        df.at[idx, "ppm.lat"] = candidate.lat
+                        df.at[idx, "ppm.lon"] = candidate.lon
+                        df.at[idx, "ppm.Name"] = candidate.name
+                        df.at[idx, "ppm.Fueltype"] = candidate.fueltype
+                        df.at[idx, "ppm.Country"] = candidate.country
+                        df.at[idx, "ppm.match_source"] = "ppm_fuzzy_matrix"
 
-                if matched:
+                    elif candidate.source == "gem" and self.gemloc:
+                        # Use the candidate data we have from the matrix matcher
+                        df.at[idx, "gem.lat"] = candidate.lat
+                        df.at[idx, "gem.lon"] = candidate.lon
+                        df.at[idx, "gem.plant_name"] = candidate.name
+                        df.at[idx, "gem.Fueltype"] = candidate.fueltype
+                        df.at[idx, "gem.Country"] = candidate.country
+                        df.at[idx, "gem.match_source"] = "gem_fuzzy_matrix"
+
+                    elif candidate.source == "osm":
+                        # Direct OSM mapping
+                        df.at[idx, "osm.lat"] = candidate.lat
+                        df.at[idx, "osm.lon"] = candidate.lon
+                        df.at[idx, "osm.id"] = candidate.source_id
+                        df.at[idx, "osm.type"] = None
+                        df.at[idx, "osm.url"] = None
+                        df.at[idx, "osm.geometry"] = None
+                        df.at[idx, "osm.Fueltype"] = candidate.fueltype
+
                     break
+
+        # Initialize OSM columns if they don't exist
+        for col in ["lat", "lon", "id", "type", "url", "geometry"]:
+            if f"osm.{col}" not in df.columns:
+                df[f"osm.{col}"] = None
 
         ppm_final = df["ppm.lat"].notna().sum()
         gem_final = df["gem.lat"].notna().sum()
+        osm_final = df["osm.lat"].notna().sum()
         logger.info(
-            f"[{zone_name}] Fuzzy name match: "
-            f"{ppm_final - ppm_after_parent} additional via PPM, "
-            f"{gem_final - gem_after_parent} additional via GEM "
-            f"({ppm_final + gem_final} total)."
+            f"[{zone_name}] NameMatrixMatcher: "
+            f"{ppm_final - ppm_after_parent} via PPM, "
+            f"{gem_final - gem_after_parent} via GEM, "
+            f"{osm_final} via OSM."
         )
 
         # ------------------------------------------------------------------ #
-        # 8. Fuel-type validation for all PPM/GEM-matched units              #
+        # 8. Fuel-type validation for all matched units (from any source)    #
         # ------------------------------------------------------------------ #
         df["fuel_type_match"] = None
         df["fuel_type_match_level"] = None
-        matched_mask = df["ppm.lat"].notna() | df["gem.lat"].notna()
+        matched_mask = (
+            df["ppm.lat"].notna() | df["gem.lat"].notna() | df["osm.lat"].notna()
+        )
         for idx, row in df[matched_mask].iterrows():
-            matched_fueltype = (
-                row.get("ppm.Fueltype")
-                if pd.notna(row.get("ppm.lat"))
-                else row.get("gem.Fueltype")
-            )
+            # Get matched fuel type from whichever source found the match
+            matched_fueltype = None
+            if pd.notna(row.get("ppm.lat")):
+                matched_fueltype = row.get("ppm.Fueltype")
+            elif pd.notna(row.get("gem.lat")):
+                matched_fueltype = row.get("gem.Fueltype")
+            elif pd.notna(row.get("osm.lat")):
+                matched_fueltype = row.get("osm.Fueltype")
+
             level = self._classify_fueltype_match(
                 row.get("pp.fuel_type"), matched_fueltype
             )
@@ -575,86 +656,7 @@ class CoordinateLocator:
             )
 
         # ------------------------------------------------------------------ #
-        # 9. OpenInfraMap / Overpass fallback                                #
-        # ------------------------------------------------------------------ #
-        osm_out_cols = ["lat", "lon", "id", "type", "url", "geometry"]
-        for col in osm_out_cols:
-            df[f"osm.{col}"] = None
-
-        unmatched_mask = _still_unmatched(df)
-        if unmatched_mask.any():
-            logger.info(
-                f"[{zone_name}] OpenInfra fallback for {unmatched_mask.sum()} unmatched units..."
-            )
-            country_code = self._country_to_iso2(self.country)
-            if country_code:
-                if self.df_openinfra.empty:
-                    self.df_openinfra = query_osm_country_plants(
-                        country_code,
-                        cache_dir=self.input_dir,
-                        force_update=self.osm_update,
-                        live=self.osm_live,
-                    )
-
-                if not self.df_openinfra.empty:
-                    # Populate _enriched_names from wcode data so OpenInfra matching
-                    # benefits from official names instead of raw ENTSO-E unit codes.
-                    for _, row in df[unmatched_mask].iterrows():
-                        raw_name = str(row.get(pp_name_col, "") or "")
-                        if not raw_name:
-                            continue
-                        alt_names: list[str] = []
-                        for name_src in (
-                            "wcode.EicLongName",
-                            "wcode.EicDisplayName",
-                            "wcode.parent.EicLongName",
-                        ):
-                            n = row.get(name_src)
-                            if (
-                                pd.notna(n)
-                                and str(n).strip()
-                                and str(n).strip() != raw_name
-                            ):
-                                alt_names.append(str(n).strip())
-                        if alt_names:
-                            self._enriched_names[raw_name] = alt_names
-
-                    # Build a temporary DataFrame with the column names that
-                    # _match_with_openinfra expects (self.name_col, self.fuel_col, lat, lon).
-                    df_osm_input = df[unmatched_mask][[pp_name_col]].copy()
-                    df_osm_input = df_osm_input.rename(
-                        columns={pp_name_col: self.name_col}
-                    )
-                    if self.fuel_col:
-                        df_osm_input[self.fuel_col] = df[unmatched_mask][
-                            "pp.fuel_type"
-                        ].values
-                    df_osm_input["lat"] = None
-                    df_osm_input["lon"] = None
-
-                    df_osm_result = self._match_with_openinfra(df_osm_input)
-                    osm_matched = df_osm_result[df_osm_result["lat"].notna()]
-
-                    for _, osm_row in osm_matched.iterrows():
-                        name_val = osm_row[self.name_col]
-                        target_idx = df.index[df[pp_name_col] == name_val]
-                        if len(target_idx) == 0:
-                            continue
-                        i = target_idx[0]
-                        df.at[i, "osm.lat"] = osm_row.get("lat")
-                        df.at[i, "osm.lon"] = osm_row.get("lon")
-                        df.at[i, "osm.id"] = osm_row.get("osm_id")
-                        df.at[i, "osm.type"] = osm_row.get("osm_type")
-                        df.at[i, "osm.url"] = osm_row.get("osm_url")
-                        df.at[i, "osm.geometry"] = osm_row.get("osm_geometry")
-
-            osm_matched_count = df["osm.lat"].notna().sum()
-            logger.info(
-                f"[{zone_name}] OpenInfra fallback: {osm_matched_count} additional units matched."
-            )
-
-        # ------------------------------------------------------------------ #
-        # 10. Sibling-unit fallback: reuse a co-located unit's coordinates   #
+        # 9. Sibling-unit fallback: reuse a co-located unit's coordinates   #
         # ------------------------------------------------------------------ #
         # Some units have no usable name of their own (e.g. an extra generator
         # block added later) but share the same physical plant — identified via
@@ -765,7 +767,7 @@ class CoordinateLocator:
         )
 
         # ------------------------------------------------------------------ #
-        # 11. Finalise lat / lon, match_source, and write output CSV         #
+        # 10. Finalise lat / lon, match_source, and write output CSV         #
         # ------------------------------------------------------------------ #
         df["lat"] = interim_lat.combine_first(df["sibling.lat"])
         df["lon"] = interim_lon.combine_first(df["sibling.lon"])
@@ -818,7 +820,7 @@ class CoordinateLocator:
         try:
             # --- focus ONLY on rows that haven't been matched yet
             df_unmatched = df_eg_unique[df_eg_unique["lat"].isna()].copy()
-            if df_unmatched.empty:
+            if len(df_unmatched) == 0:
                 logger.info("All plants already matched. Skipping code matching.")
                 return df_eg_unique
 
@@ -857,18 +859,6 @@ class CoordinateLocator:
             logger.warning("Error in attempt to find matches via ENTSOE code!")
             return df_eg_unique
 
-    # def _unimplemented__match_with_eic_code_similarity(self, eic: str):
-    #     """Potential option: Find similar EIC (ENTOSE) codes - probably not smart..."""
-    #
-    #     for index, row in self.df_pp.iterrows():
-    #         pp_eic = row["entsoe_id_list"][0]
-    #
-    #         similarity = SequenceMatcher(None, eic, pp_eic).ratio()
-    #         logger.info(
-    #             f"For plant with EIC {eic}, found plant in ppm csv with similarity "
-    #             f"{similarity}:\n{row}"
-    #         )
-
     def _match_with_openinfra(self, df_eg_unique: pd.DataFrame) -> pd.DataFrame:
         """Find coordinates for powerplants via OpenInfra/Overpass OSM records.
 
@@ -885,7 +875,7 @@ class CoordinateLocator:
         try:
             # --- focus ONLY on rows that haven't been matched yet
             df_unmatched = df_eg_unique[df_eg_unique["lat"].isna()].copy()
-            if df_unmatched.empty:
+            if len(df_unmatched) == 0:
                 logger.info("All plants already matched. Skipping OpenInfra matching.")
                 return df_eg_unique
 
@@ -897,7 +887,7 @@ class CoordinateLocator:
                 )
                 return df_eg_unique
 
-            if self.df_openinfra.empty:
+            if len(self.df_openinfra) == 0:
                 self.df_openinfra = query_osm_country_plants(
                     country_code,
                     cache_dir=self.input_dir,
@@ -905,7 +895,7 @@ class CoordinateLocator:
                     live=self.osm_live,
                 )
 
-            if self.df_openinfra.empty:
+            if len(self.df_openinfra) == 0:
                 logger.warning(
                     f"OpenInfra/Overpass did not return data for '{self.country}'. "
                     f"Skipping OpenInfra matching."
@@ -925,7 +915,7 @@ class CoordinateLocator:
                 ]
             ].copy()
             df_lookup = df_lookup.dropna(subset=["Name", "lat", "lon"])
-            if df_lookup.empty:
+            if len(df_lookup) == 0:
                 logger.warning(
                     "OpenInfra dataframe has no usable Name/lat/lon rows. "
                     "Skipping OpenInfra matching."
@@ -956,7 +946,7 @@ class CoordinateLocator:
                 )
             ]
             df_lookup = df_lookup.drop_duplicates(subset=["name_norm"])  # deterministic
-            if df_lookup.empty:
+            if len(df_lookup) == 0:
                 return df_eg_unique
 
             choices = df_lookup["name_norm"].tolist()
@@ -1024,7 +1014,7 @@ class CoordinateLocator:
                         df_lookup["name_norm"] == cand_norm, "Name"
                     ]
                     cand_name = (
-                        cand_display.iloc[0] if not cand_display.empty else cand_norm
+                        cand_display.iloc[0] if len(cand_display) > 0 else cand_norm
                     )
                     logger.debug(f"    [{cand_score:.0f}] '{cand_name}'")
 
@@ -1105,64 +1095,9 @@ class CoordinateLocator:
             )
             return df_eg_unique
 
-    # def _outdated__match_with_name(self, name: str, type: str = None):
-    #     """Match with name row by row implementation which takes a lot more time!!!
-    #
-    #     This should work with the ppm or osmpp df, since the relevant column names are
-    #     identical ("Name" and "Fueltype" in both).
-    #     """
-    #     pp_name = self.find_best_match(name, self.pp_names)
-    #     if pp_name is None:
-    #         logger.warning(f"No match for power plant '{name}' found in ppm csv!")
-    #         return None
-    #
-    #     df_output = self.df_pp.loc[self.df_pp["Name"].str.contains(pp_name, case=False)]
-    #     if df_output.empty:
-    #         logger.warning(f"Power plant '{name}' not found in ppm csv!")
-    #         return None
-    #
-    #     if type:
-    #         pp_type = self.find_best_match(type, self.pp_types)
-    #         if pp_name is None:
-    #             logger.warning(f"No match for power plant type '{type}' found in ppm csv!")
-    #             return df_output
-    #
-    #         else:
-    #             df_output = df_output.loc[df_output["Fueltype"].str.contains(pp_type, case=False)]
-    #             if df_output.empty:
-    #                 logger.warning(
-    #                     f"Power plant '{name}' of type '{type}' not found in ppm csv! "
-    #                     f"Only plants with similar names found:\n{df_output}"
-    #                 )
-    #                 return None
-    #
-    #     return df_output
-
     # ----------------
     # Helper methods
     # ----------------
-    @staticmethod
-    def _find_best_string_match(
-        target: str, choices: list[str], threshold: int = 80
-    ) -> str | None:
-        """Find the best fuzzy match for a string within a list of choices.
-
-        Args:
-            target (str): Target string to find match for.
-            choices (list[str]): List of choices against which will be matched.
-            threshold (int): Fuzzy match threshold. Defaults to 80 (= 80 %).
-        """
-        if not target or pd.isna(target):
-            return None
-
-        target = str(target).lower()
-        match = process.extractOne(target, choices, scorer=fuzz.WRatio)
-        # match returns: (matched_string, score, index)
-
-        if match and match[1] > threshold:
-            return match[0]
-        return None
-
     @staticmethod
     def _is_fueltype_compatible(eg_type: str | None, pp_type: str | None) -> bool:
         """Validate if the eg fuel type matches the pp database fuel type.
@@ -1212,36 +1147,6 @@ class CoordinateLocator:
         if eg in pp or pp in eg:
             return "compatible"
         return "mismatch"
-
-    @staticmethod
-    def _renaming_stuff_in_entsoe_df(df_eg: pd.DataFrame) -> pd.DataFrame:
-        """Renaming stuff in the entsoe dataframe where necessary.
-
-        NOTE: THIS IS JUST INTERIM! WILL BE MOVED TO PROCESSOR SCRIPT!
-
-        Args:
-            df_eg (pd.DataFrame): dataframe containing ENTSOE eg data.
-
-        Returns:
-            df_eg (pd.DataFrame): update dataframe containing ENTSOE eg data.
-        """
-        # rename column headers (if necessary)
-        df_eg = df_eg.rename(columns=COLS_MAPPING)
-
-        # rename PSR fuel types codes or full definition to simple fueltype names
-        target_col = None
-        possible_col_names = ["PSR_Type", "time_series.mkt_psrtype.psr_type"]
-
-        for col in possible_col_names:
-            if col in df_eg.columns:
-                target_col = col
-                break
-
-        # apply value mappings if the column exists (match code OR full definition)
-        if target_col:
-            df_eg[target_col] = df_eg[target_col].replace(FUELTYPE_MAPPINGS)
-
-        return df_eg
 
     @staticmethod
     def _expand_plant_name_tokens(normalized: str, expansions: dict[str, str]) -> str:
@@ -1295,28 +1200,6 @@ class CoordinateLocator:
             if not token.isdigit() and token not in GENERIC_UNIT_TOKENS
         ]
         return " ".join(tokens).strip()
-
-    @classmethod
-    def _strip_trailing_unit_suffix(cls, value: str | None) -> str:
-        """Strip a trailing unit-suffix glued directly onto the plant name.
-
-        Some ENTSO-E naming conventions concatenate the unit suffix directly onto
-        the plant name with no separating space/underscore (e.g.
-        ``"ENGURIUNIT_5"`` -> ``"enguri"``), which the space-tokenized
-        :meth:`_strip_numeric_name_tokens` cannot catch since "enguriunit" and "5"
-        would otherwise remain a single glued token.
-
-        Returns:
-            str: The name with the trailing unit-suffix removed, or ``""`` if the
-                name doesn't end in a recognized unit-suffix (no fallback needed).
-        """
-        normalized = cls._normalize_name(value)
-        if not normalized:
-            return ""
-
-        unit_words = "|".join(token for token in GENERIC_UNIT_TOKENS if len(token) > 1)
-        stripped = re.sub(rf"(?:{unit_words})\s*\d*$", "", normalized).strip()
-        return stripped if stripped and stripped != normalized else ""
 
     @staticmethod
     def _country_to_iso2(country: str | None) -> str | None:
@@ -1439,43 +1322,55 @@ if "__main__" == __name__:
     # --- configure input here: pick ONE of the three forms ---
     #
     # 1) Container folder — every subdirectory becomes one zone:
-    # input_paths: Path | str | list[Path | str] = Path("../testdata/energy/entsoe/1h/")
+    input_paths: Path | str | list[Path | str] = Path("../testdata/energy/entsoe/1h/")
     #
     # 2) Single zone folder:
-    # input_paths = Path("../testdata/energy/entsoe/1h/10Y1001A1001A39I/")
+    # input_paths = Path("../testdata/energy/entsoe/1h/10YCH-SWISSGRIDZ/")
 
     #
     # 3) Explicit list of zone folders (mix of single zones and containers allowed):
-    input_paths: Path | str | list[Path | str] = [
-        Path("../testdata/energy/entsoe/1h/10Y1001A1001A39I/"),
-        Path("../testdata/energy/entsoe/1h/10Y1001A1001A990/"),
-        Path("../testdata/energy/entsoe/1h/10Y1001A1001B012/"),
-        Path("../testdata/energy/entsoe/1h/10Y1001C--00100H/"),
-        Path("../testdata/energy/entsoe/1h/10YAL-KESH-----5/"),
-        Path("../testdata/energy/entsoe/1h/10YAT-APG------L/"),
-        Path("../testdata/energy/entsoe/1h/10YBA-JPCC-----D/"),
-        Path("../testdata/energy/entsoe/1h/10YBE----------2/"),
-        Path("../testdata/energy/entsoe/1h/10YCA-BULGARIA-R/"),
-        Path("../testdata/energy/entsoe/1h/10YCH-SWISSGRIDZ/"),
-        Path("../testdata/energy/entsoe/1h/10YCS-CG-TSO---S/"),
-        Path("../testdata/energy/entsoe/1h/10YCS-SERBIATSOV/"),
-        Path("../testdata/energy/entsoe/1h/10YDE-ENBW-----N/"),
-        Path("../testdata/energy/entsoe/1h/10YDE-EON------1/"),
-        Path("../testdata/energy/entsoe/1h/10YDE-RWENET---I/"),
-        Path("../testdata/energy/entsoe/1h/10YDE-VE-------2/"),
-        Path("../testdata/energy/entsoe/1h/10YFI-1--------U/"),
-        Path("../testdata/energy/entsoe/1h/10YGR-HTSO-----Y/"),
-        Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/"),
-        Path("../testdata/energy/entsoe/1h/10YMK-MEPSO----8/"),
-        Path("../testdata/energy/entsoe/1h/10YNL----------L/"),
-        Path("../testdata/energy/entsoe/1h/10YPT-REN------W/"),
-        Path("../testdata/energy/entsoe/1h/10YSE-1--------K/"),
-        Path("../testdata/energy/entsoe/1h/10YSK-SEPS-----K/"),
-    ]
+    # input_paths: Path | str | list[Path | str] = [
+    # Path("../testdata/energy/entsoe/1h/10Y1001A1001A39I/"),
+    # Path("../testdata/energy/entsoe/1h/10Y1001A1001A990/"),
+    # Path("../testdata/energy/entsoe/1h/10Y1001A1001B012/"),
+    # Path("../testdata/energy/entsoe/1h/10Y1001C--00100H/"),
+    # Path("../testdata/energy/entsoe/1h/10YAL-KESH-----5/"),
+    # Path("../testdata/energy/entsoe/1h/10YAT-APG------L/"),
+    # Path("../testdata/energy/entsoe/1h/10YBA-JPCC-----D/"),
+    # Path("../testdata/energy/entsoe/1h/10YBE----------2/"),
+    # Path("../testdata/energy/entsoe/1h/10YCA-BULGARIA-R/"),
+    # Path("../testdata/energy/entsoe/1h/10YCH-SWISSGRIDZ/"),
+    # Path("../testdata/energy/entsoe/1h/10YCS-CG-TSO---S/"),
+    # Path("../testdata/energy/entsoe/1h/10YCS-SERBIATSOV/"),
+    # Path("../testdata/energy/entsoe/1h/10YDE-ENBW-----N/"),
+    # Path("../testdata/energy/entsoe/1h/10YDE-EON------1/"),
+    # Path("../testdata/energy/entsoe/1h/10YDE-RWENET---I/"),
+    # Path("../testdata/energy/entsoe/1h/10YDE-VE-------2/"),
+    # Path("../testdata/energy/entsoe/1h/10YFI-1--------U/"),
+    # Path("../testdata/energy/entsoe/1h/10YGR-HTSO-----Y/"),
+    # Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/"),
+    # Path("../testdata/energy/entsoe/1h/10YMK-MEPSO----8/"),
+    # Path("../testdata/energy/entsoe/1h/10YNL----------L/"),
+    # Path("../testdata/energy/entsoe/1h/10YPT-REN------W/"),
+    # Path("../testdata/energy/entsoe/1h/10YSE-1--------K/"),
+    # Path("../testdata/energy/entsoe/1h/10YSK-SEPS-----K/"),
+    # ]
 
     zone_dirs = _collect_zone_dirs(input_paths)
     dataframes: list[pd.DataFrame] = []
     labels: list[str] = []
+
+    # Build the (expensive: network/CSV/parquet-backed) reference-data locators
+    # ONCE and share them across all zones below. Previously a fresh set was
+    # constructed per zone_dir, meaning the pan-European PPM CSV was re-downloaded
+    # and the GEM/EIC directories were re-parsed once per zone — very wasteful for
+    # multi-zone runs (e.g. several German TSO zones all sharing the same data).
+    shared_ppmloc = PPMLocator()
+    shared_eic_locator = EICDirectoryLocator(cache_dir=args.output)
+    shared_osmpploc = OSMPPLocator(output_dir=args.output)
+    shared_gemloc = (
+        GEMLocator(gem_dir=gem_dir, cache_dir=args.output) if gem_dir else None
+    )
 
     for zone_dir in zone_dirs:
         folder_name = zone_dir.name
@@ -1487,9 +1382,14 @@ if "__main__" == __name__:
                 osm_update=args.update,
                 osm_live=args.live,
                 gem_dir=gem_dir,
+                ppmloc=shared_ppmloc,
+                eic_locator=shared_eic_locator,
+                osmpploc=shared_osmpploc,
+                gemloc=shared_gemloc,
             )
             df = cl.find_coordinates_using_pp_databases()
-            if df is not None and not df.empty:
+            # Use explicit check to avoid pandas NA boolean ambiguity
+            if df is not None and len(df) > 0:
                 dataframes.append(df)
                 labels.append(label)
                 logger.info(

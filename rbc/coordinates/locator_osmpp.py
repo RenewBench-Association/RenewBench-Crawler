@@ -7,10 +7,6 @@ from pathlib import Path
 
 import pandas as pd
 from loguru import logger
-from osm_powerplants import get_cache_dir, get_config, process_units
-
-OSM_CONFIG = get_config()
-OSM_CACHE_DIR = str(get_cache_dir(OSM_CONFIG))
 
 OSMPP_URL = (
     "https://raw.githubusercontent.com/open-energy-transition/osm-powerplants/main/"
@@ -58,51 +54,3 @@ class OSMPPLocator:
                  'generator_count']
         """
         return self.df_global[self.df_global["Country"] == country]
-
-    def request_pp_df(self, country: str) -> pd.DataFrame | None:
-        """Requests (and saves) power plant df of all OSM energy entities in a given country.
-
-        Nice idea but the request for country data works once and then hangs itself up at the
-        next request (esp. larger countries!). The alternative is using the global csv they
-        automatically refresh (start: 2025). However, their parsing of OSM looks for
-        "plant=power" which doesn't apply to decommissioned / outdated plants.
-
-        Args:
-            country (str): Country name or iso code.
-
-        Returns:
-            pd.DataFrame | None: DataFrame of all OSM energy entities in the country or
-                None, if an error occurred during parsing (which happens a lot!).
-        """
-        if self.output_dir is None:
-            logger.warning(
-                "No output_dir was provided when the class instance was initialized! CSVs "
-                "will not be saved, only data returned via the df."
-            )
-
-        try:
-            df = process_units(
-                countries=[country],
-                config=OSM_CONFIG,
-                cache_dir=OSM_CACHE_DIR,
-                output_path=Path(self.output_dir, "entities.csv")
-                if self.output_dir
-                else None,
-                rejected_output_path=Path(self.output_dir, "rejected_entities.csv")
-                if self.output_dir
-                else None,
-            )
-
-        except ValueError as e:
-            logger.error(f"Invalid country string '{country}' provided: {e}")
-            return None
-
-        except OSError as e:
-            logger.error(f"Could not save OSM coordinate file(s) to output path: {e}")
-            return None
-
-        if df.empty:
-            logger.error(f"No OSM energy entitites found in country '{country}'")
-            return None
-
-        return df

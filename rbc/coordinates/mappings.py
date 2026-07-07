@@ -56,9 +56,60 @@ COUNTRY_PLANT_NAME_EXPANSIONS: dict[str, dict[str, str]] = {
         # more specific "soojuselektrijaam" ("thermal power plant", e.g. "Balti
         # Soojuselektrijaam", "Eesti Soojuselektrijaam"). Expanding to the
         # specific term lets fuzzy matching bridge the two sources.
-        "elektrijaam": "soojuselektrijaam",
-        "elektrijaama": "soojuselektrijaam",
-        "elektrijaamad": "soojuselektrijaam",
+        "elektrijaam": "power plant",
+        "elektrijaama": "power plant",
+        "elektrijaamad": "power plant",
+        # Additional Estonian to English translations for cross-database matching
+        "soojuselektrijaam": "thermal power plant",
+        "soojus": "thermal",
+        "balti": "balti",
+        "eesti": "eesti",
+        "ej": "power plant elektrijaam",  # Estonian abbreviation for Elektrijaam
+    },
+    "CH": {
+        # Swiss German/French/Italian power plant terms
+        "kraftwerk": "power plant",
+        "centrale": "power plant",
+        "central": "power plant",
+        "elettrica": "electric power",
+        "électrique": "electric power",
+        "hydro": "hydroelectric hydro",
+        "thermique": "thermal power",
+    },
+    "DE": {
+        # German power plant terms
+        "kraftwerk": "power plant",
+        "heizkraftwerk": "power plant heating",
+        "gaskraftwerk": "power plant gas",
+        "kohlekraftwerk": "power plant coal",
+        "wasserkraftwerk": "power plant hydro hydroelectric",
+        "windkraftwerk": "power plant wind",
+        "biomassekraftwerk": "power plant biomass",
+    },
+    "FR": {
+        # French power plant terms
+        "centrale": "power plant",
+        "central": "power plant",
+        "électrique": "electric power",
+        "thermique": "thermal power",
+        "nucléaire": "nuclear power",
+        "hydroélectrique": "hydroelectric hydro",
+    },
+    "ES": {
+        # Spanish power plant terms
+        "central": "power plant",
+        "eléctrica": "electric power",
+        "térmica": "thermal power",
+        "hidroeléctrica": "hydroelectric hydro",
+        "eólica": "wind power",
+    },
+    "IT": {
+        # Italian power plant terms
+        "centrale": "power plant",
+        "elettrica": "electric power",
+        "termica": "thermal power",
+        "idroelettrica": "hydroelectric hydro",
+        "eolica": "wind power",
     },
 }
 
