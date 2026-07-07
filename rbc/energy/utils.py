@@ -260,6 +260,7 @@ class EnergyDownloader(ABC):
         """
         reruns = 0  # num of task reruns (retries) due to error
         reruns_ratelimit = 0  # num of task reruns (retries) due to rate limits
+        task_id = task.identifier
 
         while True:
             try:
@@ -272,12 +273,14 @@ class EnergyDownloader(ABC):
                 os._exit(1)
 
             except MissingDataError as e:  # handle missing data for task
-                logger.error(f"Missing data for '{task.identifier}': {e}")
+                error_msg = f"MissingDataError for '{task_id}': {e}"
 
                 if task.dt.year == pd.Timestamp.now().year:
+                    logger.error(f"{error_msg}. Try task again in future...")
                     return 0  # current year task -> might become available later!
 
-                return 1  # skip task
+                logger.error(f"{error_msg}. Skipping.")
+                return 1
 
             except self.RETRY_ERRORS as e:  # handle access failures
                 code = self._get_status_code(e)
@@ -285,8 +288,9 @@ class EnergyDownloader(ABC):
                 # 1. permanent missing data
                 if code == 404:
                     logger.error(
-                        f"Error 404 for '{task.identifier}': Missing data. Skipping."
+                        f"Error '404' for '{task_id}': Missing data. Skipping."
                     )
+                    logger.debug(f"Error details: {e}")
                     return 1
 
                 # 2. auth-under-load / throttling errors -> patient retry, then leave as 0
@@ -295,41 +299,42 @@ class EnergyDownloader(ABC):
                         reruns_ratelimit += 1
                         wait = int(RATE_LIMIT_RETRY_DELAY * reruns_ratelimit**1.5)
                         logger.warning(
-                            f"Limit {code} for '{task.identifier}' (rate-limit attempt "
-                            f"{reruns_ratelimit}/{MAX_RATE_LIMIT_RETRIES}). "
-                            f"Sleeping {wait}s."
+                            f"Rate limit '{code}' reached for '{task_id}' (attempt "
+                            f"{reruns_ratelimit}/{MAX_RATE_LIMIT_RETRIES}). Sleeping {wait}s."
                         )
                         time.sleep(wait)
                         continue
 
-                    logger.critical(
-                        f"Failed '{task.identifier}' after {MAX_RATE_LIMIT_RETRIES} "
-                        f"retry attempts: Rate/auth limit {code} persists. Retry in "
-                        f"next rerun...\n{e}"
+                    logger.error(
+                        f"Error '{code}' for '{task_id}': persisting rate limit issue after "
+                        f"{MAX_RATE_LIMIT_RETRIES} retries. Set to be retried next run..."
                     )
+                    logger.debug(f"Error details: {e}")
                     return 0  # rerun next time!
 
                 # 3. permanent client errors (except 401 & rate limits 429)
                 if code is not None and 400 <= code < 500:
                     logger.error(
-                        f"Client error {code} for '{task.identifier}'. Skipping."
+                        f"Error '{code}' for '{task_id}': permanent client issue. Skipping."
                     )
+                    logger.debug(f"Error details: {e}")
                     return 1
 
                 # 4. everything else (500s/timeout/connection) -> classic retry, then leave 0
                 if reruns < MAX_RETRIES:
                     reruns += 1
                     logger.warning(
-                        f"Retry due to error (code: {code}) for '{task.identifier}' "
+                        f"Retryable error '{code}' for '{task_id}' "
                         f"(attempt {reruns}/{MAX_RETRIES}). Sleeping {RETRY_DELAY}s."
                     )
                     time.sleep(RETRY_DELAY)
                     continue
 
-                logger.critical(
-                    f"Failed '{task.identifier}' after {MAX_RETRIES} attempts: "
-                    f"500/Timeout error (code {code}) persists. Retry in next rerun...\n{e}"
+                logger.error(
+                    f"Error '{code}' for '{task_id}': persisting 500s/Timeout/Connection "
+                    f"issue after {MAX_RETRIES} retries. Set to be retried next run..."
                 )
+                logger.debug(f"Error details: {e}")
                 return 0  # rerun next time!
 
         return 0  # pragma: no cover
