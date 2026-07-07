@@ -214,7 +214,7 @@ class CenDownloader(EnergyDownloader):
                 current_page = dict_body["page"]  # current page
 
                 if data == [] and total_pages == 0:
-                    raise MissingDataError("No energy data available! Skipping...")
+                    raise MissingDataError("No energy data available!")
 
                 all_data.extend(data)
 
@@ -235,7 +235,7 @@ class CenDownloader(EnergyDownloader):
         # Check if created dataframe is as expected
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
-            raise MissingDataError("No energy data available! Skipping...")
+            raise MissingDataError("No energy data available!")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
         if missing_cols:

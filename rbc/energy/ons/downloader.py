@@ -107,9 +107,7 @@ class OnsDownloader(EnergyDownloader):
             df = self._get_from_monthly_csv(task)
 
         if df.empty:
-            raise MissingDataError(
-                f"No energy data available for {task.year}-{task.month}. Skipping..."
-            )
+            raise MissingDataError("No energy data available (after month filter)!")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:

@@ -168,7 +168,7 @@ class AesoDownloader(EnergyDownloader):
         df = self._load_zip(item_id=item["id"], item_name=item["name"])
 
         if df.empty:
-            raise MissingDataError("No energy data available! Skipping...")
+            raise MissingDataError("No energy data available!")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
         if missing_cols:
@@ -188,7 +188,7 @@ class AesoDownloader(EnergyDownloader):
         df = df.loc[date_col.dt.to_period("M") == pd.Period(task.date, freq="M")].copy()
 
         if df.empty:
-            raise MissingDataError("No energy data after month filter! Skipping...")
+            raise MissingDataError("No energy data available (after month filter)!")
 
         df = df.sort_values(
             by=["Date (MST)", "Date (MPT)", "Asset Name"], ignore_index=True

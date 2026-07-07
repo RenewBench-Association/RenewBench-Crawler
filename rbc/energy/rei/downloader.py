@@ -108,7 +108,7 @@ class ReiDownloader(EnergyDownloader):
 
         if json_year < MIN_YEAR:
             raise MissingDataError(
-                f"No energy data available (it's before {MIN_YEAR}-4). Skipping..."
+                f"No energy data available (it's before {MIN_YEAR}-4)!"
             )
 
         # load yearly JSON file
@@ -123,9 +123,7 @@ class ReiDownloader(EnergyDownloader):
         matching_indices = month_mask.nonzero()[0]
 
         if len(matching_indices) == 0:
-            raise MissingDataError(
-                f"No energy data found for month {task.year}-{task.month}. Skipping..."
-            )
+            raise MissingDataError("No energy data available (after month filter)!")
 
         start_idx = matching_indices[0]
         end_idx = matching_indices[-1] + 1  # +1 because Python slicing is exclusive

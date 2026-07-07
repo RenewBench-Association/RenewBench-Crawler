@@ -276,10 +276,10 @@ class EnergyDownloader(ABC):
                 error_msg = f"MissingDataError for '{task_id}': {e}"
 
                 if task.dt.year == pd.Timestamp.now().year:
-                    logger.error(f"{error_msg}. Try task again in future...")
+                    logger.error(f"{error_msg} Retry again in the future...")
                     return 0  # current year task -> might become available later!
 
-                logger.error(f"{error_msg}. Skipping.")
+                logger.error(f"{error_msg} Skipping.")
                 return 1
 
             except self.RETRY_ERRORS as e:  # handle access failures

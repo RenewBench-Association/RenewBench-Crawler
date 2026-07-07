@@ -121,7 +121,7 @@ class EpiasDownloader(EnergyDownloader):
             "pp-list-for-date-range", start_date=start, end_date=end
         )
         if df_pp.empty:
-            raise MissingDataError("No power plant data available! Skipping...")
+            raise MissingDataError("No power plant data available!")
 
         # get generation data in batches
         num_batches = math.ceil(len(df_pp) / 1000)  # max allowed batch size = 1000
@@ -134,7 +134,7 @@ class EpiasDownloader(EnergyDownloader):
 
         df_gen = pd.concat(gen_data)
         if df_gen.empty:
-            raise MissingDataError("No energy data available! Skipping...")
+            raise MissingDataError("No energy data available!")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
         if missing_cols:
