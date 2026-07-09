@@ -30,7 +30,6 @@ from rbc.coordinates.tokenizer import (
 
 if TYPE_CHECKING:
     from rbc.coordinates.locator_gem import GEMLocator
-    from rbc.coordinates.locator_osmpp import OSMPPLocator
     from rbc.coordinates.locator_ppm import PPMLocator
 
 
@@ -124,20 +123,6 @@ OSM_ADAPTER = SourceAdapter(
     confidence_fn=lambda row: "medium",
 )
 
-OSMPP_ADAPTER = SourceAdapter(
-    source="osmpp",
-    get_df=lambda m: getattr(m._osmpp_locator, "df_global", None),
-    name_col="Name",
-    country_col="Country",
-    fueltype_col="Fueltype",
-    id_col="id",
-    # Curated, periodically-refreshed global aggregation (osm-powerplants'
-    # own filtering pipeline) -- better recall than one live Overpass query,
-    # but no per-unit manual curation (unlike GEM) or ID-backed signal
-    # (unlike PPM's EIC), so "medium" is the right middle ground.
-    confidence_fn=lambda row: "medium",
-)
-
 
 # ---------------------------------------------------------------------------
 # Main Matcher Class
@@ -175,7 +160,6 @@ class NameMatrixMatcher:
     SOURCE_BONUS: dict[str, float] = {
         "gem": 3.0,
         "ppm": 2.0,
-        "osmpp": 1.5,
         "osm": 1.0,
     }
 
@@ -187,7 +171,6 @@ class NameMatrixMatcher:
         gem_locator: Optional["GEMLocator"] = None,
         ppm_locator: Optional["PPMLocator"] = None,
         osm_df: Optional[pd.DataFrame] = None,
-        osmpp_locator: Optional["OSMPPLocator"] = None,
     ) -> None:
         """Initialize the name matrix matcher.
 
@@ -198,7 +181,6 @@ class NameMatrixMatcher:
             gem_locator: Optional GEMLocator instance for GEM candidates.
             ppm_locator: Optional PPMLocator instance for PPM candidates.
             osm_df: Optional DataFrame with OSM power plant data.
-            osmpp_locator: Optional OSMPPLocator instance for OSMPP candidates.
         """
         self.country = country
         self.country_code = country_code
@@ -222,7 +204,6 @@ class NameMatrixMatcher:
         self._gem_locator: Optional["GEMLocator"] = gem_locator
         self._ppm_locator: Optional["PPMLocator"] = ppm_locator
         self._osm_df: Optional[pd.DataFrame] = osm_df
-        self._osmpp_locator: Optional["OSMPPLocator"] = osmpp_locator
 
         # Track added alternative names for EIC enrichment
         self._alternative_names: dict[str, list[str]] = {}
@@ -353,9 +334,6 @@ class NameMatrixMatcher:
 
         if self._osm_df is not None and len(self._osm_df) > 0:
             candidates.extend(self._build_candidates(OSM_ADAPTER))
-
-        if self._osmpp_locator is not None:
-            candidates.extend(self._build_candidates(OSMPP_ADAPTER))
 
         # Index candidates by normalized name
         for candidate in candidates:
