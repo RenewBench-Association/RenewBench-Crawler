@@ -228,6 +228,9 @@ OPERATOR_METADATA: dict[str, dict[str, str | None]] = {
         "entity_col": "time_series.mkt_psrtype.power_system_resources.name",
         "code_col": "time_series.mkt_psrtype.power_system_resources.m_rid.value",
         "fuel_col": "time_series.mkt_psrtype.psr_type",
+        # Only operator that deviates from CoordinateLocator.PIPELINES's
+        # "standard" default -- see rbc/coordinates/orchestrator.py.
+        "pipeline": "entsoe",
     },
     "epias": {
         "country": "Turkey",

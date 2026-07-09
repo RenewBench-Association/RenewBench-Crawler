@@ -528,7 +528,7 @@ def build_map(
 
     Args:
         dfs: A single ``pd.DataFrame`` or a list of DataFrames as returned by
-            ``CoordinateLocator.find_coordinates_using_pp_databases()``.
+            ``CoordinateLocator.run_pipeline()``.
         labels: Display name for each DataFrame shown in the layer control.
             Defaults to ``["Dataset 1", "Dataset 2", ...]``.
         name_col: Column holding the plant name used as the popup header and
@@ -781,6 +781,6 @@ if __name__ == "__main__":
 
     input_dir = Path("data/testdata/entsoe/1h/10YNL----------L")
     cl = CoordinateLocator(input_dir=input_dir, output_dir=Path("data/testdata/entsoe"))
-    df = cl.find_coordinates_using_pp_databases()
+    df = cl.run_pipeline()
     if df is not None and len(df) > 0:
         build_map(df, labels=["Netherlands (ENTSO-E)"])

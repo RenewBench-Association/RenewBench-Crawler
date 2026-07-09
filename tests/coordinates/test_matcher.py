@@ -8,10 +8,12 @@ import pandas as pd
 import pytest
 
 from rbc.coordinates.locator_gem import GEMLocator
+from rbc.coordinates.locator_osmpp import OSMPPLocator
 from rbc.coordinates.locator_ppm import PPMLocator
 from rbc.coordinates.matcher import (
     GEM_ADAPTER,
     OSM_ADAPTER,
+    OSMPP_ADAPTER,
     PPM_ADAPTER,
     NameMatrixMatcher,
 )
@@ -108,19 +110,45 @@ def osm_df() -> pd.DataFrame:
 
 
 @pytest.fixture
+def osmpp_df() -> pd.DataFrame:
+    """Synthetic OSMPP candidate row, columns matching OSMPPLocator.df_global.
+
+    Returns:
+        pd.DataFrame: A single Estonian row, to verify OSMPP_ADAPTER's
+            column mapping and constant "medium" confidence.
+    """
+    return pd.DataFrame(
+        [
+            {
+                "Name": "Auvere jaam OSMPP",
+                "Country": "Estonia",
+                "Fueltype": "Oil",
+                "lat": 59.03,
+                "lon": 27.03,
+                "id": "osmpp-1",
+            }
+        ]
+    )
+
+
+@pytest.fixture
 def matcher(
-    ppm_df: pd.DataFrame, gem_df: pd.DataFrame, osm_df: pd.DataFrame
+    ppm_df: pd.DataFrame,
+    gem_df: pd.DataFrame,
+    osm_df: pd.DataFrame,
+    osmpp_df: pd.DataFrame,
 ) -> NameMatrixMatcher:
-    """Returns a NameMatrixMatcher wired to fake PPM/GEM locators and an OSM df.
+    """Returns a NameMatrixMatcher wired to fake PPM/GEM/OSMPP locators and an OSM df.
 
     Args:
         ppm_df (pd.DataFrame): Synthetic PPM candidate rows.
         gem_df (pd.DataFrame): Synthetic GEM candidate rows.
         osm_df (pd.DataFrame): Synthetic OSM candidate rows.
+        osmpp_df (pd.DataFrame): Synthetic OSMPP candidate rows.
 
     Returns:
         NameMatrixMatcher: Instance scoped to Estonia ("EE"), backed by fake
-            locator objects (types.SimpleNamespace) so no real PPM/GEM
+            locator objects (types.SimpleNamespace) so no real PPM/GEM/OSMPP
             downloads are needed.
     """
     return NameMatrixMatcher(
@@ -129,6 +157,7 @@ def matcher(
         ppm_locator=cast(PPMLocator, SimpleNamespace(df_europe=ppm_df)),
         gem_locator=cast(GEMLocator, SimpleNamespace(df_gem=gem_df)),
         osm_df=osm_df,
+        osmpp_locator=cast(OSMPPLocator, SimpleNamespace(df_global=osmpp_df)),
     )
 
 
@@ -201,15 +230,33 @@ def test_osm_adapter_no_country_column(matcher: NameMatrixMatcher):
     assert c.confidence == "medium"
 
 
+def test_osmpp_adapter_country_filter_and_confidence(matcher: NameMatrixMatcher):
+    """Happy path for OSMPP_ADAPTER's column mapping and constant "medium" confidence.
+
+    Args:
+        matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
+            `matcher` fixture.
+    """
+    candidates = matcher._build_candidates(OSMPP_ADAPTER)
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c.name == "Auvere jaam OSMPP"
+    assert c.source == "osmpp"
+    assert c.source_id == "osmpp-1"
+    assert c.country == "Estonia"
+    assert c.confidence == "medium"
+
+
 def test_build_candidates_missing_locator_returns_empty():
     """Failure path: a matcher with no locator wired up returns no candidates."""
     m = NameMatrixMatcher(country="Estonia")
     assert m._build_candidates(PPM_ADAPTER) == []
     assert m._build_candidates(GEM_ADAPTER) == []
+    assert m._build_candidates(OSMPP_ADAPTER) == []
 
 
-def test_build_matrix_uses_all_three_adapters(matcher: NameMatrixMatcher):
-    """Happy path for build_matrix: candidates from all three sources are present.
+def test_build_matrix_uses_all_four_adapters(matcher: NameMatrixMatcher):
+    """Happy path for build_matrix: candidates from all four sources are present.
 
     Args:
         matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
@@ -218,4 +265,4 @@ def test_build_matrix_uses_all_three_adapters(matcher: NameMatrixMatcher):
     matrix = matcher.build_matrix()
     all_candidates = [c for candidates in matrix.values() for c in candidates]
     sources = {c.source for c in all_candidates}
-    assert sources == {"ppm", "gem", "osm"}
+    assert sources == {"ppm", "gem", "osm", "osmpp"}

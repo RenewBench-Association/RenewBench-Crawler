@@ -188,3 +188,20 @@ def weighted_token_score(target: WeightedTokens, candidate: WeightedTokens) -> f
         for tok, weight in zip(target.tokens, target.weights)
     )
     return weighted_sum / total_weight
+
+
+def base_name_key(name: Optional[str], country_code: Optional[str]) -> Optional[str]:
+    """Reduce a name to its DEFAULT_WEIGHT ("discriminative") tokens, joined.
+
+    Drops generic/unit-designator tokens so e.g. "Plant X Unit 1" and "Plant
+    X Unit 2" both reduce to "plant x" -- used to group sibling units of the
+    same physical plant by name alone, for sources with no unique per-plant
+    ID (unlike ENTSO-E's EIC codes). Returns None if no discriminative token
+    survives (the name was entirely generic).
+    """
+    wt = weighted_tokenize(name, country_code)
+    survivors = [
+        tok for tok, weight in zip(wt.tokens, wt.weights) if weight == DEFAULT_WEIGHT
+    ]
+    key = " ".join(survivors).strip()
+    return key or None

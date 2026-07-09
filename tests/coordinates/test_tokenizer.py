@@ -4,6 +4,7 @@
 from rbc.coordinates.tokenizer import (
     DEFAULT_WEIGHT,
     LOW_WEIGHT,
+    base_name_key,
     build_vocabulary,
     normalize_name,
     strip_vocabulary_glued,
@@ -142,3 +143,27 @@ def test_country_specific_vocabulary():
     assert "ej" not in de_vocab
     assert "kraftwerk" in de_vocab
     assert "kraftwerk" not in ee_vocab
+
+
+def test_base_name_key_collapses_sibling_units():
+    """Happy path: units differing only by a unit designator share one base key.
+
+    Used to derive a non-EIC sibling-unit grouping key for the standard
+    pipeline (operators with no EIC/wcode data at all).
+    """
+    assert base_name_key("Plant X Unit 1", country_code=None) == base_name_key(
+        "Plant X Unit 2", country_code=None
+    )
+
+
+def test_base_name_key_all_generic_returns_none():
+    """Failure path: a name with no discriminative tokens has no base key.
+
+    Every token_weight rule that can classify a token LOW_WEIGHT (vocabulary
+    membership, or the bare-1-2-letter/1-3-digit UNIT_DESIGNATOR_RE branches)
+    guarantees any surviving DEFAULT_WEIGHT token is already >=3 chars, so an
+    explicit length guard on the joined key would be unreachable -- this case
+    (zero survivors) is the only way to end up with no usable key.
+    """
+    assert base_name_key("Unit 1", country_code=None) is None
+    assert base_name_key("Q1", country_code=None) is None
