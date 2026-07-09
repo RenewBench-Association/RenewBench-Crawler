@@ -177,7 +177,7 @@ class EntsoeDownloader(EnergyDownloader):
         )
         return df
 
-    def _save_task_data(self, task: DownloadTask, df: pd.DataFrame) -> None:
+    def _save_task_data(self, task: DownloadTask, data: pd.DataFrame | dict) -> None:
         """Save ENTSO-E downloaded task data to disk, splitting by temporal resolution.
 
         The API does not allow temporal resolution arguments, but ENTSO-E data has varying
@@ -185,10 +185,16 @@ class EntsoeDownloader(EnergyDownloader):
 
         Args:
             task (DownloadTask): The metadata for the task that was downloaded.
-            df (pd.DataFrame): Downloaded dataframe for the task.
+            data (pd.DataFrame | dict): Downloaded dataframe for the task.
         """
-        df_full = df.dropna(subset=["time_series.period.resolution"])
-        if len(df_full) != len(df):
+        if not isinstance(data, pd.DataFrame):
+            raise InvalidError(
+                f"ENTSO-E data for '{task.identifier}' must be a DataFrame, "
+                f"got '{type(data).__name__}'."
+            )
+
+        df_full = data.dropna(subset=["time_series.period.resolution"])
+        if len(df_full) != len(data):
             logger.warning(
                 "Some rows are missing temporal resolution values! Removing those rows."
             )

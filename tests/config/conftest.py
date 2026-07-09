@@ -25,6 +25,10 @@ def source_configs(tmp_path: Path) -> dict:
             "paths": {"dst_dir_raw": str(Path(tmp_path, "aeso"))},
             "access": {"api_key": "token"},
         },
+        "cen": {
+            "paths": {"dst_dir_raw": str(Path(tmp_path, "cen"))},
+            "access": {"api_key": "token"},
+        },
         "eat": {"paths": {"dst_dir_raw": str(Path(tmp_path, "eat"))}},
         "eia": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "eia"))},
@@ -40,6 +44,7 @@ def source_configs(tmp_path: Path) -> dict:
         },
         "ieso": {"paths": {"dst_dir_raw": str(Path(tmp_path, "ieso"))}},
         "ons": {"paths": {"dst_dir_raw": str(Path(tmp_path, "ons"))}},
+        "rei": {"paths": {"dst_dir_raw": str(Path(tmp_path, "rei"))}},
         "barra2": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "barra2"))},
         },

@@ -47,7 +47,7 @@ def load_config(
     cfg = {"source": source, **cfg}
 
     if overrides:
-        logger.info(f"Overriding '{source}' YAML config values with:\n{overrides}")
+        logger.info(f"Overriding config values in schemas: {list(overrides.keys())}")
         cfg = update_config(cfg, overrides)
 
     try:
@@ -55,6 +55,7 @@ def load_config(
     except KeyError:
         raise ValueError(f"Unknown source: {source}")
 
+    logger.info(f"Successfully loaded '{source}' YAML config file!")
     return schema.model_validate(cfg)
 
 

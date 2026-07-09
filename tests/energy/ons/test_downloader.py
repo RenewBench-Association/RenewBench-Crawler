@@ -2,6 +2,7 @@
 """Tests for ONS energy data downloader."""
 
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -176,7 +177,7 @@ def test_download_task_data(downloader: OnsDownloader, task: DownloadTask) -> No
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = downloader._build_task_path(task)
+        expected_file = downloader._build_task_path(task).with_suffix(".csv")
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
@@ -376,3 +377,35 @@ def test_load_yearly_csv_structure_changed(
 
         with pytest.raises(DataStructureError, match=expected_match):
             downloader._load_yearly_csv(url="http://fake.csv")
+
+
+# ------------------------------------
+# Tests - Locking with _download_lock
+# ------------------------------------
+def test_get_task_data_concurrent_tasks_single_call(downloader: OnsDownloader) -> None:
+    """Happy path for "_get_task_data" that concurrent tasks share the same yearly CSV.
+
+    This runs several tasks using the same yearly CSV file in parallel to assert that the
+    underlying HTTP request is made only once, thereby ensuring the combination of
+    "_download_lock" and "@lru_cache" with "_load_yearly_csv" work.
+
+    Args:
+        downloader (OnsDownloader): Instance of OnsDownloader class.
+    """
+    # define two tasks (months using same CSV) and example CSV dataframe for the year
+    tasks = [DownloadTask(date="2020-04"), DownloadTask(date="2020-05")]
+
+    mock_df_t1 = get_mock_df(tasks[0])
+    mock_df_t2 = get_mock_df(tasks[1])
+    mock_df = pd.concat([mock_df_t1, mock_df_t2], axis=0)
+
+    with patch("rbc.energy.ons.downloader.load_df_from_file") as mock_load:
+        mock_load.return_value = mock_df
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            results = list(executor.map(downloader._get_task_data, tasks))
+
+    assert len(results) == len(tasks)  # all tasks should return structurally valid dfs
+    for result in results:
+        assert set(result.columns) == set(EXPECTED_COLS)
+
+    assert mock_load.call_count == 1  # only one HTTP request since CSV is shared

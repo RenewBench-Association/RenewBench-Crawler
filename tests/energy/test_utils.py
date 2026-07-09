@@ -22,6 +22,7 @@ from rbc.energy.utils import (
     load_df_from_file,
     load_excel_from_file,
     write_df_to_csv,
+    write_dict_to_json,
 )
 
 # ----------------------------------
@@ -244,6 +245,65 @@ class TestEnergyDownloaderThreading:
                 mock_save.assert_called_once()
 
 
+class TestEnergyDownloaderSaveTaskData:
+    """Tests for _save_task_data type dispatch logic."""
+
+    def test_save_task_data_dataframe(self, downloader: MockDownloader) -> None:
+        """Happy path for _save_task_data when data is a DataFrame.
+
+        Args:
+            downloader (MockDownloader): Instance of the MockDownloader class.
+        """
+        df = pd.DataFrame({"col": [1, 2, 3]})
+        with patch("rbc.energy.utils.write_df_to_csv") as mock_write:
+            downloader._save_task_data(task=TASK_DAY, data=df)
+            mock_write.assert_called_once()
+            call_args = mock_write.call_args
+            pd.testing.assert_frame_equal(call_args.kwargs["df"], df)
+            assert (
+                call_args.kwargs["file_path"].suffix == ""
+            )  # suffix added by write fn
+
+    def test_save_task_data_dict(self, downloader: MockDownloader) -> None:
+        """Happy path for _save_task_data when data is a dict.
+
+        Args:
+            downloader (MockDownloader): Instance of the MockDownloader class.
+        """
+        data = {"key": [1, 2, 3]}
+        with patch("rbc.energy.utils.write_dict_to_json") as mock_write:
+            downloader._save_task_data(task=TASK_DAY, data=data)
+            mock_write.assert_called_once()
+            call_args = mock_write.call_args
+            assert call_args.kwargs["data"] == data
+            assert call_args.kwargs["file_path"].suffix == ""
+
+    def test_save_task_data_invalid_type(self, downloader: MockDownloader) -> None:
+        """Failure path for _save_task_data when data has an unsupported type.
+
+        Args:
+            downloader (MockDownloader): Instance of the MockDownloader class.
+        """
+        with pytest.raises(InvalidError, match="invalid type"):
+            downloader._save_task_data(task=TASK_DAY, data="invalid str")
+
+    def test_save_task_data_invalid_type_kills_run(
+        self, downloader: MockDownloader
+    ) -> None:
+        """Failure path ensuring InvalidError from _save_task_data triggers os._exit.
+
+        Args:
+            downloader (MockDownloader): Instance of the MockDownloader class.
+        """
+        with patch.object(
+            downloader, "_get_task_data", return_value="not a df or dict"
+        ):
+            with patch("os._exit", side_effect=SystemExit) as mock_exit:
+                with pytest.raises(SystemExit):
+                    downloader._threading_wrapper(TASK_DAY)
+            mock_exit.assert_called_once_with(1)
+
+
 # ----------------------------------
 # Tests - EnergyDownloader helper methods
 # ----------------------------------
@@ -344,6 +404,16 @@ class TestEnergyDownloaderUtilities:
 class TestEnergyDownloaderCheckpoint:
     """Tests for saving, loading, and handling checkpoints."""
 
+    def test_build_task_path_has_no_suffix(self, downloader: MockDownloader) -> None:
+        """Happy path verifying _build_task_path returns a path without a file suffix.
+
+        Args:
+            downloader (MockDownloader): Instance of the MockDownloader class.
+        """
+        path = downloader._build_task_path(TASK_DAY)
+        assert path.suffix == ""
+        assert path.name == "2020-01-01"
+
     @pytest.mark.parametrize(
         "task, expected_csv",
         [
@@ -365,7 +435,7 @@ class TestEnergyDownloaderCheckpoint:
             task (DownloadTask): Valid DownloadTask for _build_task_path.
             expected_csv (str): Expected csv path name.
         """
-        path = downloader._build_task_path(task)
+        path = downloader._build_task_path(task).with_suffix(".csv")
         assert str(expected_csv) in str(path)
 
     @pytest.mark.parametrize(
@@ -608,6 +678,22 @@ def test_write_df_to_csv(tmp_path: Path) -> None:
     write_df_to_csv(mock_df, non_csv_path)
     assert not non_csv_path.exists()
     assert csv_path.is_file()
+
+
+def test_write_dict_to_json(tmp_path: Path) -> None:
+    """Happy path for _write_dict_to_json, ensuring writing a dict to a json works.
+
+    Args:
+        tmp_path (Path): Path to temporary directory.
+    """
+    non_json_path = Path(tmp_path, "invalid.txt")
+    json_path = Path(tmp_path, "invalid.json")
+    mock_dict = {"total": [16.2]}
+
+    # check that writing dict to json works, with conversion if incorrect suffix is given
+    write_dict_to_json(mock_dict, non_json_path)
+    assert not non_json_path.exists()
+    assert json_path.is_file()
 
 
 @pytest.mark.parametrize("file_name", ["valid.csv", "valid.xlsx"])

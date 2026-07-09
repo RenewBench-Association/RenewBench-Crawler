@@ -1,11 +1,12 @@
 # tests/test_utils.py
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from loguru import logger
 
-from rbc.utils import handle_exceptions, setup_logging
+from rbc.utils import clean_record, handle_exceptions, setup_logging
 
 
 # ----------------------------------
@@ -82,3 +83,34 @@ def test_handle_exceptions_do_nothing_when_keyboardinterrupt(tmp_path: Path):
 
     assert "Error occurred that killed the run:" not in log_content
     assert "Simulated CTRL+C" not in log_content
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "token=SECRET_T",
+        "password='SECRET_P'",
+        "token: SECRET_T",
+        "password: SECRET_P",
+        "{'token': 'SECRET_T', 'username': 'USER', 'password': 'SECRET_P'}",
+        "access.token=SECRET_T",
+        "access.password=SECRET_P",
+        "AccessAccount(username='USER', password='SECRET_P')",
+    ],
+)
+def test_clean_record(message: str) -> None:
+    """Happy path for "clean_record" function, ensuring sensitive data is masked.
+
+    Args:
+        message (str): Message to be logged containing sensitive data.
+    """
+    record: dict[str, Any] = {"message": message}
+
+    clean_record(record)
+
+    if "SECRET" in message:
+        assert "SECRET_T" not in record["message"]
+        assert "SECRET_P" not in record["message"]
+        assert "******" in record["message"]
+    if "USER" in message:
+        assert "USER" in record["message"]

@@ -2,6 +2,7 @@
 """Tests for IESO energy data downloader."""
 
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -184,7 +185,7 @@ def test_download_task_data(downloader: IesoDownloader, task: DownloadTask) -> N
         status = downloader._download_task_data(task)
 
         assert status == 1
-        expected_file = downloader._build_task_path(task)
+        expected_file = downloader._build_task_path(task).with_suffix(".csv")
         assert expected_file.is_file(), f"The CSV {expected_file} was not created!"
 
         saved_df = pd.read_csv(expected_file)
@@ -501,3 +502,40 @@ def test_standardize_old_data_missing_columns(downloader: IesoDownloader) -> Non
 
     with pytest.raises(DataStructureError, match="Relevant columns are missing"):
         downloader.standardize_old_data(mock_df, measurement_type="Output")
+
+
+# ------------------------------------
+# Tests - Locking with _download_lock
+# ------------------------------------
+def test_get_task_data_concurrent_tasks_single_call(downloader: IesoDownloader) -> None:
+    """Happy path for "_get_task_data" that concurrent tasks share the same yearly Excel.
+
+    This runs several tasks using the same yearly Excel file in parallel to assert that the
+    underlying HTTP request is made only once, thereby ensuring the combination of
+    "_download_lock" and "@lru_cache" with "_load_yearly_excel" work.
+
+    Args:
+        downloader (IesoDownloader): Instance of IesoDownloader class.
+    """
+    # define two tasks (months using same old Excel) and example excel & extracted df
+    tasks = [DownloadTask(date="2018-04"), DownloadTask(date="2018-05")]
+
+    mock_xls = MagicMock(spec=pd.ExcelFile, sheet_names=["Output", "Capability"])
+    mock_df = pd.DataFrame(columns=EXPECTED_COLS)
+    mock_df["Delivery Date"] = pd.to_datetime(
+        [f"{tasks[0].date}-01", f"{tasks[1].date}-01"]
+    )
+    mock_df["Generator"] = ["A", "B"]
+    mock_df["Hour 1"] = [10, 20]
+
+    with (
+        patch("rbc.energy.ieso.downloader.load_excel_from_file") as mock_load,
+        patch.object(downloader, "standardize_old_data", return_value=mock_df),
+        patch("rbc.energy.ieso.downloader.pd.read_excel", return_value=mock_df),
+    ):
+        mock_load.return_value = mock_xls
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(downloader._get_task_data, tasks))
+
+    assert len(results) == len(tasks)  # all tasks should return one result
+    assert mock_load.call_count == 1  # only one HTTP request since CSV is shared

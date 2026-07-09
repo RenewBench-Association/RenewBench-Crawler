@@ -6,6 +6,7 @@ Download data from AESO box cloud storage site for Alberta, Canada.
 
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
+from pprint import pformat
 
 from loguru import logger
 
@@ -39,7 +40,8 @@ def parse_arguments() -> Namespace:
         nargs="+",
         type=str,
         default=["1h", "5min"],  # these are the available resolutions
-        help=f"Temporal resolutions to download. Example: --temporal_resolutions 1h 5min. Default: {['1h', '5min']}",
+        help=f"Temporal resolutions to download. Example: --temporal_resolutions 1h 5min. "
+        f"Default: {['1h', '5min']}",
     )
     parser.add_argument(
         "--no-resume",
@@ -65,8 +67,8 @@ def main() -> None:
 
     cfg = load_config(source=SOURCE, overrides=overrides)
     setup_logging(output_dir=cfg.paths.dst_dir_raw)
-    logger.info(f"Flags for the '{SOURCE}' download:\n{args}")
-    logger.info(f"Config for the '{SOURCE}' download:\n{cfg}")
+    logger.info(f"Flags for download:\n{pformat(vars(args), sort_dicts=False)}")
+    logger.info(f"Config schema for download:\n{pformat(dict(cfg), sort_dicts=False)}")
 
     downloader = AesoDownloader(
         token=cfg.access.api_key,
