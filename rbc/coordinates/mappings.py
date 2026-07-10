@@ -8,9 +8,9 @@ All other operators keep the same key structure with placeholder columns so the
 expected mapping shape exists while follow-up validation is performed.
 """
 
-# TODO: This is a minimal working version of the mapping module only, Elena did not upload the mapping file to the repo :D. So this is a gestimated version of the mapping file.
-
 from __future__ import annotations
+
+from typing import NotRequired, TypedDict
 
 # Mapping of power plant type abbreviations and local language full names to
 # canonical English equivalents. Applied before fuzzy matching so that
@@ -186,80 +186,77 @@ COUNTRY_ISO2_MAP: dict[str, str] = {
 }
 
 
-OPERATOR_METADATA: dict[str, dict[str, str | None]] = {
-    "adme": {
-        "country": "Argentina",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "aemo": {
-        "country": "Australia",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "aeso": {
-        "country": "Canada",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "cen": {
-        "country": "Chile",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "eat": {
-        "country": "Taiwan",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "eia": {
-        "country": "United States",
-        "entity_col": "respondent-name",
-        "code_col": "respondent",
-        "fuel_col": "fueltype",
-    },
-    "entsoe": {
-        "country": "Europe",
-        "entity_col": "time_series.mkt_psrtype.power_system_resources.name",
-        "code_col": "time_series.mkt_psrtype.power_system_resources.m_rid.value",
-        "fuel_col": "time_series.mkt_psrtype.psr_type",
-        # Only operator that deviates from CoordinateLocator.PIPELINES's
-        # "standard" default -- see rbc/coordinates/orchestrator.py.
-        "pipeline": "entsoe",
-    },
-    "epias": {
-        "country": "Turkey",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "ieso": {
-        "country": "Canada",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "ons": {
-        "country": "United Kingdom",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "rei": {
-        "country": "Mexico",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
-    "taipower": {
-        "country": "Taiwan",
-        "entity_col": "",
-        "code_col": None,
-        "fuel_col": None,
-    },
+class OperatorInfo(TypedDict):
+    """Class for defining operator detail parameters and their types."""
+
+    country: str
+    entity_col: str
+    needs_coordinates: bool
+    code_col: NotRequired[str]
+    fuel_col: NotRequired[str]
+    pipeline: NotRequired[str]
+
+
+OPERATOR_METADATA: dict[str, OperatorInfo] = {
+    "adme": OperatorInfo(country="Uruguay", entity_col="", needs_coordinates=True),
+    "aemo": OperatorInfo(
+        country="Australia",
+        entity_col="unit_code",
+        fuel_col="unit_fueltech_id",
+        needs_coordinates=False,
+    ),
+    "aeso": OperatorInfo(
+        country="Canada",
+        entity_col="Asset Name",
+        fuel_col="Fuel Type",
+        needs_coordinates=True,
+    ),
+    "cen": OperatorInfo(
+        country="Chile",
+        entity_col="central",
+        fuel_col="tipo_tecnologia",
+        code_col="id_central",
+        needs_coordinates=True,
+    ),
+    "eat": OperatorInfo(
+        country="New Zealand",
+        entity_col="gen_code",
+        fuel_col="fuel_code",
+        needs_coordinates=True,
+    ),
+    "eia": OperatorInfo(
+        country="United States",
+        entity_col="respondent-name",
+        code_col="respondent",
+        fuel_col="fueltype",
+        needs_coordinates=False,
+    ),
+    "entsoe": OperatorInfo(
+        country="Europe",
+        entity_col="time_series.mkt_psrtype.power_system_resources.name",
+        code_col="time_series.mkt_psrtype.power_system_resources.m_rid.value",
+        fuel_col="time_series.mkt_psrtype.psr_type",
+        pipeline="entsoe",
+        needs_coordinates=True,
+    ),
+    "epias": OperatorInfo(
+        country="Turkey", entity_col="powerPlantName", needs_coordinates=True
+    ),
+    "ieso": OperatorInfo(
+        country="Canada",
+        entity_col="Generator",
+        fuel_col="Fuel Type",
+        needs_coordinates=False,
+    ),
+    "ons": OperatorInfo(
+        country="Brazil",
+        entity_col="nom_usina",
+        fuel_col="nom_tipousina",
+        code_col="id_ons",
+        needs_coordinates=True,
+    ),
+    "rei": OperatorInfo(country="Japan", entity_col="", needs_coordinates=False),
+    "taipower": OperatorInfo(
+        country="Taiwan", entity_col="name", fuel_col="fueltype", needs_coordinates=True
+    ),
 }
