@@ -31,7 +31,95 @@ from rbc.energy.entsoe.mappings import (
     FUELTYPE_CODE_MAPPINGS,
     FUELTYPE_MAPPINGS,
 )
-from rbc.energy.utils import MissingDataError, load_df_from_file
+from rbc.energy.utils import DownloadTask, MissingDataError, load_df_from_file
+
+DATE_PATTERN = DownloadTask._DATE_PATTERN  # pattern for relevant file names
+TRES_PATTERN = DownloadTask._TRES_PATTERN  # pattern for one of the parent folders
+
+
+def perform_coordinate_finding(
+    source: str,
+    input_paths: list[Path | str],
+    output_dir: Path | None = None,
+    gem_dir: Path | None = None,
+    update: bool = False,
+    live: bool = False,
+) -> None:
+    """Main entry point for coordinating location finding."""
+    if source not in OPERATOR_METADATA:
+        raise ValueError(f"Unknown energy source: '{source}'")
+
+    input_dirs = _collect_dirs(input_paths)
+
+    for input_dir in input_dirs:
+        if source not in input_dir.parts:
+            logger.warning(
+                f"Path '{input_dir}' does not explicitly contain '{source}'!"
+            )
+            input_dirs.remove(input_dir)
+
+    # Build the (expensive: network/CSV/parquet-backed) reference-data locators
+    # ONCE and share them across all zones below. Previously a fresh set was
+    # constructed per input_dir, meaning the pan-European PPM CSV was re-downloaded
+    # and the GEM/EIC directories were re-parsed once per zone — very wasteful for
+    # multi-zone runs (e.g. several German TSO zones all sharing the same data).
+    shared_gemloc = (
+        GEMLocator(gem_dir=gem_dir, cache_dir=output_dir) if gem_dir else None
+    )
+    shared_ppmloc = None
+    shared_eic_locator = None
+
+    if source == "entsoe":
+        # Use European regional assets only if country matches
+        shared_ppmloc = PPMLocator()
+        shared_eic_locator = EICDirectoryLocator(cache_dir=output_dir)
+    # else:
+    #     # Use global OSM mapping asset for the rest of the world
+    #     shared_osmpploc = OSMPPLocator()  # todo: comment in (& define handling!) when ready
+
+    dataframes: list[pd.DataFrame] = []
+    labels: list[str] = []
+    pp_name_col = ""
+
+    for input_dir in input_dirs:
+        try:
+            cl = CoordinateLocator(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                osm_update=update,
+                osm_live=live,
+                ppmloc=shared_ppmloc,
+                eic_locator=shared_eic_locator,
+                gemloc=shared_gemloc,
+            )
+            df = cl.run_pipeline()
+
+            label = cl.country
+            if pp_name_col == "":
+                pp_name_col = cl._pp_name_col
+
+            # Use explicit check to avoid pandas NA boolean ambiguity
+            if df is not None and len(df) > 0:
+                dataframes.append(df)
+                labels.append(label)
+                logger.info(
+                    f"{input_dir}: {df['lat'].notna().sum()}/{len(df)} matched."
+                )
+        except Exception as e:
+            logger.warning(f"{input_dir}: skipped — {e}")
+
+    if dataframes:
+        # build_map works best with a name column; for ENTSOE the name col is prefixed
+        map_dfs = []
+        for df_map in dataframes:
+            if pp_name_col in df_map.columns and "Name" not in df_map.columns:
+                df_map = df_map.copy()
+                df_map["Name"] = df_map[pp_name_col]
+            map_dfs.append(df_map)
+
+        build_map(map_dfs, labels=labels)
+    else:
+        logger.warning("No results found for the given input paths.")
 
 
 class CoordinateLocator:
@@ -69,12 +157,11 @@ class CoordinateLocator:
         self,
         input_dir: Path,
         output_dir: Path | None = None,
-        osm_update: bool = False,
-        osm_live: bool = False,
-        gem_dir: Path | None = None,
         ppmloc: PPMLocator | None = None,
         eic_locator: EICDirectoryLocator | None = None,
         gemloc: GEMLocator | None = None,
+        osm_update: bool = False,
+        osm_live: bool = False,
     ) -> None:
         """Initialize CoordinateLocator class.
 
@@ -86,21 +173,10 @@ class CoordinateLocator:
             input_dir (Path): Path to the raw energy generation file (assuming CSV here).
             output_dir (Path, optional): Path to the directory where any output files may be
                 saved. Defaults to None.
-            osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
-                ``overpass_<CC>_plants.parquet`` file even if it already exists.
-                Corresponds to the ``--update`` / ``-u`` CLI flag.
-            osm_live (bool): Query Overpass live on every run, ignoring and not writing
-                any local file.  Corresponds to the ``--live`` CLI flag.
-            gem_dir (Path, optional): Directory containing manually downloaded Global
-                Energy Monitor (GEM) tracker xlsx files
-                (https://globalenergymonitor.org/download-data). When given, GEM is
-                used as an additional coordinate source alongside powerplantmatching
-                (PPM, entsoe pipeline only) in the fuzzy name-matching step. Defaults
-                to None (GEM disabled). Ignored when *gemloc* is given directly.
-            ppmloc (PPMLocator, optional): Pre-built PPM locator to reuse (e.g. across
-                multiple zones in a single run) instead of constructing a new one,
-                which re-downloads the pan-European PPM CSV. Defaults to None (a new
-                instance is created).
+            ppmloc (PPMLocator, optional): Pre-built PPM locator to (re)use the pan-European
+                PPM CSV (e.g. across multiple zones in a single run). Defaults to None,
+                in which case a new instance of PPM is constructed if the resolved pipeline
+                is "entsoe".
             eic_locator (EICDirectoryLocator, optional): Pre-built EIC directory
                 locator to reuse. Defaults to None, in which case a new instance is
                 only constructed if the resolved pipeline is "entsoe" -- the entsoe
@@ -108,8 +184,12 @@ class CoordinateLocator:
                 don't pay for the W_eicCodes.csv fetch at all. An explicitly-passed
                 instance is always honored regardless of pipeline.
             gemloc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
-                None, in which case a new instance is created from *gem_dir* (or GEM
-                stays disabled if *gem_dir* is also None).
+                None, in which case GEM is disabled.
+            osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
+                ``overpass_..._plants.parquet`` file even if it already exists.
+                Corresponds to the ``--update`` / ``-u`` CLI flag.
+            osm_live (bool): Query Overpass live on every run, ignoring and not writing
+                any local file.  Corresponds to the ``--live`` CLI flag.
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -119,19 +199,6 @@ class CoordinateLocator:
             raise ValueError(f"Input directory '{input_dir}' is not a directory!")
 
         self.df_openinfra = pd.DataFrame()
-        # Locators are expensive to construct (network/CSV/parquet reads), so
-        # callers processing multiple zones in one run should build them once and
-        # pass them in here to be shared, rather than paying that cost per zone.
-        self.ppmloc = ppmloc if ppmloc is not None else PPMLocator()  # Europe only
-        if gemloc is not None:
-            self.gemloc: GEMLocator | None = gemloc
-        else:
-            self.gemloc = (
-                GEMLocator(gem_dir=gem_dir, cache_dir=self.output_dir)
-                if gem_dir
-                else None
-            )  # optional, requires manual download
-
         try:
             self.operator = [p for p in self.input_dir.parts if p in OPERATOR_METADATA][
                 0
@@ -163,18 +230,29 @@ class CoordinateLocator:
         except MissingDataError as e:
             raise e
 
+        # Locators are expensive to construct (network/CSV/parquet reads), so
+        # callers processing multiple zones in one run should build them once and
+        # pass them in here to be shared, rather than paying that cost per zone.
+        self.gemloc: GEMLocator | None = gemloc
+
         self._pipeline_name = OPERATOR_METADATA[self.operator].get(
             "pipeline", "standard"
         )
-        if eic_locator is not None:
-            self.eic_locator: EICDirectoryLocator | None = eic_locator
-        elif self._pipeline_name == "entsoe":
-            self.eic_locator = EICDirectoryLocator(cache_dir=self.output_dir)
+        if self._pipeline_name == "entsoe":
+            self.eic_locator: EICDirectoryLocator | None = (
+                eic_locator
+                if eic_locator is not None
+                else (EICDirectoryLocator(cache_dir=self.output_dir))
+            )
+            self.ppmloc = ppmloc if ppmloc is not None else PPMLocator()
         else:
             self.eic_locator = None
+            self.ppmloc = (
+                ppmloc if ppmloc is not None else PPMLocator()
+            )  # todo: change!
 
         logger.info(
-            f"CoordinateLocator initalized for: {self.operator} ({self.country})"
+            f"CoordinateLocator initialized for: {self.operator} ({self.country})"
         )
 
     def run_pipeline(self) -> pd.DataFrame:
@@ -876,192 +954,36 @@ class CoordinateLocator:
         return COUNTRY_ISO2_MAP.get(str(country).strip().lower(), None)
 
 
-def _collect_zone_dirs(
-    input_paths: Path | str | list[Path | str],
-) -> list[Path]:
-    """Resolve one or more input paths into a flat, sorted list of zone directories.
+def _collect_dirs(input_paths: list[Path | str]) -> list[Path]:
+    """Resolve one or more input paths into a flat, sorted list of directories.
 
-    Three input shapes are accepted:
+    The input list can contain:
 
-    - **Single zone folder** — a directory that directly contains the CSV data
-      files (no subdirectories).  Treated as one zone.
-    - **Container folder** — a directory whose immediate children are zone
-      directories.  All subdirectories are collected as individual zones.
-    - **List** — any mix of the two shapes above.  Each element is resolved
-      independently and the results are concatenated.
+    - A single folder — a directory that directly contains the CSV files (no subdirectories).
+        Treated as one dir.
+    - A container folder — a directory whose children contain the CSV files (somewhere).
+        All subdirectories are searched and those collected that contain relevant CSVs.
+    - Any mix of the two shapes above — each element is resolved independently and the
+        results are concatenated.
 
     Args:
-        input_paths: A single ``Path`` / ``str``, or a list thereof.
+        input_paths (list): A list of paths of interest.
 
     Returns:
-        list[Path]: Deduplicated, sorted list of resolved zone directories.
+        list[Path]: Deduplicated, sorted list of resolved directories.
     """
-    if isinstance(input_paths, (str, Path)):
-        candidates = [Path(input_paths)]
-    else:
-        candidates = [Path(p) for p in input_paths]
+    candidates = [Path(p) for p in input_paths]
+    directories: set[Path] = set()
 
-    zone_dirs: list[Path] = []
     for path in candidates:
         if not path.is_dir():
-            logger.warning(f"'{path}' is not a directory — skipping.")
+            logger.warning(f"'{path}' is not a directory — skipping!")
             continue
-        subdirs = sorted(p for p in path.iterdir() if p.is_dir())
-        if subdirs:
-            # path is a container → collect its immediate subdirectories
-            zone_dirs.extend(subdirs)
-        else:
-            # path is a leaf zone directory
-            zone_dirs.append(path)
 
-    # deduplicate while preserving order
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for d in zone_dirs:
-        resolved = d.resolve()
-        if resolved not in seen:
-            seen.add(resolved)
-            unique.append(d)
-    return unique
+        for p in path.rglob("*.csv"):
+            if DATE_PATTERN.match(p.stem) and any(
+                TRES_PATTERN.match(prt) for prt in p.parts
+            ):
+                directories.add(p.parent.resolve())
 
-
-if "__main__" == __name__:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Find coordinates for power plants and render an interactive map."
-    )
-    parser.add_argument(
-        "--update",
-        "-u",
-        action="store_true",
-        help=(
-            "Re-fetch OSM power plant data from Overpass and overwrite the local "
-            "overpass_<CC>_plants.parquet file, even if it already exists."
-        ),
-    )
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help=(
-            "Query the Overpass API live on every run. "
-            "The local OSM file is neither read nor written."
-        ),
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        type=Path,
-        default=Path("../testdata/coordinates/"),
-        help="Directory where enriched_units_<zone>.csv files are written.",
-    )
-    parser.add_argument(
-        "--gem-dir",
-        type=Path,
-        default=Path("../testdata/coordinates/gem-data"),
-        help=(
-            "Directory containing manually downloaded Global Energy Monitor (GEM) "
-            "tracker xlsx files (https://globalenergymonitor.org/download-data). "
-            "When given, GEM is used as an additional coordinate source alongside "
-            "powerplantmatching in the ENTSOE enrichment pipeline. Pass an empty "
-            "string or a non-existent path to disable GEM matching."
-        ),
-    )
-    args = parser.parse_args()
-    gem_dir = args.gem_dir if args.gem_dir and args.gem_dir.is_dir() else None
-    if args.gem_dir and gem_dir is None:
-        logger.warning(
-            f"--gem-dir '{args.gem_dir}' is not a directory — GEM matching disabled."
-        )
-
-    # --- configure input here: pick ONE of the three forms ---
-    #
-    # 1) Container folder — every subdirectory becomes one zone:
-    input_paths: Path | str | list[Path | str] = Path("../testdata/energy/entsoe/1h/")
-    #
-    # 2) Single zone folder:
-    # input_paths = Path("../testdata/energy/entsoe/1h/10YCH-SWISSGRIDZ/")
-
-    #
-    # 3) Explicit list of zone folders (mix of single zones and containers allowed):
-    # input_paths: Path | str | list[Path | str] = [
-    # Path("../testdata/energy/entsoe/1h/10Y1001A1001A39I/"),
-    # Path("../testdata/energy/entsoe/1h/10Y1001A1001A990/"),
-    # Path("../testdata/energy/entsoe/1h/10Y1001A1001B012/"),
-    # Path("../testdata/energy/entsoe/1h/10Y1001C--00100H/"),
-    # Path("../testdata/energy/entsoe/1h/10YAL-KESH-----5/"),
-    # Path("../testdata/energy/entsoe/1h/10YAT-APG------L/"),
-    # Path("../testdata/energy/entsoe/1h/10YBA-JPCC-----D/"),
-    # Path("../testdata/energy/entsoe/1h/10YBE----------2/"),
-    # Path("../testdata/energy/entsoe/1h/10YCA-BULGARIA-R/"),
-    # Path("../testdata/energy/entsoe/1h/10YCH-SWISSGRIDZ/"),
-    # Path("../testdata/energy/entsoe/1h/10YCS-CG-TSO---S/"),
-    # Path("../testdata/energy/entsoe/1h/10YCS-SERBIATSOV/"),
-    # Path("../testdata/energy/entsoe/1h/10YDE-ENBW-----N/"),
-    # Path("../testdata/energy/entsoe/1h/10YDE-EON------1/"),
-    # Path("../testdata/energy/entsoe/1h/10YDE-RWENET---I/"),
-    # Path("../testdata/energy/entsoe/1h/10YDE-VE-------2/"),
-    # Path("../testdata/energy/entsoe/1h/10YFI-1--------U/"),
-    # Path("../testdata/energy/entsoe/1h/10YGR-HTSO-----Y/"),
-    # Path("../testdata/energy/entsoe/1h/10YLV-1001A00074/"),
-    # Path("../testdata/energy/entsoe/1h/10YMK-MEPSO----8/"),
-    # Path("../testdata/energy/entsoe/1h/10YNL----------L/"),
-    # Path("../testdata/energy/entsoe/1h/10YPT-REN------W/"),
-    # Path("../testdata/energy/entsoe/1h/10YSE-1--------K/"),
-    # Path("../testdata/energy/entsoe/1h/10YSK-SEPS-----K/"),
-    # ]
-
-    zone_dirs = _collect_zone_dirs(input_paths)
-    dataframes: list[pd.DataFrame] = []
-    labels: list[str] = []
-
-    # Build the (expensive: network/CSV/parquet-backed) reference-data locators
-    # ONCE and share them across all zones below. Previously a fresh set was
-    # constructed per zone_dir, meaning the pan-European PPM CSV was re-downloaded
-    # and the GEM/EIC directories were re-parsed once per zone — very wasteful for
-    # multi-zone runs (e.g. several German TSO zones all sharing the same data).
-    shared_ppmloc = PPMLocator()
-    shared_eic_locator = EICDirectoryLocator(cache_dir=args.output)
-    shared_gemloc = (
-        GEMLocator(gem_dir=gem_dir, cache_dir=args.output) if gem_dir else None
-    )
-
-    for zone_dir in zone_dirs:
-        folder_name = zone_dir.name
-        label = folder_name[3:5]  # e.g. "10YLV-1001A00074" → "LV"
-        try:
-            cl = CoordinateLocator(
-                input_dir=zone_dir,
-                output_dir=args.output,
-                osm_update=args.update,
-                osm_live=args.live,
-                gem_dir=gem_dir,
-                ppmloc=shared_ppmloc,
-                eic_locator=shared_eic_locator,
-                gemloc=shared_gemloc,
-            )
-            df = cl.run_pipeline()
-            # Use explicit check to avoid pandas NA boolean ambiguity
-            if df is not None and len(df) > 0:
-                dataframes.append(df)
-                labels.append(label)
-                logger.info(
-                    f"[{label}] {folder_name}: "
-                    f"{df['lat'].notna().sum()}/{len(df)} matched."
-                )
-        except Exception as e:
-            logger.warning(f"[{label}] {folder_name}: skipped — {e}")
-
-    if dataframes:
-        # build_map works best with a name column; for ENTSOE the name col is prefixed
-        map_dfs = []
-        for df_map in dataframes:
-            # Provide a flat 'Name' column for the map if not already present
-            name_col_long = OPERATOR_METADATA["entsoe"]["entity_col"]
-            if f"pp.{name_col_long}" in df_map.columns and "Name" not in df_map.columns:
-                df_map = df_map.copy()
-                df_map["Name"] = df_map[f"pp.{name_col_long}"]
-            map_dfs.append(df_map)
-        build_map(map_dfs, labels=labels)
-    else:
-        logger.warning("No results found for the given input paths.")
+    return sorted(directories)
