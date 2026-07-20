@@ -215,7 +215,7 @@ class AemoDownloader(EnergyDownloader):
         data = asyncio.run(fetch_task_data())
 
         if not data:
-            raise MissingDataError("No generation data!")
+            raise MissingDataError("No energy data available!")
 
         # define dataframe to be saved
         df_api = pd.DataFrame(data)

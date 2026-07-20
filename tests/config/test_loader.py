@@ -78,8 +78,8 @@ class TestLoadConfig:
         fake_cfg_path = Path(tmp_configs_dir, "fake.yaml")
         fake_cfg_path.unlink(missing_ok=True)
 
-        with pytest.raises(ValueError, match="missing"):
-            loader.load_config(source="fake", configs_dir=tmp_configs_dir)
+        with pytest.raises(ValueError, match="Source 'fake' is missing"):
+            loader.load_config(source="fake", configs_dir=fake_cfg_path)
 
     def test_load_config_unknown_source(self, tmp_configs_dir: Path) -> None:
         """Failure path for "load_config" function when data source is not in registry.
