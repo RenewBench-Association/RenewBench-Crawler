@@ -286,7 +286,7 @@ def test_get_task_data_before_min_date(
         task_date (str): Date string for the task.
     """
     task = DownloadTask(date=task_date)
-    with pytest.raises(MissingDataError, match="No energy data available"):
+    with pytest.raises(MissingDataError, match="No energy data available \\(it's"):
         downloader._get_task_data(task)
 
 
@@ -304,7 +304,7 @@ def test_get_task_data_missing_month_data(downloader: ReiDownloader) -> None:
     with patch.object(
         downloader, "_load_yearly_json", return_value=(mock_dict, mock_ts)
     ):
-        with pytest.raises(MissingDataError, match="No energy data found for month"):
+        with pytest.raises(MissingDataError, match="No energy data available \\(after"):
             downloader._get_task_data(task_feb)
 
 

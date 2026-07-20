@@ -3,6 +3,7 @@
 
 import pickle
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -11,11 +12,10 @@ from requests import exceptions
 
 from rbc.energy.eia import EiaDownloader
 from rbc.energy.utils import (
-    MAX_RATE_LIMIT_RETRIES,
+    MAX_RETRIES,
     DataStructureError,
     DownloadTask,
     MissingDataError,
-    RateLimitError,
 )
 
 
@@ -70,31 +70,35 @@ def task(init_args: dict) -> DownloadTask:
 
 
 def get_mock_eia_json(
-    date: str | None = None, data: list | None = None, total: int | None = None
+    date: str | None = None, data: list | int | None = None, total: int | None = None
 ) -> dict:
     """Helper to generate an argument-dependant EIA response body.
 
     Args:
-        date (str): The task date (YYYY-MM-DD)
-        data (list): Data list of EIA response body.
+        date (str, optional): The task date (YYYY-MM-DD). Defaults to None.
+        data (list | int, optional): List of data elements of EIA response body or int
+            number of elements in list of EIA response body. Defaults to None.
         total (int): Total number of data that should exist.
 
     Returns:
         dict: Dictionary with EIA response body.
     """
+    data_default = [
+        {
+            "period": f"{date}T00",
+            "respondent": "A",
+            "respondent-name": "Company A",
+            "fueltype": "NG",
+            "type-name": "Natural Gas",
+            "value": "10",
+            "value-units": "megawatthours",
+        }
+    ]
     if date is not None:
         if data is None:
-            data = [
-                {
-                    "period": f"{date}T00",
-                    "respondent": "A",
-                    "respondent-name": "Company A",
-                    "fueltype": "NG",
-                    "type-name": "Natural Gas",
-                    "value": "10",
-                    "value-units": "megawatthours",
-                }
-            ]
+            data = data_default
+        elif isinstance(data, int):
+            data = data_default * data
     else:
         data = []
 
@@ -219,6 +223,45 @@ def test_get_task_data(downloader: EiaDownloader, task: DownloadTask) -> None:
     assert mock_get.call_count == 1
 
 
+def test_get_task_data_pagination(
+    downloader: EiaDownloader, task: DownloadTask
+) -> None:
+    """Happy path for "_get_task_data" method with multiple pages to parse.
+
+    Args:
+        downloader (EiaDownloader): Instance of EiaDownloader class.
+        task (DownloadTask): The metadata of a downloading task, here: date (YYYY-MM-DD)
+    """
+    # mock HTTP responses of two pages - p1: 5000 entries, p2: 1000 entries
+    mock_p1 = MagicMock(status_code=200)
+    mock_p1.json.return_value = get_mock_eia_json(task.date, data=5000, total=6000)
+    mock_p2 = MagicMock(status_code=200)
+    mock_p2.json.return_value = get_mock_eia_json(task.date, data=1000, total=6000)
+    mock_responses = [mock_p1, mock_p2]
+
+    # get parameters "params" passed to each requests call to later check "offset" increase
+    snapshot_params = []
+
+    def mock_get_side_effect(*args, **kwargs) -> Any:
+        """Side-effect function that get snapshots of the 'params' dict."""
+        snapshot_params.append(kwargs["params"].copy())
+        return mock_responses[len(snapshot_params) - 1]
+
+    with (
+        patch("rbc.energy.eia.downloader.requests.get") as mock_get,
+        patch("rbc.energy.eia.downloader.time.sleep") as mock_sleep,  # bypass delay
+    ):
+        mock_get.side_effect = mock_get_side_effect
+        df = downloader._get_task_data(task)
+
+    assert len(df) == 6000
+    assert mock_get.call_count == 2
+    assert mock_sleep.call_count == 1
+    mock_sleep.assert_called_with(0.1)
+    assert snapshot_params[0]["offset"] == 0  # check that "offset increases
+    assert snapshot_params[1]["offset"] == 5000
+
+
 def test_get_task_data_request_failed(
     downloader: EiaDownloader, task: DownloadTask
 ) -> None:
@@ -272,15 +315,13 @@ def test_get_task_data_rate_limit_fail(
         patch("rbc.energy.eia.downloader.requests.get") as mock_get,
         patch("rbc.energy.eia.downloader.time.sleep") as mock_sleep,
     ):
-        mock_get.side_effect = [MagicMock(status_code=429)] * (
-            MAX_RATE_LIMIT_RETRIES + 1
-        )
+        mock_get.side_effect = [MagicMock(status_code=429)] * (MAX_RETRIES + 1)
 
-        with pytest.raises(RateLimitError, match="limit has been exceeded"):
+        with pytest.raises(exceptions.HTTPError, match="EIA API rate limit"):
             downloader._get_task_data(task)
 
-        assert mock_get.call_count == MAX_RATE_LIMIT_RETRIES + 1
-        assert mock_sleep.call_count == MAX_RATE_LIMIT_RETRIES
+        assert mock_get.call_count == MAX_RETRIES + 1
+        assert mock_sleep.call_count == MAX_RETRIES
 
 
 @pytest.mark.parametrize("return_val", [{}, {"response": {}}])

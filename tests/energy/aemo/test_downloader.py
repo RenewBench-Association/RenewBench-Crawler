@@ -305,7 +305,7 @@ def test_get_task_data_no_generation_data(
 
     with patch("rbc.energy.aemo.downloader.asyncio.run") as mock_run:
         mock_run.return_value = mock_df_list
-        with pytest.raises(MissingDataError, match="No generation data"):
+        with pytest.raises(MissingDataError, match="No energy data available"):
             downloader._get_task_data(task)
         mock_run.call_args[0][0].close()
 

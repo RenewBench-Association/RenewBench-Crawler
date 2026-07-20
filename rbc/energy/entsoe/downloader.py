@@ -146,7 +146,7 @@ class EntsoeDownloader(EnergyDownloader):
             raise ConnectionError("API call did not return requested data!")
 
         if not result:
-            raise MissingDataError("No energy data available! Skipping...")
+            raise MissingDataError("No energy data available!")
 
         records = extract_records(result)  # turns into list of dicts
         records = add_timestamps(records)  # adds key 'timestamp' to each dict

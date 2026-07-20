@@ -108,7 +108,7 @@ class ReiDownloader(EnergyDownloader):
 
         if json_year < MIN_YEAR:
             raise MissingDataError(
-                f"No energy data available (it's before {MIN_YEAR}-4). Skipping..."
+                f"No energy data available (it's before {MIN_YEAR}-4)!"
             )
 
         # load yearly JSON file
@@ -123,18 +123,10 @@ class ReiDownloader(EnergyDownloader):
         matching_indices = month_mask.nonzero()[0]
 
         if len(matching_indices) == 0:
-            raise MissingDataError(
-                f"No energy data found for month {task.year}-{task.month}. Skipping..."
-            )
+            raise MissingDataError("No energy data available (after month filter)!")
 
         start_idx = matching_indices[0]
         end_idx = matching_indices[-1] + 1  # +1 because Python slicing is exclusive
-
-        if len(matching_indices) != (end_idx - start_idx):
-            logger.warning(
-                f"REI timestamp continuity issue detected for {task.year}-{task.month}: "
-                f"{len(matching_indices)} timestamps in range of {end_idx - start_idx}!"
-            )
 
         # build monthly dict by slicing all arrays from the cached yearly data
         dict_month = {"epochs": dict_year["epochs"][start_idx:end_idx]}

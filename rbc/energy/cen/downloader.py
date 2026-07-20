@@ -13,14 +13,13 @@ from loguru import logger
 from requests import exceptions
 
 from rbc.energy.utils import (
-    MAX_RATE_LIMIT_RETRIES,
     MAX_RETRIES,
+    RATE_LIMIT_RETRY_DELAY,
     WORKERS,
     DataStructureError,
     DownloadTask,
     EnergyDownloader,
     MissingDataError,
-    RateLimitError,
 )
 
 URL_ROOT = "https://sipub.api.coordinador.cl/"
@@ -126,9 +125,9 @@ class CenDownloader(EnergyDownloader):
         Raises:
             ConnectionError/Timeout: If API issue occurred with connection or timeout or if
                 not all available data was downloaded.
-            HTTPError: If request response is not 200 or if the response is 500 (internal
-                error) despite reducing the page size number several times.
-            RateLimitError: If API rate limit has been exceeded.
+            HTTPError: If request response is not 200, if the response is 500 (internal
+                error) despite reducing the page size number several times or if the API
+                rate limit has been reached and the full task requires retrying.
             MissingDataError: If the requested data is an empty list or the loaded df empty.
             DataStructureError: If the CEN structure changed causing response parsing fail or
                 relevant columns to be missed (this will cause the entire run to be killed).
@@ -155,12 +154,12 @@ class CenDownloader(EnergyDownloader):
             except exceptions.RequestException as e:
                 # catch ALL requests errors locally (prevents crashing of parent thread!)
                 if attempt_network < MAX_RETRIES:  # retry 3 times
+                    attempt_network += 1
                     logger.warning(
                         f"Network issue for {task.date} (Page {params['page']}): "
                         f"{type(e).__name__}. Retrying page request in 5 seconds..."
                     )
                     time.sleep(5)
-                    attempt_network += 1
                     continue
                 else:
                     raise type(e)(
@@ -170,20 +169,24 @@ class CenDownloader(EnergyDownloader):
 
             if status_code != 200:
                 if status_code == 429:
-                    if attempt_ratelimit < MAX_RATE_LIMIT_RETRIES:  # retry 6 times
-                        logger.warning("Rate limit reached. Sleeping 15 seconds...")
-                        time.sleep(15)
+                    if attempt_ratelimit < MAX_RETRIES:  # retry 3 times
                         attempt_ratelimit += 1
+                        logger.warning(
+                            f"CEN API rate limit reached (429) on page {params['page']}. "
+                            f"Sleeping {RATE_LIMIT_RETRY_DELAY} seconds..."
+                        )
+                        time.sleep(RATE_LIMIT_RETRY_DELAY)
                         continue
                     else:
-                        raise RateLimitError(
-                            "API rate limit has been exceeded and waiting 1 min "
-                            "doesn't help. You should wait for a brief cool-down "
-                            "period (CEN doesn't specify a duration), then retry!"
+                        raise exceptions.HTTPError(
+                            f"CEN API rate limit (429) persists for {task.date}: "
+                            f"{response.text[:200]}. Propagating for further handling...",
+                            response=response,
                         )
 
                 if status_code == 500:
                     if attempt_pagesize < 3:
+                        attempt_pagesize += 1
                         logger.warning(
                             "Server overload (too much data requested at once). Halving "
                             "page size and restarting date task..."
@@ -191,7 +194,6 @@ class CenDownloader(EnergyDownloader):
                         params["pageSize"] = int(int(params["pageSize"]) / 2)
                         params["page"] = 1  # reset back to the beginning!
                         all_data = []  # clear already accumulated data so no duplicates
-                        attempt_pagesize += 1
                         continue
                     else:
                         raise exceptions.HTTPError(
@@ -200,7 +202,8 @@ class CenDownloader(EnergyDownloader):
                         )
 
                 raise exceptions.HTTPError(
-                    f"API request failed: {status_code} - {response.text}"
+                    f"API request failed: {status_code} - {response.text}",
+                    response=response,
                 )
 
             try:
@@ -211,7 +214,7 @@ class CenDownloader(EnergyDownloader):
                 current_page = dict_body["page"]  # current page
 
                 if data == [] and total_pages == 0:
-                    raise MissingDataError("No energy data available! Skipping...")
+                    raise MissingDataError("No energy data available!")
 
                 all_data.extend(data)
 
@@ -232,7 +235,7 @@ class CenDownloader(EnergyDownloader):
         # Check if created dataframe is as expected
         df_gen = pd.DataFrame(all_data)
         if df_gen.empty:
-            raise MissingDataError("No energy data available! Skipping...")
+            raise MissingDataError("No energy data available!")
 
         missing_cols = [c for c in EXPECTED_COLS if c not in df_gen.columns]
         if missing_cols:

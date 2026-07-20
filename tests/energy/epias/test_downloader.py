@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+from requests.exceptions import HTTPError
 
 from rbc.energy.epias import EpiasDownloader
 from rbc.energy.epias.downloader import EXPECTED_COLS
@@ -265,3 +266,65 @@ def test_get_task_data_structure_changed(
 
     with pytest.raises(DataStructureError, match="Missing columns"):
         downloader._get_task_data(task)
+
+
+# --------------------------------------------
+# Tests - Helper methods
+# --------------------------------------------
+def test_epias_call(downloader: EpiasDownloader) -> None:
+    """Happy path for "_epias_call" wrapper method; error-free call results are returned.
+
+    Args:
+        downloader (EpiasDownloader): Instance of EpiasDownloader class.
+    """
+    expected_output = pd.DataFrame({"dummy_key": ["dummy_value"]})
+
+    with patch.object(downloader, "eptr") as mock_eptr:
+        mock_eptr.call.return_value = expected_output
+
+        output = downloader._epias_call("some-endpoint", dummy_param="dummy_def")
+
+    assert isinstance(output, pd.DataFrame)
+    mock_eptr.call.assert_called_once_with("some-endpoint", dummy_param="dummy_def")
+
+
+@pytest.mark.parametrize(
+    "msg, code",
+    [
+        ('failed with status code: 429\n[d0d17],\n[401],\n"status" : "500', 429),
+        ("[d0d17],\n[429],\n[Because", 429),
+        ('{\n"status" : "401 UNAUTHORIZED",\n"correlationId" : "7b46b"}', 401),
+    ],
+)
+def test_epias_call_api_error(downloader: EpiasDownloader, msg: str, code: int) -> None:
+    """Happy path for "_epias_call" wrapper method, extracting info from interpretable error.
+
+    Args:
+        downloader (EpiasDownloader): Instance of EpiasDownloader class.
+        msg (str): Error message.
+        code (int): Error code.
+    """
+    with pytest.raises(HTTPError, match=f"EPIAS API error {code}"):
+        with patch.object(downloader, "eptr") as mock_eptr:
+            mock_eptr.call.side_effect = Exception(msg)
+
+            downloader._epias_call("some-endpoint")
+
+
+def test_epias_call_unrecognised_error(downloader: EpiasDownloader) -> None:
+    """Failure path for "_epias_call" wrapper method when an unrecognisable error occurs.
+
+    Ensures these are reraised as is and not motified as the interpretable errors are.
+
+    Args:
+        downloader (EpiasDownloader): Instance of EpiasDownloader class.
+    """
+    error_msg = "Unknown error without a status code"
+
+    with pytest.raises(Exception, match=error_msg) as e_info:
+        with patch.object(downloader, "eptr") as mock_eptr:
+            mock_eptr.call.side_effect = Exception(error_msg)
+
+            downloader._epias_call("some-endpoint")
+
+        assert not isinstance(e_info.value, HTTPError)  # not converted to HTTP!

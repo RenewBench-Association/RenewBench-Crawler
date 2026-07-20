@@ -98,9 +98,7 @@ class EatDownloader(EnergyDownloader):
         df = load_df_from_file(url, index_col=False)
 
         if df.empty:
-            raise MissingDataError(
-                f"No energy data available for {task.year}-{task.month}. Skipping..."
-            )
+            raise MissingDataError("No energy data available!")
 
         df.columns = [c.strip().lower() for c in df.columns]
         missing_cols = [c for c in EXPECTED_COLS if c not in df.columns]
