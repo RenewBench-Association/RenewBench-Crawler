@@ -22,6 +22,7 @@ import pandas as pd
 from loguru import logger
 
 from rbc.coordinates import tokenizer as _tokenizer
+from rbc.coordinates.fuel import is_fueltype_compatible
 from rbc.coordinates.mappings import GENERIC_UNIT_TOKENS
 from rbc.coordinates.tokenizer import (
     weighted_token_score,
@@ -419,7 +420,7 @@ class NameMatrixMatcher:
                     if self._is_valid_candidate(candidate, effective_fuel):
                         score = 100.0 + self.SOURCE_BONUS.get(candidate.source, 0.0)
                         if effective_fuel and candidate.fueltype:
-                            if self._is_fueltype_compatible(
+                            if is_fueltype_compatible(
                                 effective_fuel, candidate.fueltype
                             ):
                                 score += 5.0
@@ -455,9 +456,7 @@ class NameMatrixMatcher:
                     score = weighted_token_score(target_wt, candidate_wt)
                     score += self.SOURCE_BONUS.get(candidate.source, 0.0)
                     if effective_fuel and candidate.fueltype:
-                        if self._is_fueltype_compatible(
-                            effective_fuel, candidate.fueltype
-                        ):
+                        if is_fueltype_compatible(effective_fuel, candidate.fueltype):
                             score += 5.0
                         else:
                             score -= 20.0
@@ -642,7 +641,7 @@ class NameMatrixMatcher:
         if self.fuel_type:
             df = df[
                 df[adapter.fueltype_col].apply(
-                    lambda x: self._is_fueltype_compatible(self.fuel_type, x)
+                    lambda x: is_fueltype_compatible(self.fuel_type, x)
                 )
             ]
 
@@ -700,7 +699,6 @@ class NameMatrixMatcher:
     # ---------------------------------------------------------------------------
     # Static Helper Methods
     # ---------------------------------------------------------------------------
-
     @staticmethod
     def normalize_name(value: Optional[str]) -> str:
         """Normalize power plant names for robust cross-source matching.
@@ -790,35 +788,3 @@ class NameMatrixMatcher:
 
         stripped = re.sub(rf"(?:{unit_words})\s*\d*$", "", normalized).strip()
         return stripped if stripped and stripped != normalized else ""
-
-    @staticmethod
-    def _is_fueltype_compatible(eg_type: Optional[str], pp_type: Optional[str]) -> bool:
-        """Validate if the eg fuel type matches the pp database fuel type.
-
-        Handles basic string cleaning and empty values gracefully.
-
-        Args:
-            eg_type: Fuel type from energy generation data.
-            pp_type: Fuel type from power plant database.
-
-        Returns:
-            True if types are compatible, False otherwise.
-        """
-        from rbc.energy.entsoe.mappings import FUELTYPE_MAPPINGS
-
-        if pd.isna(eg_type) or pd.isna(pp_type):
-            return True  # If one dataset lacks a type, we pass it but remain cautious
-
-        # Normalize to canonical labels
-        def _normalize_type(value: Optional[str]) -> str:
-            if value is None or pd.isna(value):
-                return ""
-            raw = str(value).strip()
-            mapped = FUELTYPE_MAPPINGS.get(raw, raw)
-            return str(mapped).lower().strip()
-
-        eg_clean = _normalize_type(eg_type)
-        pp_clean = _normalize_type(pp_type)
-
-        # Check if one contains the other
-        return eg_clean in pp_clean or pp_clean in eg_clean

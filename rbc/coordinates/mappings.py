@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict
 
+from rbc.energy.entsoe.mappings import FUELTYPE_CODE_MAPPINGS
+
 # Mapping of power plant type abbreviations and local language full names to
 # canonical English equivalents. Applied before fuzzy matching so that
 # e.g. ENTSO-E coded names like "HE_CAPLJINA_G1" and OSM names like
@@ -194,6 +196,7 @@ class OperatorInfo(TypedDict):
     needs_coordinates: bool
     code_col: NotRequired[str]
     fuel_col: NotRequired[str]
+    fuel_mapping: NotRequired[dict[str, str]]
     pipeline: NotRequired[str]
 
 
@@ -236,6 +239,7 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         entity_col="time_series.mkt_psrtype.power_system_resources.name",
         code_col="time_series.mkt_psrtype.power_system_resources.m_rid.value",
         fuel_col="time_series.mkt_psrtype.psr_type",
+        fuel_mapping=FUELTYPE_CODE_MAPPINGS,
         pipeline="entsoe",
         needs_coordinates=True,
     ),

@@ -79,7 +79,7 @@ def parse_arguments() -> Namespace:
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     """Coordinating coordinate finding."""
     args = parse_arguments()
     cfg = load_config(source=args.source)
@@ -95,13 +95,13 @@ def main():
             f"--gem-dir '{args.gem_dir}' is not a directory — GEM matching disabled."
         )
 
-    input_paths: list[Path] = (
+    input_paths: list[Path | str] = (
         args.input if args.input else [Path(cfg.paths.dst_dir_raw)]
     )
 
     perform_coordinate_finding(
         source=args.source,
-        input_paths=input_paths,
+        input_dirs=input_paths,
         output_dir=output_dir,
         gem_dir=gem_dir,
         update=args.update,

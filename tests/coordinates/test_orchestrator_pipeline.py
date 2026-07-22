@@ -58,7 +58,7 @@ def eia_locator(eia_input_dir: Path, tmp_path: Path) -> CoordinateLocator:
     ppmloc is always constructed unconditionally in __init__ (even for the
     standard pipeline, which never reads it) -- the fake is required here
     purely to avoid the real network fetch its real constructor would
-    otherwise perform. gemloc/df_openinfra are populated with small
+    otherwise perform. gemloc/df_osm are populated with small
     synthetic data so run_pipeline() exercises real matching.
 
     Args:
@@ -70,7 +70,7 @@ def eia_locator(eia_input_dir: Path, tmp_path: Path) -> CoordinateLocator:
     """
     locator = CoordinateLocator(
         input_dir=eia_input_dir,
-        output_dir=tmp_path / "out",
+        output_dir=Path(tmp_path, "out"),
         ppmloc=cast(PPMLocator, SimpleNamespace(df_europe=pd.DataFrame())),
         gemloc=cast(
             GEMLocator,
@@ -91,10 +91,10 @@ def eia_locator(eia_input_dir: Path, tmp_path: Path) -> CoordinateLocator:
             ),
         ),
     )
-    # Pre-populate df_openinfra (non-empty) so _ensure_osm_loaded's
-    # `len(self.df_openinfra) == 0` check is False and it skips the real
+    # Pre-populate df_osm (non-empty) so _ensure_osm_loaded's
+    # `len(self.df_osm) == 0` check is False and it skips the real
     # Overpass network call entirely.
-    locator.df_openinfra = pd.DataFrame(
+    locator.df_osm = pd.DataFrame(
         [
             {
                 "Name": "Unrelated OSM Plant",
@@ -180,7 +180,7 @@ def test_derive_plant_group_key_name_groups_sibling_units(
     """
     df = pd.DataFrame(
         {
-            "pp.respondent-name": [
+            "sysop.respondent-name": [
                 "Riverside Plant Unit 1",
                 "Riverside Plant Unit 2",
                 "Downtown Station",
@@ -204,7 +204,7 @@ def test_sibling_fallback_core_inherits_coords_from_matched_sibling(
     """
     df = pd.DataFrame(
         {
-            "pp.respondent-name": ["Matched Unit", "Needs Sibling Unit"],
+            "sysop.respondent-name": ["Matched Unit", "Needs Sibling Unit"],
             "ppm.lat": [40.0, None],
             "ppm.lon": [-90.0, None],
             "gem.lat": [None, None],
