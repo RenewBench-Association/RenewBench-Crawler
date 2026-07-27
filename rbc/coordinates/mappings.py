@@ -8,8 +8,6 @@ All other operators keep the same key structure with placeholder columns so the
 expected mapping shape exists while follow-up validation is performed.
 """
 
-from __future__ import annotations
-
 from typing import NotRequired, TypedDict
 
 from rbc.energy.entsoe.mappings import FUELTYPE_CODE_MAPPINGS

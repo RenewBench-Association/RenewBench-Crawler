@@ -12,9 +12,6 @@ Key Features:
 - Caching for performance
 """
 
-from __future__ import annotations
-
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -22,8 +19,8 @@ import pandas as pd
 from loguru import logger
 
 from rbc.coordinates import tokenizer as _tokenizer
+from rbc.coordinates.country import get_ppm_country_name, normalize_country_for_matching
 from rbc.coordinates.fuel import is_fueltype_compatible
-from rbc.coordinates.mappings import GENERIC_UNIT_TOKENS
 from rbc.coordinates.tokenizer import (
     weighted_token_score,
     weighted_tokenize,
@@ -37,8 +34,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Data Classes
 # ---------------------------------------------------------------------------
-
-
 @dataclass
 class MatchCandidate:
     """A single matching candidate from a data source."""
@@ -128,8 +123,6 @@ OSM_ADAPTER = SourceAdapter(
 # ---------------------------------------------------------------------------
 # Main Matcher Class
 # ---------------------------------------------------------------------------
-
-
 class NameMatrixMatcher:
     """Matrix-based fuzzy name matcher across multiple data sources.
 
@@ -154,7 +147,8 @@ class NameMatrixMatcher:
         ... )
         >>> result = matcher.match("Enguri Unit 5", fuel_type="hydro")
         >>> if result.matched:
-        ...     print(f"Found: {result.candidate.name} at ({result.candidate.lat}, {result.candidate.lon})")
+        ...     candidate = result.candidate
+        ...     print(f"Found: {candidate.name} at ({candidate.lat}, {candidate.lon})")
     """
 
     # Source priority bonuses (added to fuzzy match scores)
@@ -212,7 +206,6 @@ class NameMatrixMatcher:
     # ---------------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------------
-
     def add_alternative_names(self, base_name: str, alt_names: list[str]) -> None:
         """Add alternative names for a base name (e.g., from EIC directory).
 
@@ -222,9 +215,9 @@ class NameMatrixMatcher:
         """
         if base_name not in self._alternative_names:
             self._alternative_names[base_name] = []
+
         self._alternative_names[base_name].extend(alt_names)
-        # Invalidate cache since we added new names
-        self._matrix_built = False
+        self._matrix_built = False  # invalidate cache since new names were added
 
     def generate_name_variants(self, name: str) -> list[str]:
         """Generate all plausible name variants for matching.
@@ -241,66 +234,60 @@ class NameMatrixMatcher:
             name: The base name to generate variants for.
 
         Returns:
-            List of unique name variants.
+            result (list): List of unique name variants.
         """
         if name in self._variant_cache:
             return self._variant_cache[name]
 
-        variants: set[str] = set()
-
-        # Skip empty names
         if not name or pd.isna(name):
             self._variant_cache[name] = []
-            return []
+            return []  # skip empty names
+
+        variants: set[str] = set()
 
         # 1. Original name
         variants.add(name)
 
-        # 2. Normalized
-        normalized = self.normalize_name(name)
+        # 2. Normalized name
+        normalized = _tokenizer.normalize_name(name)
         if normalized:
             variants.add(normalized)
 
-        # 3. Token-expanded
+        # 3. Token-expanded name
         if normalized:
-            expanded = self.expand_plant_tokens(normalized, self.country_code)
+            expanded = " ".join(
+                _tokenizer.tokenize_and_expand(normalized, self.country_code)
+            )
             if expanded:
                 variants.add(expanded)
 
-        # 4. Unit-stripped
-        stripped_numeric = self.strip_numeric_tokens(name)
+        # 4. Unit-stripped name & country-expanded unit-stripped
+        stripped_numeric = _tokenizer.strip_numeric_tokens(name)
         if stripped_numeric:
             variants.add(stripped_numeric)
-            # Also add normalized version of stripped
-            normalized_stripped = self.normalize_name(stripped_numeric)
-            if normalized_stripped:
-                variants.add(normalized_stripped)
-                # Also add country-expanded version of stripped
-                expanded_stripped = self.expand_plant_tokens(
-                    normalized_stripped, self.country_code
-                )
-                if expanded_stripped and expanded_stripped != normalized_stripped:
-                    variants.add(expanded_stripped)
 
-        # 5. Suffix-stripped
-        stripped_suffix = self.strip_trailing_unit_suffix(name)
+            expanded_stripped = " ".join(
+                _tokenizer.tokenize_and_expand(stripped_numeric, self.country_code)
+            )
+            if expanded_stripped and expanded_stripped != stripped_numeric:
+                variants.add(expanded_stripped)
+
+        # 5. Suffix-stripped name & country-expanded suff-stripped
+        stripped_suffix = _tokenizer.strip_trailing_unit_suffix(name)
         if stripped_suffix and stripped_suffix != name:
             variants.add(stripped_suffix)
-            normalized_suffix = self.normalize_name(stripped_suffix)
-            if normalized_suffix:
-                variants.add(normalized_suffix)
-                # Also add country-expanded version of suffix-stripped
-                expanded_suffix = self.expand_plant_tokens(
-                    normalized_suffix, self.country_code
-                )
-                if expanded_suffix and expanded_suffix != normalized_suffix:
-                    variants.add(expanded_suffix)
+
+            expanded_suffix = " ".join(
+                _tokenizer.tokenize_and_expand(stripped_suffix, self.country_code)
+            )
+            if expanded_suffix and expanded_suffix != stripped_suffix:
+                variants.add(expanded_suffix)
 
         # 6. Alternative names from EIC enrichment
         for alt_name in self._alternative_names.get(name, []):
             if alt_name and alt_name not in variants:
                 variants.add(alt_name)
-                normalized_alt = self.normalize_name(alt_name)
+                normalized_alt = _tokenizer.normalize_name(alt_name)
                 if normalized_alt:
                     variants.add(normalized_alt)
 
@@ -402,7 +389,8 @@ class NameMatrixMatcher:
         # Debug: log matrix size for this country
         if self.country:
             logger.debug(
-                f"NameMatrixMatcher: matrix built for {self.country} with {len(matrix)} unique normalized names"
+                f"NameMatrixMatcher: matrix built for {self.country} with {len(matrix)} "
+                f"unique normalized names"
             )
 
         # Collect all potential matches
@@ -417,7 +405,7 @@ class NameMatrixMatcher:
         for variant in target_variants:
             if variant in matrix:
                 for candidate in matrix[variant]:
-                    if self._is_valid_candidate(candidate, effective_fuel):
+                    if self._is_valid_candidate(candidate):
                         score = 100.0 + self.SOURCE_BONUS.get(candidate.source, 0.0)
                         if effective_fuel and candidate.fueltype:
                             if is_fueltype_compatible(
@@ -445,7 +433,7 @@ class NameMatrixMatcher:
             valid_candidates = [
                 candidate
                 for candidate in all_candidates
-                if self._is_valid_candidate(candidate, effective_fuel)
+                if self._is_valid_candidate(candidate)
             ]
             for variant in target_variants:
                 target_wt = weighted_tokenize(variant, self.country_code)
@@ -506,10 +494,15 @@ class NameMatrixMatcher:
             self._weighted_tokens_cache[normalized] = cached
         return cached
 
-    def _is_valid_candidate(
-        self, candidate: "MatchCandidate", fuel_type: Optional[str] = None
-    ) -> bool:
-        """Check if a candidate is valid for matching (has coordinates, passes country filter)."""
+    def _is_valid_candidate(self, candidate: "MatchCandidate") -> bool:
+        """Check if a candidate is valid for matching (has coordinate, passes country filter).
+
+        Args:
+            candidate (MatchCandidate): The candidate to check.
+
+        Returns:
+            bool: True if the candidate is valid, False otherwise.
+        """
         # Skip candidates without coordinates
         if candidate.lat is None or candidate.lon is None:
             return False
@@ -517,10 +510,11 @@ class NameMatrixMatcher:
         # Hard country filter: candidate must match our country
         if self.country and candidate.country:
             # Normalize both country names for comparison (handles zone-specific aliases)
-            normalized_self_country = self._normalize_country_for_matching(self.country)
-            normalized_candidate_country = self._normalize_country_for_matching(
+            normalized_self_country = normalize_country_for_matching(self.country)
+            normalized_candidate_country = normalize_country_for_matching(
                 candidate.country
             )
+
             if normalized_self_country and normalized_candidate_country:
                 if (
                     normalized_self_country.lower()
@@ -532,83 +526,9 @@ class NameMatrixMatcher:
 
         return True
 
-    def _normalize_country_for_matching(self, country: str | None) -> str | None:
-        """Normalize country names to match PPM database country names.
-
-        This handles zone-specific country aliases (e.g., 'Germany (TransnetBW)',
-        'Great Britain / National Grid') and maps them to their base country names
-        (e.g., 'Germany', 'United Kingdom') as used in PPM.
-
-        Args:
-            country: Country name that may include zone-specific suffixes.
-
-        Returns:
-            Normalized country name or None if no normalization possible.
-        """
-        if not country:
-            return None
-
-        country = str(country).strip()
-        import re
-
-        # Step 1: Extract the base country name by removing zone-specific suffixes
-        # Handle patterns like "Germany (TransnetBW)" -> "Germany"
-        base_country = re.sub(r"\s*\([^)]*\)\s*$", "", country).strip()
-
-        # Step 2: Handle slash-separated aliases like "Great Britain / National Grid" -> "Great Britain"
-        if "/" in base_country:
-            # Split by slash and take the first part (the actual country name)
-            parts = [part.strip() for part in base_country.split("/")]
-            # Take the first non-empty part
-            base_country = parts[0] if parts else base_country
-
-        # Step 3: Handle known aliases that need special mapping
-        # PPM uses "United Kingdom" but ENTSO-E uses "Great Britain" in some cases
-        alias_mappings = {
-            "great britain": "united kingdom",
-            "gb": "united kingdom",
-        }
-        base_country_lower = base_country.lower()
-        if base_country_lower in alias_mappings:
-            return alias_mappings[base_country_lower]
-
-        # Step 4: Clean up any remaining artifacts
-        base_country = base_country.strip()
-
-        if base_country:
-            return base_country
-
-        # Step 5: Fallback to original country if we couldn't normalize
-        return country
-
-    def _get_ppm_country_name(self, country: str | None) -> str | None:
-        """Get the country name as it appears in PPM database.
-
-        This handles the case where PPM uses slightly different country names
-        than what we have in our metadata.
-        """
-        if not country:
-            return None
-
-        # Map known aliases to PPM country names
-        ppm_country_aliases = {
-            "estonia": "Estonia",
-            "ee": "Estonia",
-            "switzerland": "Switzerland",
-            "ch": "Switzerland",
-            "germany": "Germany",
-            "de": "Germany",
-            "france": "France",
-            "fr": "France",
-        }
-
-        country_lower = str(country).strip().lower()
-        return ppm_country_aliases.get(country_lower, country)
-
     # ---------------------------------------------------------------------------
     # Private Candidate Builder
     # ---------------------------------------------------------------------------
-
     def _build_candidates(self, adapter: SourceAdapter) -> list[MatchCandidate]:
         """Build candidates from any source via its :class:`SourceAdapter` config.
 
@@ -629,8 +549,8 @@ class NameMatrixMatcher:
         # Filter by country if specified and the source has a country column
         # (OSM has none; relies on the matrix-level country filter instead).
         if self.country and adapter.country_col:
-            normalized_country = self._normalize_country_for_matching(self.country)
-            source_country_name = self._get_ppm_country_name(normalized_country)
+            normalized_country = normalize_country_for_matching(self.country)
+            source_country_name = get_ppm_country_name(normalized_country)
             if source_country_name:
                 df = df[
                     df[adapter.country_col].astype(str).str.lower()
@@ -661,7 +581,7 @@ class NameMatrixMatcher:
             # Normalize and expand plant name tokens for better cross-language
             # matching, via the shared source-agnostic tokenizer so target and
             # candidate names are tokenized identically.
-            normalized = self.normalize_name(name)
+            normalized = _tokenizer.normalize_name(name)
             expanded = " ".join(_tokenizer.tokenize_and_expand(name, self.country_code))
 
             other_names = ""
@@ -695,96 +615,3 @@ class NameMatrixMatcher:
             )
 
         return candidates
-
-    # ---------------------------------------------------------------------------
-    # Static Helper Methods
-    # ---------------------------------------------------------------------------
-    @staticmethod
-    def normalize_name(value: Optional[str]) -> str:
-        """Normalize power plant names for robust cross-source matching.
-
-        Delegates to :func:`rbc.coordinates.tokenizer.normalize_name`.
-
-        Args:
-            value: The name to normalize.
-
-        Returns:
-            Normalized name string.
-        """
-        if value is None or (not isinstance(value, str) and pd.isna(value)):
-            return ""
-        return _tokenizer.normalize_name(value)
-
-    @staticmethod
-    def expand_plant_tokens(normalized: str, country_code: Optional[str] = None) -> str:
-        """Expand known plant-type abbreviations and local names to canonical English.
-
-        Delegates to :func:`rbc.coordinates.tokenizer.tokenize_and_expand`, so
-        target- and candidate-side names go through the same source-agnostic
-        logic (including glued-name stripping), rather than matcher.py
-        maintaining its own separate token-expansion pass.
-
-        Args:
-            normalized: Already-normalized (lowercase, diacritic-free) name.
-            country_code: Optional ISO-2 country code for country-specific expansions.
-
-        Returns:
-            Name with known tokens replaced/stripped, joined back into a string.
-        """
-        if not normalized:
-            return normalized
-        return " ".join(_tokenizer.tokenize_and_expand(normalized, country_code))
-
-    @staticmethod
-    def strip_numeric_tokens(value: str) -> str:
-        """Return a simplified normalized name for station-level fallback matching.
-
-        This is a last-resort fallback for cases where ENTSO-E names include unit
-        numbers and generic unit markers (e.g. "Unit 20", "Sloecentrale unit 20")
-        but OSM only stores the station-level feature without a per-unit suffix
-        (e.g. just "Sloecentrale").
-
-        Args:
-            value: The name to process.
-
-        Returns:
-            Name with numeric tokens and generic unit tokens removed.
-        """
-        normalized = NameMatrixMatcher.normalize_name(value)
-        if not normalized:
-            return ""
-
-        tokens = [
-            token
-            for token in normalized.split()
-            if not token.isdigit() and token not in GENERIC_UNIT_TOKENS
-        ]
-        return " ".join(tokens).strip()
-
-    @staticmethod
-    def strip_trailing_unit_suffix(value: str) -> str:
-        """Strip a trailing unit-suffix glued directly onto the plant name.
-
-        Some ENTSO-E naming conventions concatenate the unit suffix directly onto
-        the plant name with no separating space/underscore (e.g. "ENGURIUNIT_5" -> "enguri"),
-        which the space-tokenized strip_numeric_tokens cannot catch since
-        "enguriunit" and "5" would otherwise remain a single glued token.
-
-        Args:
-            value: The name to process.
-
-        Returns:
-            The name with the trailing unit-suffix removed, or empty string if
-            the name doesn't end in a recognized unit-suffix.
-        """
-        normalized = NameMatrixMatcher.normalize_name(value)
-        if not normalized:
-            return ""
-
-        # Build regex pattern from multi-character unit tokens
-        unit_words = "|".join(token for token in GENERIC_UNIT_TOKENS if len(token) > 1)
-        if not unit_words:
-            return normalized
-
-        stripped = re.sub(rf"(?:{unit_words})\s*\d*$", "", normalized).strip()
-        return stripped if stripped and stripped != normalized else ""

@@ -18,8 +18,6 @@ Usage
     m   # displays the map inline
 """
 
-from __future__ import annotations
-
 import html as _html
 import json
 import tempfile

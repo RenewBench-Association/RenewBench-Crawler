@@ -12,8 +12,6 @@ Weighting is dictionary-based only (GENERIC_UNIT_TOKENS / PLANT_NAME_EXPANSIONS
 statistics.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -66,6 +64,60 @@ def normalize_name(value: Optional[str]) -> str:
     text = re.sub(r"[^a-z0-9]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def strip_numeric_tokens(value: str) -> str:
+    """Return a simplified normalized name for station-level fallback matching.
+
+    This is a last-resort fallback for cases where ENTSO-E names include unit
+    numbers and generic unit markers (e.g. "Unit 20", "Sloecentrale unit 20")
+    but OSM only stores the station-level feature without a per-unit suffix
+    (e.g. just "Sloecentrale").
+
+    Args:
+        value: The name to process.
+
+    Returns:
+        Name with numeric tokens and generic unit tokens removed.
+    """
+    normalized = normalize_name(value)
+    if not normalized:
+        return ""
+
+    tokens = [
+        token
+        for token in normalized.split()
+        if not token.isdigit() and token not in GENERIC_UNIT_TOKENS
+    ]
+    return " ".join(tokens).strip()
+
+
+def strip_trailing_unit_suffix(value: str) -> str:
+    """Strip a trailing unit-suffix glued directly onto the plant name.
+
+    Some ENTSO-E naming conventions concatenate the unit suffix directly onto
+    the plant name with no separating space/underscore (e.g. "ENGURIUNIT_5" -> "enguri"),
+    which the space-tokenized strip_numeric_tokens cannot catch since
+    "enguriunit" and "5" would otherwise remain a single glued token.
+
+    Args:
+        value: The name to process.
+
+    Returns:
+        The name with the trailing unit-suffix removed, or empty string if
+            the name doesn't end in a recognized unit-suffix.
+    """
+    normalized = normalize_name(value)
+    if not normalized:
+        return ""
+
+    # Build regex pattern from multi-character unit tokens
+    unit_words = "|".join(token for token in GENERIC_UNIT_TOKENS if len(token) > 1)
+    if not unit_words:
+        return normalized
+
+    stripped = re.sub(rf"(?:{unit_words})\s*\d*$", "", normalized).strip()
+    return stripped if stripped and stripped != normalized else ""
 
 
 @lru_cache(maxsize=None)
