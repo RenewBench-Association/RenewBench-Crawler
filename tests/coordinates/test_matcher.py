@@ -7,8 +7,8 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locator_gem import GEMLocator
-from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.matcher import (
     GEM_ADAPTER,
     OSM_ADAPTER,

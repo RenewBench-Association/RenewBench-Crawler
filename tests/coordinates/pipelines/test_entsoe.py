@@ -8,9 +8,9 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locator_eic import EICDirectoryLocator
-from rbc.coordinates.locator_gem import GEMLocator
-from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.locators.eic_registry import EICCodeRegistry
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.pipelines.entsoe import EntsoePipeline
 
@@ -72,9 +72,9 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
         input_dir=entsoe_input_dir,
         output_dir=Path(tmp_path, "out"),
         eicloc=cast(
-            EICDirectoryLocator,
+            EICCodeRegistry,
             SimpleNamespace(
-                _WCODE_FIELDS=EICDirectoryLocator._WCODE_FIELDS,
+                _WCODE_FIELDS=EICCodeRegistry._WCODE_FIELDS,
                 lookup_full_row=lambda eic: {},
                 find_parent_production_unit=lambda **kwargs: None,
             ),

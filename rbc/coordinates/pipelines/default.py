@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from rbc.coordinates.locator_gem import GEMLocator
-from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import COUNTRY_ISO2_MAP
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import base_name_key

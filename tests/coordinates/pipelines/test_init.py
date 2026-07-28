@@ -16,9 +16,9 @@ from rbc.coordinates.pipelines.entsoe import EntsoePipeline
 # ----------------------------------
 @pytest.fixture(autouse=True)
 def mock_expensive_locators(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace PPMLocator/EICDirectoryLocator with mocks everywhere they're constructed.
+    """Replace PPMLocator/EICCodeRegistry with mocks everywhere they're constructed.
 
-    `PPMLocator()` and `EICDirectoryLocator()` do real network I/O (a PPM CSV
+    `PPMLocator()` and `EICCodeRegistry()` do real network I/O (a PPM CSV
     download and an ENTSO-E EIC registry fetch respectively) as soon as they're
     instantiated. `make_pipeline`/`build_shared_locators` build one or both of
     these whenever a caller doesn't pass an existing instance in -- which is
@@ -29,12 +29,10 @@ def mock_expensive_locators(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch (pytest.MonkeyPatch): Pytest-provided monkeypatch fixture.
     """
     monkeypatch.setattr("rbc.coordinates.pipelines.PPMLocator", MagicMock())
-    monkeypatch.setattr("rbc.coordinates.pipelines.EICDirectoryLocator", MagicMock())
+    monkeypatch.setattr("rbc.coordinates.pipelines.EICCodeRegistry", MagicMock())
     monkeypatch.setattr("rbc.coordinates.pipelines.default.PPMLocator", MagicMock())
     monkeypatch.setattr("rbc.coordinates.pipelines.entsoe.PPMLocator", MagicMock())
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.entsoe.EICDirectoryLocator", MagicMock()
-    )
+    monkeypatch.setattr("rbc.coordinates.pipelines.entsoe.EICCodeRegistry", MagicMock())
 
 
 @pytest.fixture

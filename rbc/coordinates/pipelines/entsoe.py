@@ -4,9 +4,9 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locator_eic import EICDirectoryLocator, _alpha_prefix
-from rbc.coordinates.locator_gem import GEMLocator
-from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.locators.eic_registry import EICCodeRegistry, _alpha_prefix
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import normalize_name
 
@@ -33,7 +33,7 @@ class EntsoePipeline(BasePipeline):
         output_dir: Path | None = None,
         gemloc: GEMLocator | None = None,
         ppmloc: PPMLocator | None = None,
-        eicloc: EICDirectoryLocator | None = None,
+        eicloc: EICCodeRegistry | None = None,
         osm_update: bool = False,
         osm_live: bool = False,
     ) -> None:
@@ -48,7 +48,7 @@ class EntsoePipeline(BasePipeline):
             ppmloc (PPMLocator, optional): Pre-built PPM locator to reuse the pan-European
                 PPM CSV or global OSMPP CSV. Defaults to None, in which case a new locator
                 is built.
-            eicloc (EICDirectoryLocator, optional): Pre-built EIC directory
+            eicloc (EICCodeRegistry, optional): Pre-built EIC directory
                 locator to reuse. Defaults to None, in which case a new instance is
                 only constructed if the resolved pipeline is "entsoe" -- the entsoe
                 pipeline is the only one that uses EIC codes, so other operators
@@ -69,10 +69,10 @@ class EntsoePipeline(BasePipeline):
             osm_live=osm_live,
         )
 
-        self.eicloc: EICDirectoryLocator | None = (
+        self.eicloc: EICCodeRegistry | None = (
             eicloc
             if eicloc is not None
-            else (EICDirectoryLocator(cache_dir=self.output_dir))
+            else (EICCodeRegistry(cache_dir=self.output_dir))
         )
         if self.ppmloc is None:
             self.ppmloc = PPMLocator()

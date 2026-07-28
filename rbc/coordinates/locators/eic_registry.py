@@ -50,7 +50,7 @@ def _safe_str(val: object) -> str | None:
     return str(val).strip() if pd.notna(val) and str(val).strip() else None
 
 
-class EICDirectoryLocator:
+class EICCodeRegistry:
     """Name-enrichment locator backed by ENTSO-E's public EIC code registry.
 
     Downloads the official EIC code publication on first use and optionally caches
@@ -64,7 +64,7 @@ class EICDirectoryLocator:
     """
 
     def __init__(self, cache_dir: Path | None = None) -> None:
-        """Initialize EICDirectoryLocator.
+        """Initialize EICCodeRegistry.
 
         Args:
             cache_dir (Path, optional): Directory for caching the downloaded registry.
@@ -92,13 +92,13 @@ class EICDirectoryLocator:
         )
 
         if cache_path and cache_path.exists():
-            logger.info(f"EICDirectoryLocator: loading from cache '{cache_path}'")
+            logger.info(f"EICCodeRegistry: loading from cache '{cache_path}'")
             self.df_eic = pd.read_csv(cache_path, sep=";", dtype=str)
             self._detect_columns()
             return
 
         try:
-            logger.info("EICDirectoryLocator: downloading ENTSO-E W-type EIC codes...")
+            logger.info("EICCodeRegistry: downloading ENTSO-E W-type EIC codes...")
             resp = requests.get(EIC_DIRECTORY_URL, timeout=60, headers=_HEADER)
             resp.raise_for_status()
 
@@ -108,11 +108,11 @@ class EICDirectoryLocator:
             if cache_path and not self.df_eic.empty:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 self.df_eic.to_csv(cache_path, sep=";", index=False)
-                logger.info(f"EICDirectoryLocator: cached to '{cache_path}'")
+                logger.info(f"EICCodeRegistry: cached to '{cache_path}'")
 
         except requests.RequestException as e:
             logger.warning(
-                f"EICDirectoryLocator: download failed ({e}). "
+                f"EICCodeRegistry: download failed ({e}). "
                 "Name enrichment via EIC directory will be unavailable."
             )
 
@@ -125,7 +125,7 @@ class EICDirectoryLocator:
                 self._display_name_col = _DISPLAY_NAME_COL
             if _LONG_NAME_COL in self.df_eic.columns:
                 self._long_name_col = _LONG_NAME_COL
-            logger.info(f"EICDirectoryLocator initialized: {len(self.df_eic)} entries")
+            logger.info(f"EICCodeRegistry initialized: {len(self.df_eic)} entries")
             self._build_eic_index()
             return
 
@@ -147,13 +147,13 @@ class EICDirectoryLocator:
 
         if self._eic_col and (self._display_name_col or self._long_name_col):
             logger.info(
-                f"EICDirectoryLocator initialized: {len(self.df_eic)} entries | "
+                f"EICCodeRegistry initialized: {len(self.df_eic)} entries | "
                 f"EIC col='{self._eic_col}' | "
                 f"long='{self._long_name_col}' | display='{self._display_name_col}'"
             )
         else:
             logger.warning(
-                "EICDirectoryLocator: could not identify required columns. "
+                "EICCodeRegistry: could not identify required columns. "
                 f"Available: {list(self.df_eic.columns)}"
             )
         self._build_eic_index()
@@ -179,7 +179,6 @@ class EICDirectoryLocator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     # Fields returned by lookup_full_row
     _WCODE_FIELDS: tuple[str, ...] = (
         "EicDisplayName",
@@ -286,7 +285,7 @@ class EICDirectoryLocator:
         if not getattr(self, "_prod_type_logged", False):
             distinct = sorted(self.df_eic[type_col].dropna().unique().tolist())
             logger.debug(
-                f"EICDirectoryLocator: distinct EicTypeFunctionList values "
+                f"EICCodeRegistry: distinct EicTypeFunctionList values "
                 f"(first 30): {distinct[:30]}"
             )
             self._prod_type_logged = True
@@ -302,7 +301,7 @@ class EICDirectoryLocator:
         df_prod = self._df_prod_cache
         if len(df_prod) == 0:
             logger.debug(
-                "EICDirectoryLocator: no Production Unit entries found in EIC "
+                "EICCodeRegistry: no Production Unit entries found in EIC "
                 "directory for fuzzy parent matching."
             )
             return None
@@ -368,7 +367,7 @@ class EICDirectoryLocator:
                         prefix_hit_row = cand_row
                 prefix_score = min(base_score, 80.0 + best_sub_score * 0.15)
                 logger.debug(
-                    f"EICDirectoryLocator: {len(df_prefix_candidates)} production units "
+                    f"EICCodeRegistry: {len(df_prefix_candidates)} production units "
                     f"share display-name prefix '{child_prefix}' — picked best long-name match."
                 )
 

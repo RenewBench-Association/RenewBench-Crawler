@@ -10,9 +10,9 @@ run.
 from dataclasses import dataclass
 from pathlib import Path
 
-from rbc.coordinates.locator_eic import EICDirectoryLocator
-from rbc.coordinates.locator_gem import GEMLocator
-from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.locators.eic_registry import EICCodeRegistry
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.pipelines.default import DefaultPipeline
@@ -33,7 +33,7 @@ def make_pipeline(
     output_dir: Path | None = None,
     gemloc: GEMLocator | None = None,
     ppmloc: PPMLocator | None = None,
-    eicloc: EICDirectoryLocator | None = None,
+    eicloc: EICCodeRegistry | None = None,
     osm_update: bool = False,
     osm_live: bool = False,
 ) -> BasePipeline:
@@ -52,7 +52,7 @@ def make_pipeline(
             None, in which case GEM is disabled.
         ppmloc (PPMLocator, optional): Pre-built PPM locator to reuse. Defaults to
             None, in which case the resolved pipeline builds its own default.
-        eicloc (EICDirectoryLocator, optional): Pre-built EIC directory locator
+        eicloc (EICCodeRegistry, optional): Pre-built EIC directory locator
             to reuse. Only relevant for the entsoe pipeline; ignored otherwise.
         osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
             ``overpass_..._plants.parquet`` file even if it already exists.
@@ -93,7 +93,7 @@ class SharedLocators:
 
     gemloc: GEMLocator | None
     ppmloc: PPMLocator | None
-    eicloc: EICDirectoryLocator | None
+    eicloc: EICCodeRegistry | None
 
 
 def build_shared_locators(
@@ -122,12 +122,12 @@ def build_shared_locators(
     pipeline_name = OPERATOR_METADATA[source].get("pipeline", "default")
 
     ppmloc: PPMLocator | None = None
-    eicloc: EICDirectoryLocator | None = None
+    eicloc: EICCodeRegistry | None = None
 
     if pipeline_name == "entsoe":
         # Use European regional assets only if country matches
         ppmloc = PPMLocator()
-        eicloc = EICDirectoryLocator(cache_dir=output_dir)
+        eicloc = EICCodeRegistry(cache_dir=output_dir)
     # else:     # assume the default
     #     ppmloc = OSMPPLocator()  # todo: comment in (& define handling!) when ready
 

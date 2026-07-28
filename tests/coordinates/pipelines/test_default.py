@@ -8,7 +8,7 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locator_gem import GEMLocator
+from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.pipelines.default import DefaultPipeline
 
 

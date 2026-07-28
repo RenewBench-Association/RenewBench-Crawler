@@ -30,8 +30,8 @@ from rbc.coordinates.utils.tokenizer import (
 )
 
 if TYPE_CHECKING:
-    from rbc.coordinates.locator_gem import GEMLocator
-    from rbc.coordinates.locator_ppm import PPMLocator
+    from rbc.coordinates.locators.gem import GEMLocator
+    from rbc.coordinates.locators.ppm import PPMLocator
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ OSM_ADAPTER = SourceAdapter(
     source="osm",
     # OSM's alt-name tag variants (name:en, alt_name, old_name, ...) are
     # already exploded into separate rows sharing the same OSM_ID upstream
-    # (locator_osm_api.py), so no other_names_col/extra handling is needed
+    # (osm_api.py), so no other_names_col/extra handling is needed
     # here -- iterating rows picks them up for free.
     get_df=lambda m: m._osm_df,
     name_col="Name",

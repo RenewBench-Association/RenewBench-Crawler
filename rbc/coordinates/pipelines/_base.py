@@ -17,9 +17,9 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locator_gem import GEMLocator
-from rbc.coordinates.locator_osm_api import query_osm_country_plants
-from rbc.coordinates.locator_ppm import PPMLocator
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osm_api import query_osm_country_plants
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import COUNTRY_ISO2_MAP, OPERATOR_METADATA
 from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
