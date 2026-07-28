@@ -169,9 +169,8 @@ class GEMLocator:
         df_gem (pd.DataFrame): Combined, normalized GEM data across all trackers found.
     """
 
-    # Columns included in the full-row dicts returned by match_by_entsoe_id.
-    # Mirrors PPMLocator._PPM_COLS.
-    _GEM_COLS: tuple[str, ...] = (
+    # GEM column headers (without entsoe IDs)
+    GEM_COLS: tuple[str, ...] = (
         "gem_unit_id",
         "gem_location_id",
         "plant_name",
@@ -203,9 +202,8 @@ class GEMLocator:
         self._build_entsoe_id_index()
 
     # ------------------------------------------------------------------
-    # Loading & normalization
+    # Internal helpers for initialization
     # ------------------------------------------------------------------
-
     def _resolve_tracker_files(self) -> dict[str, Path]:
         """Resolve one xlsx file per tracker key, picking the newest match on ties."""
         resolved: dict[str, Path] = {}
@@ -347,9 +345,8 @@ class GEMLocator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
-        """Find a power plant by its ENTSO-E EIC code and return the row as a dict.
+        """Find an EGE by its  ENTSO-E EIC code and return the row as a dict.
 
         Extracts ENTSO-E codes from GEM's "Other IDs (unit)" / "Other IDs (location)"
         columns via a pre-computed index (built once in :meth:`_build_entsoe_id_index`)
@@ -359,7 +356,7 @@ class GEMLocator:
             entsoe_id (str | None): ENTSO-E EIC code to search for.
 
         Returns:
-            dict with keys from :attr:`_GEM_COLS`, or ``None`` if not found or the
+            dict with keys from :attr:`GEM_COLS`, or ``None`` if not found or the
             matched row has no coordinates.
         """
         if len(self.df_gem) == 0 or not entsoe_id or pd.isna(entsoe_id):
@@ -372,6 +369,6 @@ class GEMLocator:
 
         row = self.df_gem.iloc[pos]
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
-            return None
+            return None  # match found but no coordinates — not useful
 
-        return {col: (row[col] if col in row.index else None) for col in self._GEM_COLS}
+        return {col: (row[col] if col in row.index else None) for col in self.GEM_COLS}

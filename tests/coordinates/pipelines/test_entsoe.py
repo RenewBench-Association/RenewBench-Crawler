@@ -82,7 +82,7 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
         ppmloc=cast(
             PPMLocator,
             SimpleNamespace(
-                _PPM_COLS=PPMLocator._PPM_COLS,
+                PPM_COLS=PPMLocator.PPM_COLS,
                 match_by_entsoe_id=lambda eic: None,
                 df_europe=pd.DataFrame(
                     columns=["Name", "Country", "Fueltype", "lat", "lon", "id", "EIC"]

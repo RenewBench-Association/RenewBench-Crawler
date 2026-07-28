@@ -120,12 +120,12 @@ class EntsoePipeline(BasePipeline):
         """
         assert self.ppmloc is not None
 
-        ppm_cols = list(self.ppmloc._PPM_COLS)
+        ppm_cols = list(self.ppmloc.PPM_COLS)
         for col in ppm_cols:
             df[f"ppm.{col}"] = None
         df["ppm.match_source"] = None
 
-        gem_cols = list(GEMLocator._GEM_COLS)
+        gem_cols = list(GEMLocator.GEM_COLS)
         for col in gem_cols:
             df[f"gem.{col}"] = None
         df["gem.match_source"] = None
@@ -243,8 +243,8 @@ class EntsoePipeline(BasePipeline):
         """
         assert self.ppmloc is not None
 
-        gem_cols = list(GEMLocator._GEM_COLS)
-        ppm_cols = list(self.ppmloc._PPM_COLS)
+        gem_cols = list(GEMLocator.GEM_COLS)
+        ppm_cols = list(self.ppmloc.PPM_COLS)
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent_eic = row.get("wcode.parent.EicCode")
             if pd.isna(parent_eic) or not str(parent_eic).strip():
