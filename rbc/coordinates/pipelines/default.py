@@ -6,7 +6,7 @@ from rbc.coordinates.locator_gem import GEMLocator
 from rbc.coordinates.locator_ppm import PPMLocator
 from rbc.coordinates.mappings import COUNTRY_ISO2_MAP
 from rbc.coordinates.pipelines._base import BasePipeline
-from rbc.coordinates.tokenizer import base_name_key
+from rbc.coordinates.utils.tokenizer import base_name_key
 
 
 class DefaultPipeline(BasePipeline):

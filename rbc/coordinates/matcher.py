@@ -18,10 +18,13 @@ from typing import TYPE_CHECKING, Callable, Optional
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates import tokenizer as _tokenizer
-from rbc.coordinates.country import get_ppm_country_name, normalize_country_for_matching
-from rbc.coordinates.fuel import is_fueltype_compatible
-from rbc.coordinates.tokenizer import (
+from rbc.coordinates.utils import tokenizer as _tokenizer
+from rbc.coordinates.utils.country import (
+    get_ppm_country_name,
+    normalize_country_for_matching,
+)
+from rbc.coordinates.utils.fuel import is_fueltype_compatible
+from rbc.coordinates.utils.tokenizer import (
     weighted_token_score,
     weighted_tokenize,
 )

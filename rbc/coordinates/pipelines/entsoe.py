@@ -8,7 +8,7 @@ from rbc.coordinates.locator_eic import EICDirectoryLocator, _alpha_prefix
 from rbc.coordinates.locator_gem import GEMLocator
 from rbc.coordinates.locator_ppm import PPMLocator
 from rbc.coordinates.pipelines._base import BasePipeline
-from rbc.coordinates.tokenizer import normalize_name
+from rbc.coordinates.utils.tokenizer import normalize_name
 
 
 class EntsoePipeline(BasePipeline):

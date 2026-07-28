@@ -1,7 +1,7 @@
 # tests/coordinates/test_tokenizer.py
 """Tests for the source-agnostic name tokenizer/weighting used by NameMatrixMatcher."""
 
-from rbc.coordinates.tokenizer import (
+from rbc.coordinates.utils.tokenizer import (
     DEFAULT_WEIGHT,
     LOW_WEIGHT,
     base_name_key,
