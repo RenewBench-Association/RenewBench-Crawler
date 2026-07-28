@@ -63,6 +63,16 @@ class EICCodeRegistry:
         df_eic (pd.DataFrame): Parsed EIC code registry.
     """
 
+    # Fields returned by lookup_full_row
+    WCODE_FIELDS: tuple[str, ...] = (
+        "EicDisplayName",
+        "EicLongName",
+        "EicParent",
+        "EicResponsibleParty",
+        "EicStatus",
+        "EicTypeFunctionList",
+    )
+
     def __init__(self, cache_dir: Path | None = None) -> None:
         """Initialize EICCodeRegistry.
 
@@ -179,16 +189,6 @@ class EICCodeRegistry:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    # Fields returned by lookup_full_row
-    _WCODE_FIELDS: tuple[str, ...] = (
-        "EicDisplayName",
-        "EicLongName",
-        "EicParent",
-        "EicResponsibleParty",
-        "EicStatus",
-        "EicTypeFunctionList",
-    )
-
     def lookup_full_row(self, eic_code: str) -> dict[str, str | None]:
         """Return selected W_eicCodes fields for an EIC code as a flat dict.
 
@@ -209,7 +209,7 @@ class EICCodeRegistry:
 
         row = self.df_eic.iloc[pos]
         result: dict[str, str | None] = {}
-        for col in self._WCODE_FIELDS:
+        for col in self.WCODE_FIELDS:
             if col in row.index:
                 val = row[col]
                 result[col] = (

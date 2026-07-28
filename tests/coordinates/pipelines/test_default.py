@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.pipelines.default import DefaultPipeline
 
 
@@ -59,9 +60,7 @@ def eia_pipeline(eia_input_dir: Path, tmp_path: Path) -> DefaultPipeline:
     pipeline = DefaultPipeline(
         input_dir=eia_input_dir,
         output_dir=Path(tmp_path, "out"),
-        # Columns (not just an empty DataFrame()) so _build_candidates' Country
-        # filter doesn't KeyError on a genuinely empty PPM source.
-        gemloc=cast(
+        gem_loc=cast(
             GEMLocator,
             SimpleNamespace(
                 df_gem=pd.DataFrame(
@@ -79,10 +78,17 @@ def eia_pipeline(eia_input_dir: Path, tmp_path: Path) -> DefaultPipeline:
                 )
             ),
         ),
+        osmpp_loc=cast(
+            OSMPPLocator,
+            SimpleNamespace(
+                df=pd.DataFrame(
+                    columns=["Name", "Country", "Fueltype", "lat", "lon", "id"]
+                ),
+            ),
+        ),
     )
-    # Pre-populate df_osm (non-empty) so _ensure_osm_loaded's
-    # `len(self.df_osm) == 0` check is False and it skips the real
-    # Overpass network call entirely.
+    # Pre-populate df_osm (non-empty) so _ensure_osm_loaded's `len(self.df_osm) == 0` check
+    # is False and real Overpass network call is skipped entirely.
     pipeline.df_osm = pd.DataFrame(
         [
             {
@@ -122,8 +128,8 @@ class TestDefaultPipelineRunPipeline:
         for col in ("lat", "lon", "match_source"):
             assert col in df.columns
 
-        # no row should be attributed to a ppm.* source.
-        assert not df["match_source"].astype(str).str.startswith("ppm").any()
+        # no row should be attributed to a ppdb.* source.
+        assert not df["match_source"].astype(str).str.startswith("ppdb").any()
 
 
 class TestDefaultPipelineSteps:
@@ -193,8 +199,8 @@ class TestDefaultPipelineHelpers:
         df = pd.DataFrame(
             {
                 "sysop.respondent-name": ["Matched Unit", "Needs Sibling Unit"],
-                "ppm.lat": [40.0, None],
-                "ppm.lon": [-90.0, None],
+                "ppdb.lat": [40.0, None],
+                "ppdb.lon": [-90.0, None],
                 "gem.lat": [None, None],
                 "gem.lon": [None, None],
                 "osm.lat": [None, None],

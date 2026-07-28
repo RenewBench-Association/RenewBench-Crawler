@@ -56,7 +56,7 @@ def entsoe_input_dir(tmp_path: Path) -> Path:
 def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
     """Returns a real EntsoePipeline for "10YNL----------L", backed by fake locators.
 
-    eicloc/ppmloc/gemloc are all faked to avoid the real network/CSV fetches
+    eic_reg/ppdb_loc/gemloc are all faked to avoid the real network/CSV fetches
     their real constructors would otherwise perform, and to keep every
     exact-ID lookup a clean miss so the pipeline falls through to fuzzy
     matching against the fake GEM data.
@@ -71,25 +71,7 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
     pipeline = EntsoePipeline(
         input_dir=entsoe_input_dir,
         output_dir=Path(tmp_path, "out"),
-        eicloc=cast(
-            EICCodeRegistry,
-            SimpleNamespace(
-                _WCODE_FIELDS=EICCodeRegistry._WCODE_FIELDS,
-                lookup_full_row=lambda eic: {},
-                find_parent_production_unit=lambda **kwargs: None,
-            ),
-        ),
-        ppmloc=cast(
-            PPMLocator,
-            SimpleNamespace(
-                PPM_COLS=PPMLocator.PPM_COLS,
-                match_by_entsoe_id=lambda eic: None,
-                df_europe=pd.DataFrame(
-                    columns=["Name", "Country", "Fueltype", "lat", "lon", "id", "EIC"]
-                ),
-            ),
-        ),
-        gemloc=cast(
+        gem_loc=cast(
             GEMLocator,
             SimpleNamespace(
                 match_by_entsoe_id=lambda eic: None,
@@ -106,6 +88,24 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
                         }
                     ]
                 ),
+            ),
+        ),
+        ppm_loc=cast(
+            PPMLocator,
+            SimpleNamespace(
+                PPM_COLS=PPMLocator.PPM_COLS,
+                match_by_entsoe_id=lambda eic: None,
+                df=pd.DataFrame(
+                    columns=["Name", "Country", "Fueltype", "lat", "lon", "id", "EIC"]
+                ),
+            ),
+        ),
+        eic_reg=cast(
+            EICCodeRegistry,
+            SimpleNamespace(
+                WCODE_FIELDS=EICCodeRegistry.WCODE_FIELDS,
+                lookup_full_row=lambda eic: {},
+                find_parent_production_unit=lambda **kwargs: None,
             ),
         ),
     )

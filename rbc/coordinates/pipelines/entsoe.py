@@ -31,9 +31,9 @@ class EntsoePipeline(BasePipeline):
         self,
         input_dir: Path,
         output_dir: Path | None = None,
-        gemloc: GEMLocator | None = None,
-        ppmloc: PPMLocator | None = None,
-        eicloc: EICCodeRegistry | None = None,
+        gem_loc: GEMLocator | None = None,
+        ppm_loc: PPMLocator | None = None,
+        eic_reg: EICCodeRegistry | None = None,
         osm_update: bool = False,
         osm_live: bool = False,
     ) -> None:
@@ -43,17 +43,14 @@ class EntsoePipeline(BasePipeline):
             input_dir (Path): Path to the raw energy generation file (assuming CSV here).
             output_dir (Path, optional): Path to the directory where any output files may be
                 saved. Defaults to None.
-            gemloc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
+            gem_loc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
                 None, in which case GEM is disabled.
-            ppmloc (PPMLocator, optional): Pre-built PPM locator to reuse the pan-European
+            ppm_loc (PPMLocator, optional): Pre-built PPM locator to reuse the pan-European
                 PPM CSV or global OSMPP CSV. Defaults to None, in which case a new locator
                 is built.
-            eicloc (EICCodeRegistry, optional): Pre-built EIC directory
-                locator to reuse. Defaults to None, in which case a new instance is
-                only constructed if the resolved pipeline is "entsoe" -- the entsoe
-                pipeline is the only one that uses EIC codes, so other operators
-                don't pay for the W_eicCodes.csv fetch at all. An explicitly-passed
-                instance is always honored regardless of pipeline.
+            eic_reg (EICCodeRegistry, optional): Pre-built EIC directory registry to reuse
+                and fetch the W_eicCodes.csv. Defaults to None, in which case a new
+                instance is constructed.
             osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
                 ``overpass_..._plants.parquet`` file even if it already exists.
                 Corresponds to the ``--update`` / ``-u`` CLI flag.
@@ -63,19 +60,20 @@ class EntsoePipeline(BasePipeline):
         super().__init__(
             input_dir=input_dir,
             output_dir=output_dir,
-            gemloc=gemloc,
-            ppmloc=ppmloc,
+            gemloc=gem_loc,
+            ppdb_loc=ppm_loc,
             osm_update=osm_update,
             osm_live=osm_live,
         )
 
-        self.eicloc: EICCodeRegistry | None = (
-            eicloc
-            if eicloc is not None
+        self.eic_reg: EICCodeRegistry | None = (
+            eic_reg
+            if eic_reg is not None
             else (EICCodeRegistry(cache_dir=self.output_dir))
         )
-        if self.ppmloc is None:
-            self.ppmloc = PPMLocator()
+        self.ppdb_loc: PPMLocator = (  # type: ignore[assignment]
+            self.ppdb_loc if self.ppdb_loc is not None else PPMLocator()
+        )
 
     # ------------------------------------------------------------------
     # PIPELINE STEPS (for EntsoePipeline only)
@@ -89,8 +87,8 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with enriched data).
         """
-        assert self.eicloc is not None
-        wcode_fields = list(self.eicloc._WCODE_FIELDS)
+        assert self.eic_reg is not None
+        wcode_fields = list(self.eic_reg.WCODE_FIELDS)
         for col in wcode_fields:
             df[f"wcode.{col}"] = None
 
@@ -98,7 +96,7 @@ class EntsoePipeline(BasePipeline):
             eic = row.get(self.sysop_code_col)
             if pd.isna(eic) or not str(eic).strip():
                 continue
-            full_row = self.eicloc.lookup_full_row(str(eic).strip())
+            full_row = self.eic_reg.lookup_full_row(str(eic).strip())
             for col in wcode_fields:
                 df.at[idx, f"wcode.{col}"] = full_row.get(col)
 
@@ -118,12 +116,12 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated dataframe (now with direct EIC code matches).
         """
-        assert self.ppmloc is not None
+        assert self.ppdb_loc is not None
 
-        ppm_cols = list(self.ppmloc.PPM_COLS)
-        for col in ppm_cols:
-            df[f"ppm.{col}"] = None
-        df["ppm.match_source"] = None
+        ppdb_cols = list(self.ppdb_loc.PPM_COLS)
+        for col in ppdb_cols:
+            df[f"ppdb.{col}"] = None
+        df["ppdb.match_source"] = None
 
         gem_cols = list(GEMLocator.GEM_COLS)
         for col in gem_cols:
@@ -150,15 +148,15 @@ class EntsoePipeline(BasePipeline):
                 hit = self.gemloc.match_by_entsoe_id(str(parent_eic).strip())
                 source = "gem_parent_direct"
 
-            # 3. PPM fallback: unit EIC directly
+            # 3. ppdb (PPM) fallback: unit EIC directly
             if hit is None and pd.notna(eic) and str(eic).strip():
-                hit = self.ppmloc.match_by_entsoe_id(str(eic).strip())
-                source = "ppm_direct"
+                hit = self.ppdb_loc.match_by_entsoe_id(str(eic).strip())
+                source = "ppdb_direct"
 
-            # 4. PPM fallback: parent EIC from wcode.EicParent
+            # 4. ppdb (PPM) fallback: parent EIC from wcode.EicParent
             if hit is None and pd.notna(parent_eic) and str(parent_eic).strip():
-                hit = self.ppmloc.match_by_entsoe_id(str(parent_eic).strip())
-                source = "ppm_parent_direct"
+                hit = self.ppdb_loc.match_by_entsoe_id(str(parent_eic).strip())
+                source = "ppdb_parent_direct"
 
             if hit is not None:
                 if source is not None and source.startswith("gem"):
@@ -166,15 +164,15 @@ class EntsoePipeline(BasePipeline):
                         df.at[idx, f"gem.{col}"] = hit.get(col)
                     df.at[idx, "gem.match_source"] = source
                 else:
-                    for col in ppm_cols:
-                        df.at[idx, f"ppm.{col}"] = hit.get(col)
-                    df.at[idx, "ppm.match_source"] = source
+                    for col in ppdb_cols:
+                        df.at[idx, f"ppdb.{col}"] = hit.get(col)
+                    df.at[idx, "ppdb.match_source"] = source
 
-        ppm_direct_count = df["ppm.lat"].notna().sum()
+        ppdb_direct_count = df["ppdb.lat"].notna().sum()
         gem_direct_count = df["gem.lat"].notna().sum()
         logger.info(
             f"[{self.input_dir.name}] Direct/EicParent match: {gem_direct_count} via GEM, "
-            f"{ppm_direct_count} via PPM (out of {len(df)})."
+            f"{ppdb_direct_count} via ppdb (PPM) (out of {len(df)})."
         )
         return df
 
@@ -187,7 +185,7 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated dataframe (now with parent units identified).
         """
-        assert self.eicloc is not None
+        assert self.eic_reg is not None
         parent_meta = [
             "EicCode",
             "EicDisplayName",
@@ -201,7 +199,7 @@ class EntsoePipeline(BasePipeline):
             df[f"wcode.parent.{col}"] = None
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
-            parent = self.eicloc.find_parent_production_unit(
+            parent = self.eic_reg.find_parent_production_unit(
                 eic_parent=row.get("wcode.EicParent")
                 if pd.notna(row.get("wcode.EicParent"))
                 else None,
@@ -241,10 +239,10 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated dataframe (now with parent EIC code matches).
         """
-        assert self.ppmloc is not None
+        assert self.ppdb_loc is not None
 
         gem_cols = list(GEMLocator.GEM_COLS)
-        ppm_cols = list(self.ppmloc.PPM_COLS)
+        ppdb_cols = list(self.ppdb_loc.PPM_COLS)
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent_eic = row.get("wcode.parent.EicCode")
             if pd.isna(parent_eic) or not str(parent_eic).strip():
@@ -261,18 +259,18 @@ class EntsoePipeline(BasePipeline):
                     df.at[idx, f"gem.{col}"] = hit.get(col)
                 df.at[idx, "gem.match_source"] = "gem_parent_entsoe_id"
             else:
-                hit = self.ppmloc.match_by_entsoe_id(parent_eic_str)
+                hit = self.ppdb_loc.match_by_entsoe_id(parent_eic_str)
                 if hit is not None:
-                    for col in ppm_cols:
-                        df.at[idx, f"ppm.{col}"] = hit.get(col)
-                    df.at[idx, "ppm.match_source"] = "ppm_parent_entsoe_id"
+                    for col in ppdb_cols:
+                        df.at[idx, f"ppdb.{col}"] = hit.get(col)
+                    df.at[idx, "ppdb.match_source"] = "ppdb_parent_entsoe_id"
 
-        ppm_after_parent = df["ppm.lat"].notna().sum()
+        ppdb_after_parent = df["ppdb.lat"].notna().sum()
         gem_after_parent = df["gem.lat"].notna().sum()
         logger.info(
             f"[{self.input_dir.name}] Match via parent EIC: {gem_after_parent} via GEM "
-            f"total, {ppm_after_parent} via PPM total "
-            f"({ppm_after_parent + gem_after_parent} total)."
+            f"total, {ppdb_after_parent} via ppdb (PPM) total "
+            f"({ppdb_after_parent + gem_after_parent} total)."
         )
         return df
 

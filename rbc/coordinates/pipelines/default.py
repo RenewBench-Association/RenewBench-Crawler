@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.ppm import PPMLocator
+from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.mappings import COUNTRY_ISO2_MAP
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import base_name_key
@@ -25,8 +25,8 @@ class DefaultPipeline(BasePipeline):
         self,
         input_dir: Path,
         output_dir: Path | None = None,
-        gemloc: GEMLocator | None = None,
-        ppmloc: PPMLocator | None = None,
+        gem_loc: GEMLocator | None = None,
+        osmpp_loc: OSMPPLocator | None = None,
         osm_update: bool = False,
         osm_live: bool = False,
     ) -> None:
@@ -36,10 +36,10 @@ class DefaultPipeline(BasePipeline):
             input_dir (Path): Path to the raw energy generation file (assuming CSV here).
             output_dir (Path, optional): Path to the directory where any output files may be
                 saved. Defaults to None.
-            gemloc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
+            gem_loc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
                 None, in which case GEM is disabled.
-            ppmloc (PPMLocator, optional): Pre-built PPM locator to reuse the pan-European
-                PPM CSV or global OSMPP CSV. Defaults to None, in which case a new locator
+            osmpp_loc (OSMPPLocator, optional): Pre-built global OSMPP locator to reuse as
+                the power plant database (ppdb). Defaults to None, in which case a new locator
                 is built.
             osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
                 ``overpass_..._plants.parquet`` file even if it already exists.
@@ -50,15 +50,15 @@ class DefaultPipeline(BasePipeline):
         super().__init__(
             input_dir=input_dir,
             output_dir=output_dir,
-            gemloc=gemloc,
-            ppmloc=ppmloc,
+            gemloc=gem_loc,
+            ppdb_loc=osmpp_loc,
             osm_update=osm_update,
             osm_live=osm_live,
         )
 
-        # todo: uncomment when OSMPPLocator has been added
-        # if self.ppmloc is None:
-        #     self.ppmloc = OSMPPLocator()
+        self.ppdb_loc: OSMPPLocator = (  # type: ignore[assignment]
+            self.ppdb_loc if self.ppdb_loc is not None else OSMPPLocator()
+        )
 
     # ------------------------------------------------------------------
     # PIPELINE STEPS (for DefaultPipeline only)

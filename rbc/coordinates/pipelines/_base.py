@@ -19,6 +19,7 @@ from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osm_api import query_osm_country_plants
+from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import COUNTRY_ISO2_MAP, OPERATOR_METADATA
 from rbc.coordinates.matcher import NameMatrixMatcher
@@ -35,12 +36,13 @@ class BasePipeline:
             by the source they come from.
 
     - EGEs from the energy generation data sources      = EGEs to find coordinates for
-        - System operators (entsoe, aemo, ...): sysop
+        - System operators (entsoe, aemo, ...):         sysop
     - EGEs from the coordinate-finding sources:         = EGEs we have coordinates of
-        - OpenStreetMap Overpass Turbo API:     osm
-        - "Global Energy Monitor" files:        gem
-        - "powerplantmatching" package:         ppm
-        - "osm-powerplants" package:            osmpp
+        - OpenStreetMap Overpass Turbo API:             osm
+        - "Global Energy Monitor" files:                gem
+        - power plant databases in Github packages:     ppdb
+            - "powerplantmatching" (only Europe):           ppm
+            - "osm-powerplants" (global):                   osmpp
 
     Not to be instantiated directly --- use subclasses (e.g. EntsoePipeline, DefaultPipeline).
     """
@@ -52,7 +54,7 @@ class BasePipeline:
         input_dir: Path,
         output_dir: Path | None,
         gemloc: GEMLocator | None,
-        ppmloc: PPMLocator | None,
+        ppdb_loc: PPMLocator | OSMPPLocator | None,
         osm_update: bool = False,
         osm_live: bool = False,
     ) -> None:
@@ -64,8 +66,8 @@ class BasePipeline:
                 saved. If None, output files are not saved.
             gemloc (GEMLocator, optional): Pre-built GEM locator to reuse. If None,
                 GEM is disabled.
-            ppmloc (PPMLocator, optional): Pre-built locator to reuse the European PPM CSV
-                or global OSMPP CSV. If None, CSV-based location is disabled.
+            ppdb_loc (PPMLocator | OSMPPLocator optional): Pre-built locator to reuse the
+                European PPM CSV or global OSMPP CSV. If None, CSV-based location is disabled.
             osm_update (bool): Re-fetch OSM data from the Overpass and overwrite the local
                 ``overpass_..._plants.parquet`` file even if it already exists.
                 Corresponds to the ``--update`` / ``-u`` CLI flag.
@@ -125,7 +127,7 @@ class BasePipeline:
 
         # Locators are expensive to construct, so they should be pre-built and only shared.
         self.gemloc: GEMLocator | None = gemloc
-        self.ppmloc: PPMLocator | None = ppmloc  # todo: include OSMPPLocator as option!
+        self.ppdb_loc: PPMLocator | OSMPPLocator | None = ppdb_loc
 
         logger.info(
             f"{type(self).__name__} initialized for: {self.operator} ({self.country})"
@@ -236,17 +238,19 @@ class BasePipeline:
         return df
 
     def _step_fuzzy_match(self, df: pd.DataFrame) -> pd.DataFrame:
-        """FUZZY STEP --- Unified fuzzy name matching for every pipeline.
+        """FUZZY STEP --- Unified fuzzy name matching.
 
-        PPM (powerplantmatching) is Europe-only data, so self.ppmloc is only ever a real
-        PPMLocator for the entsoe pipeline (see EntsoePipeline.__init__) -- it
-        stays None otherwise, which NameMatrixMatcher treats as "PPM disabled". GEM and the
-        live OSM Overpass source are used by every pipeline.
-        The EIC-derived alternative names / wcode.* candidate columns are entsoe-only
-        (populated by entsoe's own earlier `_step_entsoe_*` steps). For every other pipeline
-        they simply don't exist, and row.get() returns None safely, so this same logic falls
-        straight through to the raw sysop.<name_col> candidate without any special-casing
-        needed here.
+        This step uses a various different sources depending on the pipeline.
+        1. GEM -> used by all pipelines.
+        2. Live OSM Overpass API -> used by all pipelines.
+        2. Power plant database (self.ppdb_loc), defined by the pipeline:
+        - "entsoe" pipeline: self.ppdb_loc = PPM (powerplantmatching) = Europe-only data
+        - "default" pipeline: self.ppdb_loc = OSMPP (OSM-power plants) = Global data
+        4. EIC-derived alternative names / wcode.* candidate columns, defined by the pipeline:
+        - "entsoe" pipeline: populated by entsoe's own earlier `_step_entsoe_*` steps
+        - "default" pipeline: NON-EXISTENT! (row.get() -> None -> only uses sysop.<name_col>)
+
+        If a self.<...>_loc is None, that source is disabled and not used at all.
 
         Args:
             df (pd.DataFrame): The working dataframe.
@@ -261,7 +265,7 @@ class BasePipeline:
         matcher = NameMatrixMatcher(
             country=self.country,
             country_code=country_code,
-            ppm_locator=self.ppmloc,
+            ppdb_locator=self.ppdb_loc,
             gem_locator=self.gemloc,
             osm_df=self.df_osm if len(self.df_osm) > 0 else None,
         )
@@ -289,12 +293,12 @@ class BasePipeline:
         df["fuel_type_match"] = None
         df["fuel_type_match_level"] = None
         matched_mask = (
-            df["ppm.lat"].notna() | df["gem.lat"].notna() | df["osm.lat"].notna()
+            df["ppdb.lat"].notna() | df["gem.lat"].notna() | df["osm.lat"].notna()
         )
         for idx, row in df[matched_mask].iterrows():
             matched_fueltype = None
-            if pd.notna(row.get("ppm.lat")):
-                matched_fueltype = row.get("ppm.Fueltype")
+            if pd.notna(row.get("ppdb.lat")):
+                matched_fueltype = row.get("ppdb.Fueltype")
             elif pd.notna(row.get("gem.lat")):
                 matched_fueltype = row.get("gem.Fueltype")
             elif pd.notna(row.get("osm.lat")):
@@ -336,7 +340,7 @@ class BasePipeline:
 
         derived_source = df.apply(_derived_source_row, axis=1)
         df["match_source"] = (
-            df["ppm.match_source"]
+            df["ppdb.match_source"]
             .combine_first(df["gem.match_source"])
             .combine_first(derived_source)
         )
@@ -378,7 +382,7 @@ class BasePipeline:
                 strings against the matcher (most authoritative first).
 
         Returns:
-            df (pd.DataFrame): Updated working dataframe (now with ppm, gem, osm matches).
+            df (pd.DataFrame): Updated working dataframe (now with ppdb, gem, osm matches).
         """
         self._ensure_exact_match_columns(df)  # defensive; no-op if already done
         matcher.build_matrix()
@@ -399,13 +403,13 @@ class BasePipeline:
                 if result.matched and result.candidate:
                     candidate = result.candidate
 
-                    if candidate.source == "ppm":
-                        df.at[idx, "ppm.lat"] = candidate.lat
-                        df.at[idx, "ppm.lon"] = candidate.lon
-                        df.at[idx, "ppm.Name"] = candidate.name
-                        df.at[idx, "ppm.Fueltype"] = candidate.fueltype
-                        df.at[idx, "ppm.Country"] = candidate.country
-                        df.at[idx, "ppm.match_source"] = "ppm_fuzzy_matrix"
+                    if candidate.source == "ppdb":
+                        df.at[idx, "ppdb.lat"] = candidate.lat
+                        df.at[idx, "ppdb.lon"] = candidate.lon
+                        df.at[idx, "ppdb.Name"] = candidate.name
+                        df.at[idx, "ppdb.Fueltype"] = candidate.fueltype
+                        df.at[idx, "ppdb.Country"] = candidate.country
+                        df.at[idx, "ppdb.match_source"] = "ppdb_fuzzy_matrix"
 
                     elif candidate.source == "gem" and self.gemloc:
                         df.at[idx, "gem.lat"] = candidate.lat
@@ -431,12 +435,12 @@ class BasePipeline:
             if f"osm.{col}" not in df.columns:
                 df[f"osm.{col}"] = None
 
-        ppm_final = df["ppm.lat"].notna().sum()
+        ppdb_final = df["ppdb.lat"].notna().sum()
         gem_final = df["gem.lat"].notna().sum()
         osm_final = df["osm.lat"].notna().sum()
         logger.info(
             f"[{self.input_dir.name}] NameMatrixMatcher: "
-            f"{ppm_final} via PPM total, {gem_final} via GEM total, "
+            f"{ppdb_final} via ppdb (PPM/OSMPP) total, {gem_final} via GEM total, "
             f"{osm_final} via OSM."
         )
         return df
@@ -448,7 +452,7 @@ class BasePipeline:
 
         Some units have no usable name of their own (e.g. an extra generator block added
         later) but share the same physical plant as another unit that was already matched
-        by any of the previous steps. Rather than re-guessing a name for OSM/PPM/GEM
+        by any of the previous steps. Rather than re-guessing a name for OSM/ppdb/GEM
         matching, simply inherit that sibling's coordinates.
 
         Args:
@@ -531,7 +535,7 @@ class BasePipeline:
     # ------------------------------------------------------------------
     @staticmethod
     def _ensure_exact_match_columns(df: pd.DataFrame) -> None:
-        """Ensure ppm.*/gem.* lat/lon/match_source columns exist (in place).
+        """Ensure ppdb.*/gem.* lat/lon/match_source columns exist (in place).
 
         Pipelines with an exact-ID stage (e.g. entsoe) normally create these first;
         pipelines with no exact-ID stage at all would otherwise KeyError the first
@@ -540,9 +544,9 @@ class BasePipeline:
         already exist.
         """
         for col in (
-            "ppm.lat",
-            "ppm.lon",
-            "ppm.match_source",
+            "ppdb.lat",
+            "ppdb.lon",
+            "ppdb.match_source",
             "gem.lat",
             "gem.lon",
             "gem.match_source",
@@ -552,15 +556,15 @@ class BasePipeline:
 
     @staticmethod
     def _still_unmatched(df: pd.DataFrame) -> pd.Series:
-        """Check which rows / EGs have no  according to PPM and GEM.
+        """Check which rows / EGs have no  according to ppdb and GEM.
 
         Args:
-            df (pd.DataFrame): Df to check for PPM and GEM coordinate matches.
+            df (pd.DataFrame): Df to check for ppdb and GEM coordinate matches.
 
         Returns:
             pd.Series: Series of unmatched rows.
         """
-        return df["ppm.lat"].isna() & df["gem.lat"].isna()
+        return df["ppdb.lat"].isna() & df["gem.lat"].isna()
 
     def _ensure_osm_loaded(self, country_code: str | None) -> None:
         """Ensure the OSM dataframe for the specific country code is loaded.
@@ -586,8 +590,8 @@ class BasePipeline:
         Returns:
             tuple[pd.Series, pd.Series]: Best-so-far lat and lon coordinates.
         """
-        lat = df["ppm.lat"].combine_first(df["gem.lat"]).combine_first(df["osm.lat"])
-        lon = df["ppm.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
+        lat = df["ppdb.lat"].combine_first(df["gem.lat"]).combine_first(df["osm.lat"])
+        lon = df["ppdb.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
         return lat, lon
 
     @staticmethod

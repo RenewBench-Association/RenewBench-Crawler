@@ -42,8 +42,8 @@ class PPMLocator:
     def __init__(self):
         """Initializes PPMLocator."""
         # All energy entities in Europe that "make the cut" according to ppm
-        self.df_europe = pd.read_csv(PPM_CSV_URL)
-        self.df_europe["entsoe_id_list"] = self.df_europe["projectID"].apply(
+        self.df = pd.read_csv(PPM_CSV_URL)
+        self.df["entsoe_id_list"] = self.df["projectID"].apply(
             self._extract_entsoe_code_list
         )
         self._entsoe_id_index = self._build_entsoe_id_index()
@@ -92,7 +92,7 @@ class PPMLocator:
             dict[str, int]: EIC code lookup dict.
         """
         index: dict[str, int] = {}
-        for pos, id_list in enumerate(self.df_europe["entsoe_id_list"]):
+        for pos, id_list in enumerate(self.df["entsoe_id_list"]):
             for eic in id_list:
                 index.setdefault(eic, pos)
         return index
@@ -118,7 +118,7 @@ class PPMLocator:
                  'Duration', 'Volume_Mm3', 'DamHeight_m', 'StorageCapacity_MWh', 'EIC',
                  'projectID', 'entsoe_id']
         """
-        return self.df_europe[(self.df_europe["Country"] == country)]
+        return self.df[(self.df["Country"] == country)]
 
     def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
         """Find an EGE by its ENTSOE EIC code and return the full row as a dict.
@@ -142,7 +142,7 @@ class PPMLocator:
         if pos is None:
             return None
 
-        row = self.df_europe.iloc[pos]
+        row = self.df.iloc[pos]
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 

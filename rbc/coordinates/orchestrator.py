@@ -62,9 +62,9 @@ def perform_coordinate_finding(
             cl = make_pipeline(
                 input_dir=csv_parent_dir,
                 output_dir=output_dir,
-                gemloc=shared.gemloc,
-                ppmloc=shared.ppmloc,
-                eicloc=shared.eicloc,
+                gem_loc=shared.gem_loc,
+                ppdb_loc=shared.ppdb_loc,
+                eic_reg=shared.eic_reg,
                 osm_update=update,
                 osm_live=live,
             )

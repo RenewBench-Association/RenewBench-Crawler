@@ -1,14 +1,14 @@
 """Centralized name matching utilities for coordinate finding.
 
 This module provides a unified, matrix-based approach to fuzzy name matching
-across multiple power plant data sources (GEM, PPM, OSM).
+across multiple power plant data sources, namely ppdb (PPM/OSMPP), GEM, OSM.
 
 Key Features:
 - Systematic generation of name variants for both input and candidate names
 - Pre-computed search matrix for efficient lookups
 - Hard country filtering to prevent cross-country false positives
 - Fuel type guardrails for validation
-- Source priority (GEM > PPM > OSM)
+- Source priority: GEM > ppdb (PPM/OSMPP) > OSM
 - Caching for performance
 """
 
@@ -31,6 +31,7 @@ from rbc.coordinates.utils.tokenizer import (
 
 if TYPE_CHECKING:
     from rbc.coordinates.locators.gem import GEMLocator
+    from rbc.coordinates.locators.osmpp import OSMPPLocator
     from rbc.coordinates.locators.ppm import PPMLocator
 
 
@@ -43,14 +44,14 @@ class MatchCandidate:
 
     name: str
     normalized: str
-    source: str  # 'gem', 'ppm', 'osm'
+    source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     fueltype: Optional[str]
     lat: Optional[float]
     lon: Optional[float]
     country: Optional[str]
     source_id: Optional[str]
     match_score: float = 0.0
-    confidence: str = "hight"  # 'high', 'medium', 'low'
+    confidence: str = "high"  # 'high', 'medium', 'low'
     other_names: str = ""  # GEM-specific: comma-separated alternate names
 
 
@@ -69,13 +70,11 @@ class MatchResult:
 class SourceAdapter:
     """Column-mapping config that lets one candidate builder serve any source.
 
-    Replaces the 3 near-duplicate, hardcoded ``_build_ppm_candidates`` /
-    ``_build_gem_candidates`` / ``_build_osm_candidates`` methods with a
-    single generic builder (see ``NameMatrixMatcher._build_candidates``)
-    parameterized per source.
+    Replaces hardcoded candidate building per locator source with a single generic builder
+    (see ``NameMatrixMatcher._build_candidates``).
     """
 
-    source: str  # 'ppm', 'gem', 'osm'
+    source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     get_df: Callable[["NameMatrixMatcher"], Optional[pd.DataFrame]]
     name_col: str
     country_col: Optional[str]  # None if the source has no country column (e.g. OSM)
@@ -87,9 +86,9 @@ class SourceAdapter:
     confidence_fn: Callable[[pd.Series], str] = lambda row: "medium"
 
 
-PPM_ADAPTER = SourceAdapter(
-    source="ppm",
-    get_df=lambda m: getattr(m._ppm_locator, "df_europe", None),
+PPDB_ADAPTER = SourceAdapter(
+    source="ppdb",
+    get_df=lambda m: getattr(m.ppdb_locator, "df", None),
     name_col="Name",
     country_col="Country",
     fueltype_col="Fueltype",
@@ -97,9 +96,19 @@ PPM_ADAPTER = SourceAdapter(
     confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
 )
 
+# PPM_ADAPTER = SourceAdapter(
+#     source="ppm",
+#     get_df=lambda m: getattr(m.ppdb_locator, "df", None),
+#     name_col="Name",
+#     country_col="Country",
+#     fueltype_col="Fueltype",
+#     id_col="id",
+#     confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
+# )
+
 GEM_ADAPTER = SourceAdapter(
     source="gem",
-    get_df=lambda m: getattr(m._gem_locator, "df_gem", None),
+    get_df=lambda m: getattr(m.gem_locator, "df_gem", None),
     name_col="plant_name",
     country_col="Country",
     fueltype_col="Fueltype",
@@ -114,7 +123,7 @@ OSM_ADAPTER = SourceAdapter(
     # already exploded into separate rows sharing the same OSM_ID upstream
     # (osm_api.py), so no other_names_col/extra handling is needed
     # here -- iterating rows picks them up for free.
-    get_df=lambda m: m._osm_df,
+    get_df=lambda m: m.osm_df,
     name_col="Name",
     country_col=None,  # no country column; relies on the matrix-level filter
     fueltype_col="Fueltype",
@@ -138,16 +147,11 @@ class NameMatrixMatcher:
     - Generates all plausible name variants for both input and candidates
     - Hard country filtering to prevent cross-country false positives
     - Fuel type guardrails for validation
-    - Source priority: GEM > PPM > OSM
+    - Source priority: GEM > ppdb (PPM/OSMPP) > OSM
     - Caching for repeated matches
 
     Example:
-        >>> matcher = NameMatrixMatcher(
-        ...     country="Germany",
-        ...     gem_locator=gem_loc,
-        ...     ppm_locator=ppm_loc,
-        ...     osm_df=osm_data
-        ... )
+        >>> matcher = NameMatrixMatcher(country="Germany",gem_locator=gem_loc,osm_df=osm_data)
         >>> result = matcher.match("Enguri Unit 5", fuel_type="hydro")
         >>> if result.matched:
         ...     candidate = result.candidate
@@ -157,7 +161,7 @@ class NameMatrixMatcher:
     # Source priority bonuses (added to fuzzy match scores)
     SOURCE_BONUS: dict[str, float] = {
         "gem": 3.0,
-        "ppm": 2.0,
+        "ppdb": 2.0,
         "osm": 1.0,
     }
 
@@ -167,22 +171,31 @@ class NameMatrixMatcher:
         country_code: Optional[str] = None,
         fuel_type: Optional[str] = None,
         gem_locator: Optional["GEMLocator"] = None,
-        ppm_locator: Optional["PPMLocator"] = None,
+        ppdb_locator: Optional["PPMLocator"] | Optional["OSMPPLocator"] = None,
         osm_df: Optional[pd.DataFrame] = None,
     ) -> None:
         """Initialize the name matrix matcher.
 
         Args:
-            country: Country name for hard filtering (prevents cross-country matches).
-            country_code: ISO-2 country code for token expansion.
-            fuel_type: Optional fuel type for pre-filtering candidates.
-            gem_locator: Optional GEMLocator instance for GEM candidates.
-            ppm_locator: Optional PPMLocator instance for PPM candidates.
-            osm_df: Optional DataFrame with OSM power plant data.
+            country (str, optional): Country name for hard filtering
+                (prevents cross-country matches).
+            country_code (str, optional): ISO-2 country code for token expansion.
+            fuel_type (str, optional): Fuel type for pre-filtering candidates.
+            gem_locator (GEMLocator, optional): GEM locator instance for GEM candidates.
+            ppdb_locator (PPMLocator | OSMPPLocator, optional): PPMLocator or OSMPPLocator
+                locator for power plant database candidates.
+            osm_df (df, Optional): DataFrame with OSM power plant data.
         """
         self.country = country
         self.country_code = country_code
         self.fuel_type = fuel_type
+
+        # Data sources (lazy-loaded)
+        self.gem_locator: Optional["GEMLocator"] = gem_locator
+        self.ppdb_locator: Optional["PPMLocator"] | Optional["OSMPPLocator"] = (
+            ppdb_locator
+        )
+        self.osm_df: Optional[pd.DataFrame] = osm_df
 
         # Name variant cache: original_name -> [variants]
         self._variant_cache: dict[str, list[str]] = {}
@@ -197,11 +210,6 @@ class NameMatrixMatcher:
         # invalidation -- also gives free cache hits across the many
         # candidates that already share a normalized name (matrix buckets).
         self._weighted_tokens_cache: dict[str, "_tokenizer.WeightedTokens"] = {}
-
-        # Data sources (lazy-loaded)
-        self._gem_locator: Optional["GEMLocator"] = gem_locator
-        self._ppm_locator: Optional["PPMLocator"] = ppm_locator
-        self._osm_df: Optional[pd.DataFrame] = osm_df
 
         # Track added alternative names for EIC enrichment
         self._alternative_names: dict[str, list[str]] = {}
@@ -317,13 +325,13 @@ class NameMatrixMatcher:
         # Collect candidates from all available sources via their adapters
         candidates: list[MatchCandidate] = []
 
-        if self._ppm_locator is not None:
-            candidates.extend(self._build_candidates(PPM_ADAPTER))
+        if self.ppdb_locator is not None:
+            candidates.extend(self._build_candidates(PPDB_ADAPTER))
 
-        if self._gem_locator is not None:
+        if self.gem_locator is not None:
             candidates.extend(self._build_candidates(GEM_ADAPTER))
 
-        if self._osm_df is not None and len(self._osm_df) > 0:
+        if self.osm_df is not None and len(self.osm_df) > 0:
             candidates.extend(self._build_candidates(OSM_ADAPTER))
 
         # Index candidates by normalized name
@@ -533,12 +541,13 @@ class NameMatrixMatcher:
     # Private Candidate Builder
     # ---------------------------------------------------------------------------
     def _build_candidates(self, adapter: SourceAdapter) -> list[MatchCandidate]:
-        """Build candidates from any source via its :class:`SourceAdapter` config.
+        """Build candidates from a source depending on its `SourceAdapter` config.
 
-        Replaces the former per-source ``_build_ppm_candidates`` /
-        ``_build_gem_candidates`` / ``_build_osm_candidates`` methods with one
-        generic builder, field-for-field equivalent (country/fuel filters,
-        coordinate/name requirements, confidence rule, other_names).
+        Args:
+            adapter (SourceAdapter): The source adapter to build candidates from.
+
+        Returns:
+            list[MatchCandidate]: A list of matching candidates.
         """
         df = adapter.get_df(self)
         if df is None:

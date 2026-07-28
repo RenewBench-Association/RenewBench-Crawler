@@ -75,7 +75,7 @@ class TestBasePipelineInit:
         """
         with pytest.raises(TypeError, match="BasePipeline must be subclassed"):
             BasePipeline(
-                input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppmloc=None
+                input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
             )
 
 
@@ -89,7 +89,7 @@ class TestBasePipelineRunPipeline:
             eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
         """
         pipeline = _DummyPipeline(
-            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppmloc=None
+            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
         )
         pipeline.call_log = []
 
@@ -105,7 +105,7 @@ class TestBasePipelineRunPipeline:
             eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
         """
         pipeline = _StopsEarlyPipeline(
-            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppmloc=None
+            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
         )
 
         df = pipeline.run_pipeline()
@@ -120,7 +120,7 @@ class TestBasePipelineRunPipeline:
             eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
         """
         pipeline = _DummyPipeline(
-            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppmloc=None
+            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
         )
 
         assert pipeline.sysop_name_col == "sysop.respondent-name"
@@ -138,5 +138,5 @@ class TestBasePipelineRunPipeline:
 
         with pytest.raises(ValueError, match="No country match found"):
             _DummyPipeline(
-                input_dir=unknown_dir, output_dir=None, gemloc=None, ppmloc=None
+                input_dir=unknown_dir, output_dir=None, gemloc=None, ppdb_loc=None
             )

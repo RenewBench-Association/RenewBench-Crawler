@@ -12,7 +12,7 @@ from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.matcher import (
     GEM_ADAPTER,
     OSM_ADAPTER,
-    PPM_ADAPTER,
+    PPDB_ADAPTER,
     NameMatrixMatcher,
 )
 
@@ -21,8 +21,8 @@ from rbc.coordinates.matcher import (
 # Fixtures
 # ----------------------------------
 @pytest.fixture
-def ppm_df() -> pd.DataFrame:
-    """Synthetic PPM candidate rows exercising the country/coordinate filters.
+def ppdb_df() -> pd.DataFrame:
+    """Synthetic ppdb (here: PPM) candidate rows exercising the country/coordinate filters.
 
     Returns:
         pd.DataFrame: One Estonian row with an EIC (high confidence), one
@@ -37,7 +37,7 @@ def ppm_df() -> pd.DataFrame:
                 "Fueltype": "Oil",
                 "lat": 59.0,
                 "lon": 27.0,
-                "id": "ppm-1",
+                "id": "ppdb-ppm-1",
                 "EIC": "38W-KTJ-AUV-G1-8",
             },
             {
@@ -46,7 +46,7 @@ def ppm_df() -> pd.DataFrame:
                 "Fueltype": "Oil",
                 "lat": 50.0,
                 "lon": 8.0,
-                "id": "ppm-2",
+                "id": "ppdb-ppm-2",
                 "EIC": None,
             },
             {
@@ -56,7 +56,7 @@ def ppm_df() -> pd.DataFrame:
                 "Fueltype": "Oil",
                 "lat": None,
                 "lon": None,
-                "id": "ppm-3",
+                "id": "ppdb-ppm-3",
                 "EIC": None,
             },
         ]
@@ -109,27 +109,27 @@ def osm_df() -> pd.DataFrame:
 
 @pytest.fixture
 def matcher(
-    ppm_df: pd.DataFrame,
+    ppdb_df: pd.DataFrame,
     gem_df: pd.DataFrame,
     osm_df: pd.DataFrame,
 ) -> NameMatrixMatcher:
-    """Returns a NameMatrixMatcher wired to fake PPM/GEM locators and an OSM df.
+    """Returns a NameMatrixMatcher wired to fake ppdb (PPM)/GEM locators and an OSM df.
 
     Args:
-        ppm_df (pd.DataFrame): Synthetic PPM candidate rows.
+        ppdb_df (pd.DataFrame): Synthetic ppdb (PPM) candidate rows.
         gem_df (pd.DataFrame): Synthetic GEM candidate rows.
         osm_df (pd.DataFrame): Synthetic OSM candidate rows.
 
     Returns:
         NameMatrixMatcher: Instance scoped to Estonia ("EE"), backed by fake
-            locator objects (types.SimpleNamespace) so no real PPM/GEM
+            locator objects (types.SimpleNamespace) so no real ppdb (PPM)/GEM
             downloads are needed.
     """
     return NameMatrixMatcher(
         country="Estonia",
         country_code="EE",
-        ppm_locator=cast(PPMLocator, SimpleNamespace(df_europe=ppm_df)),
         gem_locator=cast(GEMLocator, SimpleNamespace(df_gem=gem_df)),
+        ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
         osm_df=osm_df,
     )
 
@@ -137,36 +137,36 @@ def matcher(
 # ----------------------------------
 # Tests
 # ----------------------------------
-def test_ppm_adapter_country_filter_and_confidence(matcher: NameMatrixMatcher):
-    """Happy path for PPM_ADAPTER's country filter, coordinate filter, and confidence rule.
+def test_ppdb_adapter_country_filter_and_confidence(matcher: NameMatrixMatcher):
+    """Happy path for PPDB_ADAPTER's country filter, coordinate filter, and confidence rule.
 
     Args:
         matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
             `matcher` fixture.
     """
-    candidates = matcher._build_candidates(PPM_ADAPTER)
-    # Germany row filtered out (matcher country is Estonia); no-coords row dropped.
-    assert len(candidates) == 1
+    candidates = matcher._build_candidates(PPDB_ADAPTER)
+
+    assert len(candidates) == 1  # only matching country = Estonia
     c = candidates[0]
     assert c.name == "Auvere Power Plant"
-    assert c.source == "ppm"
-    assert c.source_id == "ppm-1"
+    assert c.source == "ppdb"
+    assert c.source_id == "ppdb-ppm-1"
     assert c.country == "Estonia"
     assert c.confidence == "high"  # has EIC
 
 
-def test_ppm_adapter_medium_confidence_without_eic(ppm_df: pd.DataFrame):
-    """Failure path for PPM_ADAPTER's confidence rule when the EIC column is empty.
+def test_ppdb_adapter_medium_confidence_without_eic(ppdb_df: pd.DataFrame):
+    """Failure path for PPDB_ADAPTER's confidence rule when the EIC column is empty.
 
     Args:
-        ppm_df (pd.DataFrame): Synthetic PPM candidate rows.
+        ppdb_df (pd.DataFrame): Synthetic ppdb (PPM) candidate rows.
     """
     m = NameMatrixMatcher(
         country="Germany",
         country_code="DE",
-        ppm_locator=cast(PPMLocator, SimpleNamespace(df_europe=ppm_df)),
+        ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
     )
-    candidates = m._build_candidates(PPM_ADAPTER)
+    candidates = m._build_candidates(PPDB_ADAPTER)
     assert len(candidates) == 1
     assert candidates[0].confidence == "medium"  # no EIC
 
@@ -206,7 +206,7 @@ def test_osm_adapter_no_country_column(matcher: NameMatrixMatcher):
 def test_build_candidates_missing_locator_returns_empty():
     """Failure path: a matcher with no locator wired up returns no candidates."""
     m = NameMatrixMatcher(country="Estonia")
-    assert m._build_candidates(PPM_ADAPTER) == []
+    assert m._build_candidates(PPDB_ADAPTER) == []
     assert m._build_candidates(GEM_ADAPTER) == []
 
 
@@ -220,4 +220,4 @@ def test_build_matrix_uses_all_three_adapters(matcher: NameMatrixMatcher):
     matrix = matcher.build_matrix()
     all_candidates = [c for candidates in matrix.values() for c in candidates]
     sources = {c.source for c in all_candidates}
-    assert sources == {"ppm", "gem", "osm"}
+    assert sources == {"ppdb", "gem", "osm"}

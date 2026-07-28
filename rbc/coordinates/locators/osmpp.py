@@ -40,9 +40,9 @@ class OSMPPLocator:
     def __init__(self) -> None:
         """Initializes OSMPPLocator."""
         # All energy entities in the world that "make the cut" according to osm-pp.
-        self.df_global = pd.read_csv(OSMPP_CSV_URL)
+        self.df = pd.read_csv(OSMPP_CSV_URL)
         # Energy entities that are filtered out by osm-pp due to missing data
-        self.df_global_rejected = pd.read_csv(OSMPP_REJECTED_CSV_URL)
+        self.df_rejected = pd.read_csv(OSMPP_REJECTED_CSV_URL)
         logger.info("OSMPPLocator initialized")
 
     # ------------------------------------------------------------------
@@ -66,4 +66,4 @@ class OSMPPLocator:
                  'created_at', 'config_hash', 'config_version', 'processing_parameters',
                  'generator_count']
         """
-        return self.df_global[self.df_global["Country"] == country]
+        return self.df[self.df["Country"] == country]
