@@ -1,7 +1,7 @@
 """Mappings used by the coordinate locator orchestrator.
 
 This module contains operator metadata required by
-rbc.coordinates.orchestrator.CoordinateLocator.
+rbc.coordinates.orchestrator and the rbc.coordinates.pipelines modules.
 
 Only ENTSO-E field names are fully validated in this minimal reconstruction.
 All other operators keep the same key structure with placeholder columns so the
