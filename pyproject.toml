@@ -53,6 +53,14 @@ dev = [
     "ruff",
     "types-requests",
 ]
+regrid = [
+    "grid-doctor @ git+https://github.com/freva-org/grid-doctor.git@d5a7db2e3baf429585dcda4d41087143586d134d",
+    "xarray",
+    "zarr",
+    "dask[array]",
+    "cfgrib",
+    "netcdf4",
+]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
