@@ -311,6 +311,56 @@ class Barra2Config(PathValidation, BaseModel):
     paths: Paths
 
 
+class RegridPaths(BaseModel):
+    """Filesystem paths used by the HEALPix regridding pipeline.
+
+    Attributes:
+        era5_raw_dir (Path): ERA5 raw data, already downloaded.
+        barra2_r2_raw_dir (Path): BARRA2 R2 raw data, already downloaded.
+        barra2_c2_raw_dir (Path): BARRA2 C2 raw data, already downloaded.
+        barra2_c2_20min_raw_dir (Path): BARRA2 C2_20min raw data, already downloaded.
+        icon_dream_global_raw_dir (Path): ICON-DREAM Global raw data, already downloaded.
+        icon_dream_eu_raw_dir (Path): ICON-DREAM EU raw data, already downloaded.
+        weights_cache_dir (Path): Where grid-doctor's ESMF weight files are cached.
+        dst_zarr_store (Path): Root of the shared HEALPix Zarr store.
+    """
+
+    era5_raw_dir: Path
+    barra2_r2_raw_dir: Path
+    barra2_c2_raw_dir: Path
+    barra2_c2_20min_raw_dir: Path
+    icon_dream_global_raw_dir: Path
+    icon_dream_eu_raw_dir: Path
+    weights_cache_dir: Path
+    dst_zarr_store: Path
+
+
+class RegridHealpixConfig(BaseModel):
+    """Configuration schema for the HEALPix regridding pipeline.
+
+    Deliberately skips `PathValidation`: every `*_raw_dir` must already contain
+    data from that source's own downloader, so auto-creating a missing one
+    (`PathValidation`'s behavior for every other schema's `paths`) would mask
+    a real error instead of failing fast — `GridRegridder.__init__` already
+    raises `FileNotFoundError` for a missing raw_dir; `weights_cache_dir` and
+    `dst_zarr_store` are created on demand by the code that writes to them.
+
+    Attributes:
+        source (Literal): Name of the data source.
+        paths (RegridPaths): Paths pydantic model for paths.
+        healpix_min_level (int): Shared coarsest HEALPix level across sources.
+        healpix_max_level (dict[str, int]): Finest HEALPix level per source.
+        variables (dict[str, list[str]] | None): Per-source variable override;
+            None uses each regridder's own default.
+    """
+
+    source: Literal["regrid_healpix"] = "regrid_healpix"
+    paths: RegridPaths
+    healpix_min_level: int
+    healpix_max_level: dict[str, int]
+    variables: dict[str, list[str]] | None = None
+
+
 # ----------------------------------
 # Schema registry
 # ----------------------------------
@@ -330,4 +380,5 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "era5": Era5Config,
     "icon_dream_eu": IconDreamEuConfig,
     "icon_dream_global": IconDreamGlobalConfig,
+    "regrid_healpix": RegridHealpixConfig,
 }
