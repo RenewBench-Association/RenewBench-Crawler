@@ -14,14 +14,13 @@ from loguru import logger
 
 
 class GridRegridder(ABC):
-    """Abstract base class for source-specific HEALPix regridders.
+    """Abstract base for source-specific HEALPix regridders.
 
-    Subclasses must implement `_get_tasks()`, `_load_source_chunk()`,
-    `_grid_metadata_path()`, and `_variable_mapping()`. The `regrid()` loop,
-    checkpoint loading/saving, weight computation, and pyramid construction are
-    handled here; subclasses override `_regrid_chunk()`/`_regrid_kwargs()` only
-    when their source needs something other than the generic
-    `create_healpix_pyramid()` path (e.g. BARRA2's regional coverage).
+    Subclasses implement `_get_tasks()`, `_load_source_chunk()`,
+    `_grid_metadata_path()`, and `_variable_mapping()`. `regrid()` handles the
+    checkpoint loop, weights, and pyramid construction; override
+    `_regrid_chunk()`/`_regrid_kwargs()` only if a source needs something
+    other than the generic path (e.g. BARRA2's regional coverage).
 
     Attributes:
         raw_dir (Path): Root of this source's already-downloaded raw files.
@@ -101,12 +100,9 @@ class GridRegridder(ABC):
     def regrid(self) -> Iterator[tuple[tuple, dict[int, xr.Dataset]]]:
         """Regrid all unfinished tasks, yielding a HEALPix pyramid per task.
 
-        For each task from `_get_tasks()`: skip if already checkpointed and
-        `resume`; load and canonicalize the source chunk; resolve weights. If
-        `dry_run`, stop here (inputs/weights are resolved but nothing is
-        regridded or yielded). Otherwise regrid to the full pyramid, checkpoint
-        the task, and yield it. Never writes to the shared store itself — the
-        caller hands each yielded pyramid to `HealpixZarrWriter.append()`.
+        Skips checkpointed tasks. If `dry_run`, resolves weights but doesn't
+        regrid or yield. Never writes to the store — the caller must write via
+        `HealpixZarrWriter.append()`, then call `mark_done(task)`.
 
         Yields:
             tuple[tuple, dict[int, xr.Dataset]]: (task, pyramid) pairs, where
@@ -129,12 +125,22 @@ class GridRegridder(ABC):
                 continue
 
             pyramid = self._regrid_chunk(ds, weights)
-
-            self.checkpoint[task] = 1
-            self._save_checkpoint()
             yield task, pyramid
 
         logger.info(f"All regridding tasks completed for '{self.source_name}'!")
+
+    def mark_done(self, task: tuple) -> None:
+        """Mark a task done and persist the checkpoint.
+
+        Call only after `HealpixZarrWriter.append()` for this task succeeds —
+        not inside `regrid()`, so a crash between yield and write can't mark a
+        task done that was never actually written.
+
+        Args:
+            task (tuple): The task that was successfully written.
+        """
+        self.checkpoint[task] = 1
+        self._save_checkpoint()
 
     @abstractmethod
     def _get_tasks(self) -> list[tuple]:
@@ -199,12 +205,10 @@ class GridRegridder(ABC):
         return {}
 
     def _get_weights(self, ds: xr.Dataset) -> Path:
-        """Compute or load cached HEALPix regridding weights for this source.
+        """Compute or load cached HEALPix weights for this source.
 
-        For unstructured sources (`_grid_metadata_path()` returns a path),
-        weights are computed from the grid definition file alone, per the
-        confirmed grid-doctor ICON recipe — not from `ds` itself, which for
-        unstructured sources carries no usable coordinates on its own.
+        For unstructured sources, computes from the grid file alone
+        (grid-doctor's ICON recipe), not from `ds`.
 
         Args:
             ds (xr.Dataset): Renamed source dataset (used directly for lat-lon
@@ -235,13 +239,10 @@ class GridRegridder(ABC):
         )
 
     def _regrid_chunk(self, ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
-        """Regrid `ds` to the full HEALPix pyramid, max_level down to min_level.
+        """Regrid `ds` to the full pyramid, max_level down to min_level.
 
-        Generic implementation for both lat-lon sources and unstructured sources
-        whose weights were computed from a separate grid file via `_get_weights()`.
-        Sources affected by the confirmed regional-source coordinate-attachment
-        crash (BARRA2) must override this method once that fix is resolved
-        (first task of Phase 2).
+        Works for lat-lon and unstructured sources. BARRA2 must override this
+        once the regional-source crash fix lands (Phase 2).
 
         Args:
             ds (xr.Dataset): Renamed source dataset to regrid.
