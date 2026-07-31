@@ -27,27 +27,30 @@ def parse_arguments() -> Namespace:
         "-s",
         type=str,
         choices=SOURCES,
-        help="Energy source to find locations for. Only one source can be analysed at a "
-        "time.",
+        help="Energy source to find locations for. Only one source can be analysed at a time.",
     )
     parser.add_argument(
         "--input",
         "-i",
         type=Path,
         nargs="+",  # accept one or more arguments and group them into a list
-        help="Directory where raw files from the source (inputs for coordinate finding) are "
-        "located. This can be the general source folder (e.g. with all temporal "
-        "resolutions), a single folder containing CSV files, or an explicit list of "
-        "zone folders. If None is provided, the YAML config's dst_dir_raw will be used.",
+        help=(
+            "Directory where raw files from the source (inputs for coordinate finding) are "
+            "located. This can be the general source folder (e.g. with all temporal "
+            "resolutions), a single folder containing CSV files, or an explicit list of "
+            "zone folders. If None is provided, the YAML config's dst_dir_raw will be used."
+        ),
     )
     parser.add_argument(
         "--output",
         "-o",
         type=Path,
-        help="Directory where the outputs (overpass parquet file and, for entsoe, "
-        "enriched plant details CSV files are written. If None is provided, "
-        "a 'coordinates' folder in the YAML config's dst_dir_raw will be created "
-        "and used.",
+        help=(
+            "Directory where the outputs (overpass parquet file and, for entsoe, "
+            "enriched plant details CSV files are written. If None is provided, "
+            "a 'coordinates' folder in the YAML config's dst_dir_raw will be created "
+            "and used."
+        ),
     )
     parser.add_argument(
         "--gem-dir",
