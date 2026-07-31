@@ -1,20 +1,20 @@
-"""Interactive map visualisation for power plant coordinate data.
+"""Interactive map visualization for identified EGE locations.
 
 Usage
 -----
     from rbc.coordinates.map import build_map
 
-    # Single DataFrame — opens in browser
-    build_map(df_coords)
+    # Single DataFrame — opens in browser and saves to a directory
+    build_map(dfs=[df_coords], name_col="name", fuel_col="fuel_type", output_dir="maps/")
 
     # Multiple DataFrames with custom labels
-    build_map([df_nl, df_mk], labels=["Netherlands", "North Macedonia"])
-
-    # Save without opening browser
-    build_map(df_coords, output_path="plants.html", open_browser=False)
+    build_map(
+        dfs=[df_nl, df_mk], labels=["Netherlands", "North Macedonia"],
+        name_col="name", fuel_col="fuel_type"
+    )
 
     # Inside a Jupyter notebook (returns the map object for inline display)
-    m = build_map(df_coords, open_browser=False)
+    m = build_map(dfs=[df_coords], name_col="name", fuel_col="fuel_type", open_browser=False)
     m   # displays the map inline
 """
 
@@ -22,6 +22,7 @@ import html as _html
 import json
 import tempfile
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,37 +31,35 @@ import folium.plugins
 import pandas as pd
 from loguru import logger
 
-# ---------------------------------------------------------------------------
-# Marker colour mapping by match_source
-# ---------------------------------------------------------------------------
+from rbc.coordinates.utils import map_html as tpl
 
-#: One folium colour per ``match_source`` value produced by the ENTSOE pipeline.
-#: The values must be valid Leaflet/folium colour names.
+# Browsers that display can display the map without error
+BROWSERS = ["safari", "google-chrome", "chrome"]
+
+# ---------------------------------------------------------------------------
+# Color mappings (markers, links)
+# ---------------------------------------------------------------------------
+# Scheme to color by `match_source` value (created by running a pipeline).
 _MATCH_SOURCE_COLORS: dict[str, str] = {
-    "ppm_direct": "green",  # exact ENTSOE-ID hit in powerplantmatching
-    "ppm_parent_direct": "lightgreen",  # parent EicParent field → direct PPM hit
-    "ppm_parent_entsoe_id": "darkgreen",  # fuzzy-resolved parent EIC → PPM hit
-    "ppm_fuzzy_name": "orange",  # fuzzy plant-name match in PPM
-    "osm": "blue",  # OpenInfraMap / Overpass fallback
-    "unmatched": "lightgray",  # no coordinates (won't normally be plotted)
+    # ppdb (PPM/OSMPP) matches, most to least confident
+    "ppdb_direct": "green",  # exact EIC hit in ppdb
+    "ppdb_parent_direct": "lightgreen",  # parent EIC → direct ppdb hit
+    "ppdb_parent_entsoe_id": "darkgreen",  # fuzzy-resolved parent EIC → ppdb hit
+    "ppdb_fuzzy_matrix": "turquoise",  # fuzzy name/fuel match in ppdb
+    # GEM (Global Energy Monitor) matches, most to least confident
+    "gem_direct": "purple",  # exact EIC hit in GEM
+    "gem_parent_direct": "darkpurple",  # parent EIC → direct GEM hit
+    "gem_parent_entsoe_id": "pink",  # fuzzy-resolved parent EIC → GEM hit
+    "gem_fuzzy_matrix": "beige",  # fuzzy name/fuel match in GEM
+    # OSM (Overpass) fallback — direct or fuzzy, both collapse to "osm"
+    "osm": "blue",
+    # coordinates borrowed from a co-located sibling unit
+    "sibling_unit": "orange",
+    # no coordinates found (won't normally be plotted)
+    "unmatched": "red",
 }
 
-_MATCH_SOURCE_DEFAULT_COLOR = "lightgray"
-
-
-def _match_source_color(source: Any) -> str:
-    """Return a folium marker colour for a given ``match_source`` value."""
-    if source is None or (isinstance(source, float) and pd.isna(source)):
-        return _MATCH_SOURCE_DEFAULT_COLOR
-    return _MATCH_SOURCE_COLORS.get(
-        str(source).strip().lower(), _MATCH_SOURCE_DEFAULT_COLOR
-    )
-
-
-# ---------------------------------------------------------------------------
-# Marker colour mapping by fuel type
-# ---------------------------------------------------------------------------
-
+# Scheme to color by `<fuel type>` value (if provided by the operators).
 _FUELTYPE_COLORS: dict[str, str] = {
     "gas": "orange",
     "natural gas": "orange",
@@ -85,7 +84,7 @@ _FUELTYPE_COLORS: dict[str, str] = {
     "unknown": "lightgray",
 }
 
-# Cycle through these when colouring multiple DataFrames without fuel info
+# Scheme for cycling through coloring multiple DataFrames without fuel info
 _DATASET_COLORS = [
     "blue",
     "red",
@@ -103,527 +102,292 @@ _DATASET_COLORS = [
 _LINK_COL_PATTERNS = {"_url", "_link", "website", "contact:website"}
 
 
-def _fueltype_color(fueltype: Any) -> str:
-    """Return a folium marker colour string for a given fuel type value."""
-    if fueltype is None or (isinstance(fueltype, float) and pd.isna(fueltype)):
-        return "lightgray"
-    key = str(fueltype).strip().lower()
-    for fragment, color in _FUELTYPE_COLORS.items():
-        if fragment in key:
-            return color
-    return "lightgray"
-
-
 # ---------------------------------------------------------------------------
-# Popup HTML builder
+# Main
 # ---------------------------------------------------------------------------
-
-
-def _geometry_summary(geom: Any) -> str:
-    """Return a short human-readable description of an ``osm_geometry`` value."""
-    if geom is None or (isinstance(geom, float) and pd.isna(geom)):
-        return "—"
-    if isinstance(geom, str):
-        try:
-            geom = json.loads(geom)
-        except (json.JSONDecodeError, ValueError):
-            return str(geom)[:60]
-    if isinstance(geom, dict):
-        gtype = geom.get("type", "?")
-        coords = geom.get("coordinates", [])
-        if gtype == "Polygon" and coords:
-            return f"Polygon ({len(coords[0])} pts)"
-        if gtype == "Point" and len(coords) >= 2:
-            return f"Point ({coords[0]:.5f}, {coords[1]:.5f})"
-        return gtype
-    return "—"
-
-
-def _is_link_col(col: str) -> bool:
-    """Return True if the column name suggests it holds a URL."""
-    col_lower = col.lower()
-    return any(
-        col_lower.endswith(p) or col_lower == p.lstrip("_") for p in _LINK_COL_PATTERNS
-    )
-
-
-def _popup_html(row: pd.Series, name_col: str | None = None) -> str:
-    """Build the full HTML popup table for a single marker row.
-
-    Args:
-        row: A single row of the coordinates DataFrame.
-        name_col: Column that contains the plant name (used as popup header).
-
-    Returns:
-        str: Self-contained HTML string for use in a ``folium.Popup``.
-    """
-    plant_name = (
-        str(row[name_col]) if name_col and name_col in row.index else "Power Plant"
-    )
-
-    rows_html: list[str] = []
-    for col in row.index:
-        val = row[col]
-
-        # Skip the name col — already in the header
-        if col == name_col:
-            continue
-
-        # osm_geometry: show summary text, not raw dict
-        if col == "osm_geometry":
-            display = _geometry_summary(val)
-            rows_html.append(_table_row(col, display))
-            continue
-
-        # Skip NaN / None
-        if not isinstance(val, (dict, list)) and pd.isna(val):
-            continue
-
-        val_str = str(val)
-
-        if _is_link_col(col) and val_str.startswith("http"):
-            display = (
-                f"<a href='{val_str}' target='_blank' "
-                f"style='color:#1976d2;text-decoration:none'>&#x1F517; Open</a>"
-            )
-        else:
-            display = val_str if len(val_str) <= 140 else val_str[:137] + "…"
-
-        rows_html.append(_table_row(col, display))
-
-    header = (
-        f"<tr><th colspan='2' style='"
-        f"background:#e8f0fe;padding:7px 10px;text-align:left;"
-        f"font-size:13px;font-weight:600;border-bottom:1px solid #c5cae9'>"
-        f"{plant_name}</th></tr>"
-    )
-    return (
-        "<table style='font-family:sans-serif;font-size:12px;"
-        "border-collapse:collapse;min-width:300px;max-width:440px'>"
-        + header
-        + "".join(rows_html)
-        + "</table>"
-    )
-
-
-def _table_row(col: str, display: str) -> str:
-    return (
-        f"<tr style='border-bottom:1px solid #eeeeee'>"
-        f"<td style='color:#666;padding:3px 8px;white-space:nowrap;vertical-align:top'>{col}</td>"
-        f"<td style='padding:3px 8px;word-break:break-word'>{display}</td>"
-        f"</tr>"
-    )
-
-
-# ---------------------------------------------------------------------------
-# OSM geometry overlay
-# ---------------------------------------------------------------------------
-
-
-def _add_geometry_overlay(
-    m: folium.Map,
-    row: pd.Series,
-    color: str,
-    tooltip: str,
-) -> None:
-    """Draw an OSM polygon/polyline on the map when geometry data is present.
-
-    Args:
-        m: The folium map to add the overlay to.
-        row: The DataFrame row containing an ``osm_geometry`` column.
-        color: Stroke/fill colour for the GeoJSON shape.
-        tooltip: Tooltip text shown on hover.
-    """
-    geom = row.get("osm_geometry")
-    if geom is None or (isinstance(geom, float) and pd.isna(geom)):
-        return
-    if isinstance(geom, str):
-        try:
-            geom = json.loads(geom)
-        except (json.JSONDecodeError, ValueError):
-            return
-    if not isinstance(geom, dict) or geom.get("type") not in ("Polygon", "LineString"):
-        return
-
-    folium.GeoJson(
-        data=geom,
-        style_function=lambda _, c=color: {
-            "color": c,
-            "weight": 2,
-            "fillOpacity": 0.12,
-            "fillColor": c,
-        },
-        tooltip=tooltip,
-    ).add_to(m)
-
-
-# ---------------------------------------------------------------------------
-# Unmatched-plants sidebar
-# ---------------------------------------------------------------------------
-
-
-def _build_unmatched_sidebar_html(
+def build_map(
     dfs: list[pd.DataFrame],
-    labels: list[str],
     name_col: str | None,
     fuel_col: str | None,
-) -> str:
-    """Return a self-contained HTML/CSS/JS string for the unmatched-plants sidebar.
-
-    The sidebar is a fixed-position panel on the left edge of the map.  A toggle
-    button (always visible) shows/hides the panel.  Inside, each label (country /
-    dataset) is rendered as a ``<details>`` block whose ``<summary>`` shows the
-    count; clicking it expands a bullet list of plant names.
-
-    Args:
-        dfs: The same DataFrames passed to ``build_map``.
-        labels: Corresponding display labels.
-        name_col: Column that holds the plant name.
-        fuel_col: Column that holds the fuel type (shown in small italic text).
-
-    Returns:
-        str: HTML string to inject into the map, or ``""`` when nothing is unmatched.
-    """
-    sections: list[str] = []
-    total_unmatched = 0
-
-    for df, label in zip(dfs, labels):
-        if "lat" not in df.columns or "lon" not in df.columns:
-            unmatched = df
-        else:
-            unmatched = df[df["lat"].isna() | df["lon"].isna()].copy()
-
-        if len(unmatched) == 0:
-            continue
-
-        total_unmatched += len(unmatched)
-
-        items: list[str] = []
-        for _, row in unmatched.iterrows():
-            name = (
-                str(row[name_col]) if name_col and name_col in row.index else "\u2014"
-            )
-            name = _html.escape(name)
-            fuel_tag = ""
-            if fuel_col and fuel_col in row.index:
-                fval = row[fuel_col]
-                if fval is not None and not (isinstance(fval, float) and pd.isna(fval)):
-                    fuel_tag = f'<span class="rbc-fuel">{_html.escape(str(fval).strip())}</span>'
-            items.append(f"<li>{name}{fuel_tag}</li>")
-
-        sections.append(
-            f'<details class="rbc-country">'
-            f"<summary>{_html.escape(label)} "
-            f'<span class="rbc-count">({len(unmatched)})</span></summary>'
-            f"<ul>{''.join(items)}</ul>"
-            f"</details>"
-        )
-
-    if not sections:
-        return ""
-
-    n_countries = len(sections)
-    sections_html = "\n".join(sections)
-
-    css = """\
-<style>
-  #rbc-sidebar {
-    position: fixed;
-    top: 60px;
-    left: 10px;
-    z-index: 9999;
-    font-family: sans-serif;
-    font-size: 13px;
-    width: 260px;
-  }
-  #rbc-sidebar-toggle {
-    background: #fff;
-    border: 1px solid #aaa;
-    border-radius: 4px 4px 0 0;
-    padding: 6px 12px;
-    cursor: pointer;
-    font-size: 13px;
-    box-shadow: 0 1px 5px rgba(0,0,0,0.25);
-    display: block;
-    width: 100%;
-    text-align: left;
-    border-bottom: none;
-  }
-  #rbc-sidebar-panel {
-    background: rgba(255,255,255,0.97);
-    border: 1px solid #aaa;
-    border-top: none;
-    border-radius: 0 0 6px 6px;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.18);
-    padding: 8px 10px 10px;
-    max-height: 65vh;
-    overflow-y: auto;
-    display: none;
-  }
-  #rbc-sidebar-panel.rbc-open { display: block; }
-  .rbc-panel-title {
-    margin: 0 0 2px;
-    font-size: 12px;
-    font-weight: 700;
-    color: #c0392b;
-  }
-  .rbc-panel-subtitle {
-    color: #999;
-    font-size: 11px;
-    margin: 0 0 8px;
-  }
-  .rbc-country > summary {
-    cursor: pointer;
-    font-weight: 600;
-    padding: 5px 2px;
-    border-bottom: 1px solid #eee;
-    list-style: none;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-  }
-  .rbc-country > summary::-webkit-details-marker { display: none; }
-  .rbc-country > summary::before {
-    content: '\25B6';
-    font-size: 8px;
-    margin-right: 5px;
-    transition: transform 0.15s;
-    display: inline-block;
-    flex-shrink: 0;
-  }
-  .rbc-country[open] > summary::before { transform: rotate(90deg); }
-  .rbc-count { color: #bbb; font-weight: 400; font-size: 11px; margin-left: 4px; }
-  .rbc-country ul {
-    margin: 4px 0 6px 16px;
-    padding: 0;
-    list-style: disc;
-  }
-  .rbc-country li {
-    padding: 1px 0;
-    color: #444;
-    line-height: 1.4;
-    font-size: 11px;
-  }
-  .rbc-fuel {
-    margin-left: 4px;
-    font-size: 10px;
-    color: #aaa;
-    font-style: italic;
-  }
-</style>"""
-
-    js = """\
-<script>
-  function rbcToggleSidebar() {
-    document.getElementById('rbc-sidebar-panel').classList.toggle('rbc-open');
-  }
-</script>"""
-
-    body = (
-        f'<div id="rbc-sidebar">\n'
-        f'  <button id="rbc-sidebar-toggle" onclick="rbcToggleSidebar()">'
-        f"&#9888; Unmatched ({total_unmatched})</button>\n"
-        f'  <div id="rbc-sidebar-panel">\n'
-        f'    <p class="rbc-panel-title">Unmatched Power Plants</p>\n'
-        f'    <p class="rbc-panel-subtitle">'
-        f"{total_unmatched} plant(s) across {n_countries} country(s)</p>\n"
-        f"{sections_html}\n"
-        f"  </div>\n"
-        f"</div>"
-    )
-
-    return f"{css}\n{js}\n{body}\n"
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-def _build_legend_html(colors: dict[str, str], title: str = "Match source") -> str:
-    """Return a self-contained HTML string for a small fixed-position map legend.
-
-    Args:
-        colors: Mapping of label → folium color name (e.g. ``{"ppm_direct": "green"}``).
-        title: Legend heading text.
-
-    Returns:
-        str: HTML/CSS/JS to inject into the folium map.
-    """
-    # Folium color names map to CSS colors via a small lookup
-    css_colors: dict[str, str] = {
-        "red": "#d63031",
-        "blue": "#0984e3",
-        "green": "#27ae60",
-        "purple": "#8e44ad",
-        "orange": "#e67e22",
-        "darkred": "#922b21",
-        "lightred": "#f1948a",
-        "beige": "#f5cba7",
-        "darkblue": "#1a5276",
-        "darkgreen": "#1e8449",
-        "cadetblue": "#2e86c1",
-        "darkpurple": "#6c3483",
-        "white": "#ffffff",
-        "pink": "#f48fb1",
-        "lightblue": "#5dade2",
-        "lightgreen": "#82e0aa",
-        "gray": "#aaaaaa",
-        "black": "#222222",
-        "lightgray": "#cccccc",
-    }
-
-    rows = ""
-    for label, folium_color in colors.items():
-        css_color = css_colors.get(folium_color.lower(), folium_color)
-        rows += (
-            f"<div style='display:flex;align-items:center;margin-bottom:4px'>"
-            f"<span style='display:inline-block;width:12px;height:12px;border-radius:50%;"
-            f"background:{css_color};margin-right:7px;flex-shrink:0;border:1px solid rgba(0,0,0,0.2)'></span>"
-            f"<span style='font-size:12px;color:#333'>{label}</span>"
-            f"</div>"
-        )
-
-    return (
-        "<div id='rbc-legend' style='"
-        "position:fixed;bottom:30px;right:10px;z-index:9999;"
-        "background:rgba(255,255,255,0.95);border:1px solid #bbb;"
-        "border-radius:6px;padding:10px 14px;"
-        "box-shadow:0 2px 8px rgba(0,0,0,0.18);font-family:sans-serif'>"
-        f"<div style='font-weight:700;font-size:12px;margin-bottom:7px;"
-        f"border-bottom:1px solid #eee;padding-bottom:5px'>{title}</div>"
-        + rows
-        + "</div>"
-    )
-
-
-def build_map(
-    dfs: pd.DataFrame | list[pd.DataFrame],
     labels: list[str] | None = None,
-    name_col: str | None = None,
-    fuel_col: str | None = None,
-    output_path: Path | str | None = None,
+    output_dir: Path | str | None = None,
     open_browser: bool = True,
     cluster_markers: bool = True,
     tiles: str = "OpenStreetMap",
 ) -> folium.Map:
-    """Build an interactive Leaflet map from one or more coordinate DataFrames.
+    """Build an interactive Leaflet map from a list of coordinate DataFrames.
 
-    When the DataFrames contain a ``match_source`` column (produced by the ENTSOE
-    enrichment pipeline) pin colours reflect the matching strategy used rather
-    than the fuel type, and a legend is added to the bottom-right corner.
-    Otherwise pins are coloured by fuel type as before.
+    When the DataFrames contain a `match_source` column (produced by the ENTSOE enrichment
+    pipeline) pin colors reflect the matching strategy used rather than the fuel type, and
+    a legend is added to the bottom-right corner. Otherwise, pins are colored by fuel type.
 
-    Each matched power plant is rendered as a clickable pin.  Clicking a pin
-    opens a popup table that lists every column in
-    the DataFrame — URL-like columns (``osm_url``, ``*_url``, …) become
-    clickable hyperlinks.  When an ``osm_geometry`` polygon is present it is also
-    drawn as a transparent overlay on the map.
+    Each matched EGE is rendered as a clickable pin. Clicking a pin opens a popup table
+    that lists every column in the DataFrame — URL-like columns (`osm_url`, `*_url`, …) become
+    clickable hyperlinks. When an `osm_geometry` polygon is present it is also drawn as a
+    transparent overlay on the map.
 
     Multiple DataFrames are shown as separate toggleable layers via the built-in
     layer control (top-right corner).
 
     Args:
-        dfs: A single ``pd.DataFrame`` or a list of DataFrames as returned by
-            ``<...>Pipeline.run_pipeline()``.
-        labels: Display name for each DataFrame shown in the layer control.
-            Defaults to ``["Dataset 1", "Dataset 2", ...]``.
-        name_col: Column holding the plant name used as the popup header and
-            marker tooltip.  Auto-detected from column names when ``None``.
-        fuel_col: Column holding the fuel/energy type used to colour markers.
-            Auto-detected from column names when ``None``.
-        output_path: File path for the saved HTML map.  Defaults to a temporary
-            file in the system's temp directory.
-        open_browser: Open the resulting HTML file in the default browser
-            immediately after saving.  Defaults to ``True``.
-        cluster_markers: Group nearby markers with ``MarkerCluster`` when zoomed
-            out.  Defaults to ``True``.
-        tiles: Tile provider name accepted by ``folium.Map`` (e.g.
-            ``"OpenStreetMap"``, ``"CartoDB positron"``).
-            Defaults to ``"OpenStreetMap"``.
+        dfs: A list of DataFrames as returned by `<...>Pipeline.run_pipeline()`.
+        name_col (str | None): Column header containing EGE names. If None, first col is used.
+        fuel_col (str | None): Column header containing EGE fuel types. If None, none exists.
+        labels (list): Display name for each DataFrame shown in the layer control.
+            Defaults to `["Dataset 1", "Dataset 2", ...]`.
+        output_dir (Path | str, optional): Directory to which the created HTML map is saved.
+            Defaults to None, where it is stored in the OS temporary dir to be deleted later.
+        open_browser (bool, optional): Open the resulting HTML file in the default browser
+            immediately after saving. Defaults to `True`.
+        cluster_markers (bool, optional): Group nearby markers with `MarkerCluster` when
+            zoomed out. Defaults to `True`.
+        tiles: Tile provider for the map (e.g. "OpenStreetMap", "CartoDB positron").
+            Defaults to "OpenStreetMap".
 
     Returns:
-        folium.Map: The constructed map object.  Useful for inline display in
-        Jupyter notebooks (just return it as the last expression in a cell).
+        folium.Map: The constructed map object. Useful for inline display in
+            Jupyter notebooks (just return it as the last expression in a cell).
 
     Raises:
-        ValueError: If ``dfs`` is empty or ``labels`` length mismatches ``dfs``.
+        ValueError: If `dfs` is empty or `labels` length mismatches `dfs`.
     """
-    if isinstance(dfs, pd.DataFrame):
-        dfs = [dfs]
     if not dfs:
         raise ValueError("At least one DataFrame must be supplied.")
+
     if labels is None:
         labels = [f"Dataset {i + 1}" for i in range(len(dfs))]
     elif len(labels) != len(dfs):
         raise ValueError("`labels` must have the same length as `dfs`.")
 
-    # --- auto-detect name / fuel / match_source columns from the first non-empty DataFrame
-    match_source_col: str | None = None
-    for df in dfs:
-        if len(df) == 0:
-            continue
-        cols_lower = {c.lower(): c for c in df.columns}
-        if name_col is None:
-            for candidate in ("name", "plantname", "plant_name", "m_rid", "mrid"):
-                if candidate in cols_lower:
-                    name_col = cols_lower[candidate]
-                    break
-            if name_col is None:
-                name_col = df.columns[0]
-        if fuel_col is None:
-            for candidate in (
-                "fueltype",
-                "fuel_type",
-                "fuel",
-                "psr_type",
-                "psrtype",
-                "pp.fuel_type",
-            ):
-                if candidate in cols_lower:
-                    fuel_col = cols_lower[candidate]
-                    break
-        if match_source_col is None and "match_source" in cols_lower:
-            match_source_col = cols_lower["match_source"]
-        break
+    ege_map = _EgeMap(
+        dfs,
+        labels=labels,
+        name_col=name_col,
+        fuel_col=fuel_col,
+        cluster_markers=cluster_markers,
+        tiles=tiles,
+    )
+    m = ege_map.build()
+    ege_map.save_and_display(output_dir, open_browser)
+    return m
 
-    use_match_source_colors = match_source_col is not None
 
-    # --- gather all valid coordinates to compute map centre + bounds
-    all_lats: list[float] = []
-    all_lons: list[float] = []
-    for df in dfs:
-        matched = df.dropna(subset=["lat", "lon"])
-        all_lats.extend(matched["lat"].astype(float).tolist())
-        all_lons.extend(matched["lon"].astype(float).tolist())
+class _EgeMap:
+    """Builds one interactive folium map from one or more EGE coordinate DataFrames.
 
-    if not all_lats:
-        logger.warning(
-            "No matched coordinates found in any DataFrame — returning empty map."
+    Stores the map's per-build state (detected columns, color mode, map itself) that would
+    otherwise have to be provided to every popup/marker/legend/sidebar helper separately.
+
+    Attributes:
+        dfs: Coordinate DataFrames, one per zone/country/dataset.
+        labels: Display label for each entry in `dfs`.
+        name_col: Column used as popup header / marker tooltip.
+        fuel_col: Column used to color markers when not in match-source mode.
+        cluster_markers: Whether to group nearby markers with `MarkerCluster`.
+        tiles: Folium tile provider name.
+        match_source_col: Detected `match_source` column, or `None` if absent.
+        map: The `folium.Map` under construction (set by `build()`).
+    """
+
+    def __init__(
+        self,
+        dfs: list[pd.DataFrame],
+        labels: list[str],
+        name_col: str | None,
+        fuel_col: str | None,
+        cluster_markers: bool,
+        tiles: str,
+    ) -> None:
+        """Initialize energy-generating entity (EGE) map creator.
+
+        Args:
+            dfs (list[pd.DataFrame]): Coordinate DataFrames.
+            labels (list[str]): Display label for each entry in `dfs`.
+            name_col (str): Column header containing the EGE name for each DataFrame
+                used as the popup header & marker tooltip. If None, the first column is used.
+            fuel_col (str | None): Column header of the fuel/energy type for each DataFrame
+                used to color the markers. If None, it is assumed none exists.
+            cluster_markers (bool): Whether to group nearby markers with `MarkerCluster`.
+            tiles (str): Tile provider for creating the folium map (e.g. "OpenStreetMap").
+        """
+        self.dfs = dfs
+        self.labels = labels
+        self.name_col = name_col if name_col else self.dfs[0].columns[0]
+        self.fuel_col = fuel_col
+        self.cluster_markers = cluster_markers
+        self.tiles = tiles
+        self.map = folium.Map(tiles=self.tiles, zoom_start=4)  # empty map
+
+        self.match_source_col: str | None = None
+        for df in self.dfs:
+            cols_lower = {c.lower(): c for c in df.columns}
+            if "match_source" in df.columns:
+                self.match_source_col = cols_lower["match_source"]
+            break
+
+        # Bool for whether markers should be colored by match_source rather than fuel type.
+        self.use_match_source_colors = self.match_source_col is not None
+
+    # ---------------------------------------------------
+    # ENTRY-POINTS
+    # ---------------------------------------------------
+    def build(self) -> folium.Map:
+        """Construct the map, including markers, layer control, legend, sidebar.
+
+        Returns:
+            folium.Map: The constructed map object.
+        """
+        all_lats: list[float] = []
+        all_lons: list[float] = []
+        for df in self.dfs:
+            matched = df.dropna(subset=["lat", "lon"])
+            all_lats.extend(matched["lat"].astype(float).tolist())
+            all_lons.extend(matched["lon"].astype(float).tolist())
+
+        if not all_lats:
+            logger.warning(
+                "No EGE coordinates found in any DataFrame. Returning empty map."
+            )
+            return self.map
+
+        centre = [sum(all_lats) / len(all_lats), sum(all_lons) / len(all_lons)]
+        self.map = folium.Map(location=centre, zoom_start=6, tiles=self.tiles)
+
+        if self.use_match_source_colors:
+            self._add_markers_by_match_source()
+        else:
+            self._add_markers_by_fuel()
+
+        folium.LayerControl(collapsed=False).add_to(self.map)
+        self._add_legend()
+        self._add_sidebar()
+
+        self.map.fit_bounds(
+            [[min(all_lats), min(all_lons)], [max(all_lats), max(all_lons)]],
+            padding=(30, 30),
         )
-        return folium.Map(tiles=tiles, zoom_start=4)
+        return self.map
 
-    centre = [sum(all_lats) / len(all_lats), sum(all_lons) / len(all_lons)]
-    m = folium.Map(location=centre, zoom_start=6, tiles=tiles)
+    def save_and_display(
+        self, output_dir: Path | str | None, open_browser: bool
+    ) -> None:
+        """Optionally save the built map to disk and optionally open it in a browser.
 
-    # --- markers: one global layer per match_source (ENTSOE) or one per dataset (legacy)
-    n_colors = len(_DATASET_COLORS)
+        Args:
+            output_dir (Path | str | None): Directory to save the map to. If None,
+                stores only to temporary OS directory to be automatically deleted later.
+            open_browser (bool): Whether to open the browser or not.
+        """
+        if output_dir:
+            output_path = Path(output_dir, "map_coordinates.html")
+        else:
+            output_path = Path(tempfile.gettempdir(), "maps", "map_coordinates.html")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if use_match_source_colors:
-        # ENTSOE mode: first aggregate ALL datasets into per-match_source buckets,
-        # then create ONE FeatureGroup per match_source.  A single checkbox in the
-        # layer control therefore toggles that algorithm's pins across every zone.
+        self.map.save(str(output_path))
+        logger.info(f"Map saved → {output_path}")
+
+        if open_browser:
+            open_map_in_browser(output_path)
+
+    # ---------------------------------------------------
+    # HTML GEOMETRIES
+    # ---------------------------------------------------
+    def _popup_html(self, row: pd.Series) -> str:
+        """Build the full HTML popup table for a single marker row.
+
+        Args:
+            row (pd.Series): Single marker row.
+
+        Returns:
+            str: HTML popup table.
+        """
+        ege_name = (
+            str(row[self.name_col])
+            if self.name_col and self.name_col in row.index
+            else "Power Plant"
+        )
+
+        rows_html: list[str] = []
+        for col in row.index:
+            val = row[col]
+
+            if col == self.name_col:
+                continue
+
+            if col == "osm_geometry":
+                rows_html.append(tpl.popup_row_html(col, _geometry_summary(val)))
+                continue
+
+            if not isinstance(val, (dict, list)) and pd.isna(val):
+                continue
+
+            val_str = str(val)
+            if _is_link_col(col) and val_str.startswith("http"):
+                display = (
+                    f"<a href='{val_str}' target='_blank' "
+                    f"style='color:#1976d2;text-decoration:none'>&#x1F517; Open</a>"
+                )
+            else:
+                display = val_str if len(val_str) <= 140 else val_str[:137] + "…"
+
+            rows_html.append(tpl.popup_row_html(col, display))
+
+        return tpl.popup_table_html(ege_name, "".join(rows_html))
+
+    def _add_geometry_overlay(self, row: pd.Series, color: str, tooltip: str) -> None:
+        """Draw an OSM polygon/polyline on the map when geometry data is present.
+
+        Args:
+            row (pd.Series): Single marker row.
+            color (str): Name of color for polygon/polyline.
+            tooltip (str): Text for tooltip (pop-up box).
+        """
+        geom = row.get("osm_geometry")
+        if geom is None or (isinstance(geom, float) and pd.isna(geom)):
+            return
+        if isinstance(geom, str):
+            try:
+                geom = json.loads(geom)
+            except (json.JSONDecodeError, ValueError):
+                return
+        if not isinstance(geom, dict) or geom.get("type") not in (
+            "Polygon",
+            "LineString",
+        ):
+            return
+
+        folium.GeoJson(
+            data=geom,
+            style_function=lambda _, c=color: {
+                "color": c,
+                "weight": 2,
+                "fillOpacity": 0.12,
+                "fillColor": c,
+            },
+            tooltip=tooltip,
+        ).add_to(self.map)
+
+    # ---------------------------------------------------
+    # HTML MARKERS
+    # ---------------------------------------------------
+    def _add_markers_by_match_source(self) -> None:
+        """Main mode: one global layer per match_source, aggregated across all dfs.
+
+        A single checkbox in the layer control therefore toggles that algorithm's
+        pins across every zone, rather than per-country.
+        """
         source_to_rows: dict[str, list[pd.Series]] = {}
 
-        for df, label in zip(dfs, labels):
+        for df in self.dfs:
             matched = df.dropna(subset=["lat", "lon"])
             if len(matched) == 0:
                 continue
+
             matched = matched.copy()
-            if match_source_col and match_source_col in matched.columns:
+            if self.match_source_col and self.match_source_col in matched.columns:
                 matched["_ms_key"] = (
-                    matched[match_source_col].fillna("unmatched").astype(str)
+                    matched[self.match_source_col].fillna("unmatched").astype(str)
                 )
             else:
                 matched["_ms_key"] = "unknown"
@@ -637,148 +401,255 @@ def build_map(
 
         total_added = 0
         for source_key in ordered + extras:
-            rows_for_source = source_to_rows[source_key]
             color = _match_source_color(source_key)
 
-            fg = folium.FeatureGroup(name=source_key, show=True)
-            mt: folium.FeatureGroup | folium.plugins.MarkerCluster
-            if cluster_markers:
-                mt = folium.plugins.MarkerCluster()
-            else:
-                mt = fg
+            def color_fn(_row: pd.Series) -> str:
+                """Function for getting the color for each row element."""
+                return color
 
-            for row in rows_for_source:
-                lat = float(row["lat"])
-                lon = float(row["lon"])
-                tooltip_text = (
-                    str(row[name_col]) if name_col and name_col in row.index else ""
-                )
-                folium.Marker(
-                    location=[lat, lon],
-                    popup=folium.Popup(_popup_html(row, name_col), max_width=460),
-                    tooltip=tooltip_text,
-                    icon=folium.Icon(color=color, icon="bolt", prefix="fa"),
-                ).add_to(mt)
-                _add_geometry_overlay(m, row, color, tooltip_text)
-
-            if cluster_markers:
-                mt.add_to(fg)
-            fg.add_to(m)
-            total_added += len(rows_for_source)
-            logger.info(
-                f"Match-source layer '{source_key}': {len(rows_for_source)} marker(s)."
+            added = self._add_marker_layer(
+                source_key, source_to_rows[source_key], color_fn
             )
+            total_added += added
+            logger.info(f"Match-source layer '{source_key}': {added} marker(s).")
 
         logger.info(
-            f"Total: {total_added} markers across {len(source_to_rows)} "
-            f"match-source layer(s)."
+            f"Total: {total_added} markers across {len(source_to_rows)} match-source layer(s)."
         )
 
-    else:
-        # Legacy mode: one FeatureGroup per dataset, coloured by fuel type
-        for idx, (df, label) in enumerate(zip(dfs, labels)):
+    def _add_markers_by_fuel(self) -> None:
+        """Fallback mode: one FeatureGroup per dataset, colored by fuel type."""
+        n_colors = len(_DATASET_COLORS)
+        for idx, (df, label) in enumerate(zip(self.dfs, self.labels)):
             matched = df.dropna(subset=["lat", "lon"])
             if len(matched) == 0:
-                logger.info(f"'{label}': no matched rows — layer skipped.")
+                logger.info(f"'{label}': No matched rows — layer skipped.")
                 continue
 
             fallback_color = _DATASET_COLORS[idx % n_colors]
-            feature_group = folium.FeatureGroup(name=label, show=True)
-            marker_target: folium.FeatureGroup | folium.plugins.MarkerCluster
-            if cluster_markers:
-                cluster = folium.plugins.MarkerCluster()
-                marker_target = cluster
-            else:
-                marker_target = feature_group
 
-            for _, row in matched.iterrows():
-                lat = float(row["lat"])
-                lon = float(row["lon"])
-                fueltype = row.get(fuel_col) if fuel_col else None
-                color = (
-                    _fueltype_color(fueltype)
-                    if fueltype is not None
-                    and not (isinstance(fueltype, float) and pd.isna(fueltype))
-                    else fallback_color
+            def color_fn(_row: pd.Series) -> str:
+                """Function for getting the color for each row element."""
+                fueltype = _row.get(self.fuel_col) if self.fuel_col else None
+                has_fuel = fueltype is not None and not (
+                    isinstance(fueltype, float) and pd.isna(fueltype)
                 )
-                tooltip_text = (
-                    str(row[name_col]) if name_col and name_col in row.index else ""
-                )
-                folium.Marker(
-                    location=[lat, lon],
-                    popup=folium.Popup(_popup_html(row, name_col), max_width=460),
-                    tooltip=tooltip_text,
-                    icon=folium.Icon(color=color, icon="bolt", prefix="fa"),
-                ).add_to(marker_target)
-                _add_geometry_overlay(m, row, color, tooltip_text)
+                return _fueltype_color(fueltype) if has_fuel else fallback_color
 
-            if cluster_markers:
-                cluster.add_to(feature_group)
-            feature_group.add_to(m)
+            rows = [row for _, row in matched.iterrows()]
+            self._add_marker_layer(label, rows, color_fn)
             logger.info(
                 f"'{label}': added {len(matched)} marker(s) "
                 f"({len(df) - len(matched)} unmatched rows omitted)."
             )
 
-    folium.LayerControl(collapsed=False).add_to(m)
+    def _add_marker_layer(
+        self,
+        group_name: str,
+        rows: list[pd.Series],
+        color_fn: Callable[[pd.Series], str],
+    ) -> int:
+        """Add one `FeatureGroup` (optionally clustered) of markers to the map.
 
-    # --- inject match-source legend when applicable
-    if use_match_source_colors:
-        # Collect only the source values actually present in the data
+        Shared by both coloring modes: `color_fn` is a constant lookup in
+        match-source mode, and a per-row fuel-type lookup in legacy mode.
+
+        Args:
+            group_name: Name shown for this layer in the folium `LayerControl`.
+            rows: DataFrame rows (each must have valid `lat`/`lon`) to render.
+            color_fn: Called per row to pick its marker/overlay color.
+
+        Returns:
+            int: Number of markers added.
+        """
+        fg = folium.FeatureGroup(name=group_name, show=True)
+        cluster = folium.plugins.MarkerCluster() if self.cluster_markers else None
+        target: folium.FeatureGroup | folium.plugins.MarkerCluster = cluster or fg
+
+        for row in rows:
+            color = color_fn(row)
+            lat, lon = float(row["lat"]), float(row["lon"])
+            tooltip_text = (
+                str(row[self.name_col])
+                if self.name_col and self.name_col in row.index
+                else ""
+            )
+
+            folium.Marker(
+                location=[lat, lon],
+                popup=folium.Popup(self._popup_html(row), max_width=460),
+                tooltip=tooltip_text,
+                icon=folium.Icon(color=color, icon="bolt", prefix="fa"),
+            ).add_to(target)
+            self._add_geometry_overlay(row, color, tooltip_text)
+
+        if cluster is not None:
+            cluster.add_to(fg)
+
+        fg.add_to(self.map)
+        return len(rows)
+
+    # ---------------------------------------------------
+    # HTML LEGEND / SIDEBAR
+    # ---------------------------------------------------
+    def _add_legend(self) -> None:
+        """Inject the match-source legend, when that coloring mode is active."""
+        if not self.use_match_source_colors:
+            return
+
         present_sources: dict[str, str] = {}
-        for df in dfs:
-            if match_source_col and match_source_col in df.columns:
-                for val in df[match_source_col].dropna().unique():
+        for df in self.dfs:
+            if self.match_source_col and self.match_source_col in df.columns:
+                for val in df[self.match_source_col].dropna().unique():
                     key = str(val).strip().lower()
-                    if key not in present_sources:
-                        present_sources[key] = _MATCH_SOURCE_COLORS.get(
-                            key, _MATCH_SOURCE_DEFAULT_COLOR
-                        )
+                    present_sources.setdefault(key, _match_source_color(key))
+
         if present_sources:
-            legend_html = _build_legend_html(present_sources)
-            m.get_root().html.add_child(folium.Element(legend_html))
+            self.map.get_root().html.add_child(
+                folium.Element(tpl.legend_html(present_sources))
+            )
 
-    # --- inject unmatched-plants sidebar (auto-extracted from NaN lat/lon rows)
-    sidebar_html = _build_unmatched_sidebar_html(dfs, labels, name_col, fuel_col)
-    if sidebar_html:
-        m.get_root().html.add_child(folium.Element(sidebar_html))
+    def _add_sidebar(self) -> None:
+        """Insert a sidebar for all unmatched plants (extracted from NaN lat/lon rows)."""
+        sections: list[str] = []
+        total_unmatched = 0
 
-    m.fit_bounds(
-        [[min(all_lats), min(all_lons)], [max(all_lats), max(all_lons)]],
-        padding=(30, 30),
-    )
+        for df, label in zip(self.dfs, self.labels):
+            if "lat" not in df.columns or "lon" not in df.columns:
+                unmatched = df
+            else:
+                unmatched = df[df["lat"].isna() | df["lon"].isna()]
 
-    # --- save
-    if output_path is None:
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".html", delete=False, prefix="rbc_plants_"
-        )
-        output_path = Path(tmp.name)
-        tmp.close()
+            if len(unmatched) == 0:
+                continue
+
+            total_unmatched += len(unmatched)
+            items: list[str] = []
+            for _, row in unmatched.iterrows():
+                name = _html.escape(
+                    str(row[self.name_col])
+                    if self.name_col and self.name_col in row.index
+                    else "—"
+                )
+                fuel = None
+                if self.fuel_col and self.fuel_col in row.index:
+                    fval = row[self.fuel_col]
+                    if fval is not None and not (
+                        isinstance(fval, float) and pd.isna(fval)
+                    ):
+                        fuel = _html.escape(str(fval).strip())
+
+                items.append(tpl.sidebar_item_html(name, fuel))
+
+            sections.append(
+                tpl.sidebar_section_html(
+                    _html.escape(label), len(unmatched), "".join(items)
+                )
+            )
+
+        if not sections:
+            return
+
+        html = tpl.sidebar_html(total_unmatched, len(sections), "\n".join(sections))
+        self.map.get_root().html.add_child(folium.Element(html))
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+def _match_source_color(source: Any) -> str:
+    """Find a color for a folium marker depending on a given `match_source` value.
+
+    Args:
+        source (Any): match_source value.
+
+    Returns:
+        str: Color defined by `match_source` value. Defaults to "lightgray".
+    """
+    if source is None or (isinstance(source, float) and pd.isna(source)):
+        return "lightgray"
+    return _MATCH_SOURCE_COLORS.get(str(source).strip().lower(), "lightgray")
+
+
+def _fueltype_color(fueltype: Any) -> str:
+    """Find a color for a folium marker depending on a given fuel type value.
+
+    Args:
+        fueltype (Any): Fuel type value.
+
+    Returns:
+        str: Color defined by fuel type value. Defaults to "lightgray".
+    """
+    if fueltype is None or (isinstance(fueltype, float) and pd.isna(fueltype)):
+        return "lightgray"
+
+    key = str(fueltype).strip().lower()
+    for fragment, color in _FUELTYPE_COLORS.items():
+        if fragment in key:
+            return color
+    return "lightgray"
+
+
+def _geometry_summary(geom: Any) -> str:
+    """Provide a short, human-readable description of an ``osm_geometry`` value.
+
+    Args:
+        geom (Any): GeoJSON geometry value to be described.
+
+    Returns:
+        str: Description of the ``osm_geometry`` value.
+    """
+    if geom is None or (isinstance(geom, float) and pd.isna(geom)):
+        return "—"
+
+    if isinstance(geom, str):
+        try:
+            geom = json.loads(geom)
+        except (json.JSONDecodeError, ValueError):
+            return str(geom)[:60]
+
+    if isinstance(geom, dict):
+        gtype = geom.get("type", "?")
+        coords = geom.get("coordinates", [])
+        if gtype == "Polygon" and coords:
+            return f"Polygon ({len(coords[0])} pts)"
+        if gtype == "Point" and len(coords) >= 2:
+            return f"Point ({coords[0]:.5f}, {coords[1]:.5f})"
+        return gtype
+
+    return "—"
+
+
+def _is_link_col(col: str) -> bool:
+    """Check if the column name contains a link (URL).
+
+    Args:
+        col (str): The column name to check.
+
+    Returns:
+        bool: True if the column name suggests it holds a URL.
+    """
+    col_l = col.lower()
+    return any(col_l.endswith(p) or col_l == p.lstrip("_") for p in _LINK_COL_PATTERNS)
+
+
+def open_map_in_browser(file_path: Path | str) -> None:
+    """Open a map in browser.
+
+    Args:
+        file_path (Path | str): Path to the map file.
+    """
+    uri = Path(file_path).as_uri()
+
+    controller = None
+    for name in BROWSERS:
+        try:
+            controller = webbrowser.get(name)
+            break
+        except webbrowser.Error:
+            continue
+
+    if controller:
+        controller.open(uri)
     else:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    m.save(str(output_path))
-    logger.info(f"Map saved → {output_path}")
-
-    if open_browser:
-        webbrowser.open(output_path.as_uri())
-
-    return m
-
-
-# ---------------------------------------------------------------------------
-# CLI / quick-test entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from pathlib import Path
-
-    from rbc.coordinates.pipelines import make_pipeline
-
-    input_dir = Path("data/testdata/entsoe/1h/10YNL----------L")
-    cl = make_pipeline(input_dir=input_dir, output_dir=Path("data/testdata/entsoe"))
-    df = cl.run_pipeline()
-    if df is not None and len(df) > 0:
-        build_map(df, labels=["Netherlands (ENTSO-E)"])
+        webbrowser.open(uri)  # fallback

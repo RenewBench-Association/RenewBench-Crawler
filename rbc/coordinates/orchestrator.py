@@ -45,8 +45,8 @@ def perform_coordinate_finding(
     if source not in OPERATOR_METADATA:
         raise ValueError(f"Unknown energy source: '{source}'")
 
-    csv_parent_dirs: list[Path] = _collect_dirs(input_dirs)
-    csv_parent_dirs = [d for d in csv_parent_dirs if source in d.parts]
+    csv_dirs: list[Path] = _collect_dirs(input_dirs)
+    csv_dirs = [d for d in csv_dirs if source in d.parts]
 
     # Build the expensive (network/CSV/parquet-backed) helper-data locators ONCE and share!
     shared = build_shared_locators(
@@ -54,13 +54,15 @@ def perform_coordinate_finding(
     )
 
     dataframes: list[pd.DataFrame] = []
-    countries: list[str] = []
-    sysop_name_cols: list[str] = []
+    labels: list[str] = []
 
-    for csv_parent_dir in csv_parent_dirs:
+    name_col: str | None = None
+    fuel_col: str | None = None
+
+    for csv_dir in csv_dirs:
         try:
             cl = make_pipeline(
-                input_dir=csv_parent_dir,
+                input_dir=csv_dir,
                 output_dir=output_dir,
                 gem_loc=shared.gem_loc,
                 ppdb_loc=shared.ppdb_loc,
@@ -73,26 +75,25 @@ def perform_coordinate_finding(
             # Use explicit check to avoid pandas NA boolean ambiguity
             if df is not None and len(df) > 0:
                 dataframes.append(df)
-                countries.append(cl.country)
-                sysop_name_cols.append(cl.sysop_name_col)
-                logger.info(
-                    f"{csv_parent_dir}: {df['lat'].notna().sum()}/{len(df)} matched."
-                )
+
+                # define label by csv_path parts ("<source>_<tres>" or "<source>_<tres>_<bz>")
+                label = "_".join(csv_dir.parts[csv_dir.parts.index(source) :])
+                labels.append(label)
+
+                name_col = cl.sysop_name_col if name_col is None else name_col
+                fuel_col = cl.sysop_fuel_col if fuel_col is None else fuel_col
 
         except Exception as e:
-            logger.warning(f"{csv_parent_dir}: skipped — {e}")
+            logger.warning(f"{csv_dir}: skipped — {e}")
 
     if dataframes:
-        # build_map works best with a name column; for ENTSOE the name col is prefixed
-        map_dfs = []
-        for idx, df_map in enumerate(dataframes):
-            sysop_name_col = sysop_name_cols[idx]
-            if sysop_name_col in df_map.columns and "Name" not in df_map.columns:
-                df_map = df_map.copy()
-                df_map["Name"] = df_map[sysop_name_col]
-            map_dfs.append(df_map)
-
-        build_map(map_dfs, labels=countries)
+        build_map(
+            dataframes,
+            labels=labels,
+            name_col=name_col,
+            fuel_col=fuel_col,
+            output_dir=output_dir,
+        )
     else:
         logger.warning("No results found for the given input paths.")
 

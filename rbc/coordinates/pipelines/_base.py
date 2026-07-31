@@ -347,17 +347,15 @@ class BasePipeline:
 
         total_matched = df["lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] Enrichment complete: {total_matched}/{len(df)} units "
-            f"with coordinates. Sources: {df['match_source'].value_counts().to_dict()}"
+            f"[{self.input_dir.name}] Location finding complete: {total_matched}/{len(df)} "
+            f"EGEs with coordinates.\nSources: {df['match_source'].value_counts().to_dict()}"
         )
 
         if self.output_dir:
-            out_path = Path(
-                self.output_dir, f"enriched_units_{self.input_dir.name}.csv"
-            )
+            out_path = Path(self.output_dir, f"coordinates_{self.input_dir.name}.csv")
             df.to_csv(out_path, index=False)
             logger.info(
-                f"[{self.input_dir.name}] Enriched units written to '{out_path}'."
+                f"[{self.input_dir.name}] Dataframe with coordinates saved to '{out_path}'."
             )
 
         return df
