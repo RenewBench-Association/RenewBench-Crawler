@@ -133,7 +133,7 @@ def build_shared_locators(
         SharedLocators: The locators to reuse across every directory processed
             in this run.
     """
-    gem_loc = GEMLocator(gem_dir=gem_dir, cache_dir=output_dir) if gem_dir else None
+    gem_loc = GEMLocator(gem_dir=gem_dir) if gem_dir else None
 
     pipeline_name = OPERATOR_METADATA[source].get("pipeline", "default")
 
