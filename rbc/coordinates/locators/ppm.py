@@ -8,8 +8,6 @@ import ast
 import pandas as pd
 from loguru import logger
 
-# import powerplantmatching as ppm
-
 PPM_CSV_URL = "https://raw.githubusercontent.com/PyPSA/powerplantmatching/refs/heads/master/powerplants.csv"
 
 
@@ -123,16 +121,16 @@ class PPMLocator:
     def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
         """Find an EGE by its ENTSOE EIC code and return the full row as a dict.
 
-        Searches the pre-computed ``entsoe_id_list`` column (one EIC code per row after
-        exploding the ``projectID`` dict-string) for an exact match via a pre-built
-        EIC -> row-position index (see :meth:`_build_entsoe_id_index`).
+        Searches the pre-computed `entsoe_id_list` column (one EIC code per row after
+        exploding the `projectID` dict-string) for an exact match via a pre-built
+        EIC -> row-position index (see `_build_entsoe_id_index`).
 
         Args:
             entsoe_id (str | None): ENTSOE EIC code to search for (e.g. "11XNUON--------Q").
 
         Returns:
-            dict with keys from :attr:`PPM_COLS`, or ``None`` if the code is not
-            found or the matched row has no coordinates.
+            dict: matched row values with keys from `PPM_COLS`, or `None` if not found or the
+                row has no coordinates.
         """
         if not entsoe_id or pd.isna(entsoe_id):
             return None

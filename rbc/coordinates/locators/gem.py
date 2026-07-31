@@ -20,10 +20,6 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-# Regex used to pull ENTSO-E EIC codes out of GEM's "Other IDs (...)" multi-value
-# strings, e.g. "ENTSO-E: 43W-RTEC-2-GG1-B, Beyond Fossil Fuels: LV-3-1"
-_ENTSOE_ID_PATTERN = re.compile(r"ENTSO-E:\s*([^\s,]+)")
-
 # Per-tracker file glob pattern, main data sheet name, and default fuel type (used
 # when the tracker itself doesn't carry a per-row "Fuel" column).
 _TRACKER_SPECS: dict[str, dict[str, str | None]] = {
@@ -133,14 +129,24 @@ _COLUMN_ALIASES: dict[str, dict[str, list[str]]] = {
     },
 }
 
-_CACHE_FILENAME = "gem_combined.parquet"
+# Pattern to extract ENTSO-E EIC codes out of GEM's "Other IDs (...)" multi-value strings
+_ENTSOE_ID_PATTERN = re.compile(r"ENTSO-E:\s*([^\s,]+)")
 
 
 def _first_present(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
-    """Return the first candidate column that exists in *df*, else an all-NaN series."""
+    """Return the first candidate column that exists in `df`, else an all-NaN series.
+
+    Args:
+        df (pd.DataFrame): DataFrame to be parsed for candidate columns.
+        candidates (list[str]): List of candidate columns.
+
+    Returns:
+        pd.Series: Series of the first candidate column in `df`, if one exists.
+    """
     for col in candidates:
         if col in df.columns:
             return df[col]
+
     return pd.Series([None] * len(df), index=df.index)
 
 
@@ -148,8 +154,15 @@ def _first_present_str(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
     """Like :func:`_first_present`, but coerces the result to nullable string dtype.
 
     Several GEM trackers mix numeric and string values in the same logical column
-    (e.g. unit names like ``1``, ``2`` alongside ``"Unit 1"``), which breaks parquet
+    (e.g. unit names like `1`, `2` alongside `"Unit 1"`), which breaks parquet
     serialization unless normalized to a single dtype up front.
+
+    Args:
+        df (pd.DataFrame): DataFrame to be parsed for candidate columns.
+        candidates (list[str]): List of candidate columns.
+
+    Returns:
+        pd.Series: Series of the first candidate column in `df` as strings, if one exists.
     """
     series = _first_present(df, candidates)
     return series.astype("string")
@@ -192,20 +205,62 @@ class GEMLocator:
         Args:
             gem_dir (Path): Directory containing the downloaded GEM tracker xlsx files.
             cache_dir (Path, optional): Directory for the combined parquet cache.
-                Defaults to ``gem_dir`` when not given.
+                Defaults to None, in which case `gem_dir` is used to store the parquet.
         """
         self.gem_dir = Path(gem_dir)
         self.cache_dir = Path(cache_dir) if cache_dir else self.gem_dir
         self.df_gem: pd.DataFrame = pd.DataFrame()
-        self._entsoe_id_index: dict[str, int] = {}
+
         self._load()
+        self._entsoe_id_index: dict[str, int] = {}
         self._build_entsoe_id_index()
 
     # ------------------------------------------------------------------
     # Internal helpers for initialization
     # ------------------------------------------------------------------
-    def _resolve_tracker_files(self) -> dict[str, Path]:
-        """Resolve one xlsx file per tracker key, picking the newest match on ties."""
+    def _load(self) -> None:
+        """Load the combined GEM dataset, using the parquet cache when still fresh."""
+        gem_xlsx_files = self._resolve_gem_xlsx_files()
+        if not gem_xlsx_files:
+            logger.warning(
+                f"GEMLocator: No GEM tracker xlsx files found in '{self.gem_dir}'. "
+                "GEM matching will be unavailable."
+            )
+            return
+
+        cache_path = Path(self.cache_dir, "gem_combined.parquet")
+        newest_source_mtime = max(p.stat().st_mtime for p in gem_xlsx_files.values())
+
+        if cache_path.exists() and cache_path.stat().st_mtime >= newest_source_mtime:
+            logger.info(f"GEMLocator: Loading combined data from cache '{cache_path}'")
+            self.df_gem = pd.read_parquet(cache_path)
+        else:
+            logger.info(
+                f"GEMLocator: Parsing {len(gem_xlsx_files)} GEM tracker xlsx file(s) "
+                f"from '{self.gem_dir}'..."
+            )
+            self.df_gem = self._load_and_normalize(gem_xlsx_files)
+
+            if not self.df_gem.empty:
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                self.df_gem.to_parquet(cache_path, index=False)
+                logger.info(f"GEMLocator: Combined data stored to '{cache_path}'")
+            else:
+                logger.warning(
+                    "GEMLocator: Nothing extracted from tracker xlsx file(s)!"
+                )
+
+        logger.info(
+            f"GEMLocator initialized: {len(self.df_gem)} entries "
+            f"across {len(gem_xlsx_files)} GEM xlsx tracker file(s)"
+        )
+
+    def _resolve_gem_xlsx_files(self) -> dict[str, Path]:
+        """Resolve one xlsx file per tracker key, picking the newest match on ties.
+
+        Returns:
+            dict[str, Path]: Mapping from each GEM tracker xlsx key to its absolute path.
+        """
         resolved: dict[str, Path] = {}
         for tracker, spec in _TRACKER_SPECS.items():
             matches = sorted(
@@ -217,39 +272,16 @@ class GEMLocator:
                 resolved[tracker] = matches[0]
         return resolved
 
-    def _load(self) -> None:
-        """Load the combined GEM dataset, using the parquet cache when still fresh."""
-        tracker_files = self._resolve_tracker_files()
-        if not tracker_files:
-            logger.warning(
-                f"GEMLocator: no GEM tracker xlsx files found in '{self.gem_dir}'. "
-                "GEM matching will be unavailable."
-            )
-            return
+    @staticmethod
+    def _load_and_normalize(tracker_files: dict[str, Path]) -> pd.DataFrame:
+        """Read & normalize every resolved tracker file into one combined DataFrame.
 
-        cache_path = self.cache_dir / _CACHE_FILENAME
-        newest_source_mtime = max(p.stat().st_mtime for p in tracker_files.values())
+        Args:
+            tracker_files (dict[str, Path]): Mapping from GEM key to its absolute xlsx path.
 
-        if cache_path.exists() and cache_path.stat().st_mtime >= newest_source_mtime:
-            logger.info(f"GEMLocator: loading combined data from cache '{cache_path}'")
-            self.df_gem = pd.read_parquet(cache_path)
-        else:
-            logger.info(
-                f"GEMLocator: parsing {len(tracker_files)} tracker file(s) "
-                f"from '{self.gem_dir}'..."
-            )
-            self.df_gem = self._load_and_normalize(tracker_files)
-            if not self.df_gem.empty and self.cache_dir:
-                self.cache_dir.mkdir(parents=True, exist_ok=True)
-                self.df_gem.to_parquet(cache_path, index=False)
-                logger.info(f"GEMLocator: cached combined data to '{cache_path}'")
-
-        logger.info(
-            f"GEMLocator initialized: {len(self.df_gem)} entries across {len(tracker_files)} tracker(s)"
-        )
-
-    def _load_and_normalize(self, tracker_files: dict[str, Path]) -> pd.DataFrame:
-        """Read & normalize every resolved tracker file into one combined DataFrame."""
+        Returns:
+            pd.DataFrame: DataFrame of loaded, normalized and combined GEM tracker xlsx files.
+        """
         normalized_dfs: list[pd.DataFrame] = []
 
         for tracker, path in tracker_files.items():
@@ -324,7 +356,7 @@ class GEMLocator:
     def _build_entsoe_id_index(self) -> None:
         """Pre-compute an ENTSO-E EIC code -> row-position index, once.
 
-        ``match_by_entsoe_id`` used to run a full-dataframe ``.apply()`` (with a
+        `match_by_entsoe_id` used to run a full-dataframe `.apply()` (with a
         regex extraction per row) on *every* call, i.e. an O(n) scan repeated for
         every unit being matched. Building this index once at load time turns
         each lookup into an O(1) dict access instead.
@@ -346,7 +378,7 @@ class GEMLocator:
     # Public API
     # ------------------------------------------------------------------
     def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
-        """Find an EGE by its  ENTSO-E EIC code and return the row as a dict.
+        """Find an EGE by its ENTSO-E EIC code and return the row as a dict.
 
         Extracts ENTSO-E codes from GEM's "Other IDs (unit)" / "Other IDs (location)"
         columns via a pre-computed index (built once in :meth:`_build_entsoe_id_index`)
@@ -356,8 +388,8 @@ class GEMLocator:
             entsoe_id (str | None): ENTSO-E EIC code to search for.
 
         Returns:
-            dict with keys from :attr:`GEM_COLS`, or ``None`` if not found or the
-            matched row has no coordinates.
+            dict: matched row values with keys from `GEM_COLS`, or `None` if not found or the
+                row has no coordinates.
         """
         if len(self.df_gem) == 0 or not entsoe_id or pd.isna(entsoe_id):
             return None

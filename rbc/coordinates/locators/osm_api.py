@@ -27,131 +27,134 @@ OUT_COLUMNS = [
 ]
 
 
-def _compute_centroid(el: dict) -> tuple[float | None, float | None]:
-    """Compute centroid from available OSM geometry/center/point fields."""
-    geometry = el.get("geometry", None)
-    if isinstance(geometry, list) and geometry:
-        lat_vals: list[float] = [
-            float(p["lat"])
-            for p in geometry
-            if isinstance(p, dict) and isinstance(p.get("lat"), (int, float))
-        ]
-        lon_vals: list[float] = [
-            float(p["lon"])
-            for p in geometry
-            if isinstance(p, dict) and isinstance(p.get("lon"), (int, float))
-        ]
-        if lat_vals and lon_vals:
-            return float(sum(lat_vals) / len(lat_vals)), float(
-                sum(lon_vals) / len(lon_vals)
+def query_osm_country_plants(
+    country_code: str,
+    cache_dir: Path | str | None = None,
+    force_update: bool = False,
+    live: bool = False,
+) -> pd.DataFrame:
+    """Queries Overpass API for power plants in a specific country.
+
+    By default, the result is cached as ``overpass_<CC>_plants.parquet`` inside
+    ``cache_dir`` and loaded from there on subsequent calls.
+
+    Args:
+        country_code (str): ISO 3166-1 alpha-2 country code.
+        cache_dir (Path | str | None, optional): Directory for the local OSM power
+            plant files.  When provided a `.parquet` file is written on the first
+            successful fetch and read back on all subsequent calls.
+        force_update (bool): Ignore any existing local file and re-fetch from
+            Overpass, then overwrite it.  Corresponds to `--update`.
+        live (bool): Query Overpass directly without reading or writing any local
+            file.  Corresponds to `--live`.
+
+    Returns:
+        pd.DataFrame: DataFrame of power plants in given country.
+    """
+    # overpass query to search for nodes, ways, relations that
+    overpass_query = f"""
+    [out:json][timeout:180];
+    area["ISO3166-1"="{country_code}"]->.searchArea;
+    (
+      // Active Infrastructure
+      nwr["power"="plant"](area.searchArea);
+
+      // Historic / Decommissioned Plants
+      nwr["abandoned:power"="plant"](area.searchArea);
+      nwr["demolished:power"="plant"](area.searchArea);
+      nwr["was:power"="plant"](area.searchArea);
+      nwr["disused:power"="plant"](area.searchArea);
+    );
+    out body geom center;
+    """
+
+    country_code = country_code.upper()
+    cache_path: Path | None = None
+    parquet_path: Path | None = None
+
+    if not live and cache_dir is not None:
+        parquet_path = Path(cache_dir, f"overpass_{country_code}_plants.parquet")
+        cache_path = Path(cache_dir, f"overpass_{country_code}_plants.json")
+
+        if not force_update:
+            # Fast: local parquet (processed DataFrame, loads in milliseconds)
+            if parquet_path.is_file():
+                df_parquet = _load_parquet(parquet_path)
+                if df_parquet is not None and len(df_parquet) > 0:
+                    return df_parquet
+
+            # Fallback: raw JSON cache (re-parse on load)
+            if cache_path.is_file():
+                cached = _load_cached_overpass(cache_path)
+                if isinstance(cached, dict):
+                    df_cached = _elements_to_df(cached)
+                    if len(df_cached) > 0:
+                        logger.info(
+                            f"Loaded {len(df_cached)} OSM rows from JSON cache for "
+                            f"country '{country_code}'."
+                        )
+                        return df_cached
+
+    for endpoint in OVERPASS_URLS:
+        try:
+            response = requests.post(
+                endpoint,
+                data={"data": overpass_query},
+                headers=HEADER,
+                timeout=120,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            df = _elements_to_df(data)
+
+            if len(df) > 0 and not live:
+                if parquet_path is not None:
+                    _save_parquet(parquet_path, df)
+                if cache_path is not None:
+                    _save_cached_overpass(cache_path, data)
+
+            logger.info(
+                f"Overpass endpoint '{endpoint}' returned {len(df)} rows "
+                f"for '{country_code}'."
+            )
+            return df
+
+        except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
+            logger.warning(
+                f"Overpass endpoint '{endpoint}' failed for '{country_code}': {e}"
             )
 
-    center = el.get("center", None)
-    if isinstance(center, dict):
-        lat = center.get("lat", None)
-        lon = center.get("lon", None)
-        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            return float(lat), float(lon)
+    if not live and cache_path is not None and cache_path.exists():
+        cached = _load_cached_overpass(cache_path)
+        if isinstance(cached, dict):
+            df_cached = _elements_to_df(cached)
+            if len(df_cached) > 0:
+                logger.warning(
+                    f"All Overpass endpoints failed for '{country_code}'. "
+                    "Using stale cached OSM data."
+                )
+                return df_cached
 
-    lat = el.get("lat", None)
-    lon = el.get("lon", None)
-    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-        return float(lat), float(lon)
-
-    return None, None
-
-
-def _geometry_to_geojson(el: dict) -> dict | None:
-    """Convert OSM element geometry to a GeoJSON-like dictionary when possible."""
-    geometry = el.get("geometry", None)
-    osm_type = str(el.get("type", "")).lower()
-
-    if not isinstance(geometry, list) or not geometry:
-        lat = el.get("lat", None)
-        lon = el.get("lon", None)
-        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            return {"type": "Point", "coordinates": [float(lon), float(lat)]}
-        center = el.get("center", None)
-        if isinstance(center, dict):
-            c_lat = center.get("lat", None)
-            c_lon = center.get("lon", None)
-            if isinstance(c_lat, (int, float)) and isinstance(c_lon, (int, float)):
-                return {"type": "Point", "coordinates": [float(c_lon), float(c_lat)]}
-        return None
-
-    coords = []
-    for p in geometry:
-        if not isinstance(p, dict):
-            continue
-        lat = p.get("lat", None)
-        lon = p.get("lon", None)
-        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            coords.append([float(lon), float(lat)])
-
-    if not coords:
-        return None
-
-    if osm_type in {"way", "relation"} and len(coords) >= 3:
-        if coords[0] != coords[-1]:
-            coords.append(coords[0])
-        return {"type": "Polygon", "coordinates": [coords]}
-
-    return {"type": "LineString", "coordinates": coords}
+    logger.error(
+        f"All Overpass endpoints failed for country '{country_code}', "
+        "and no usable cache was found."
+    )
+    return pd.DataFrame(columns=OUT_COLUMNS)  # empty df
 
 
-def _empty_osm_df() -> pd.DataFrame:
-    return pd.DataFrame(columns=OUT_COLUMNS)
-
-
-def _cache_file(cache_dir: Path, country_code: str) -> Path:
-    return cache_dir / f"overpass_{country_code.upper()}_plants.json"
-
-
-def _parquet_file(cache_dir: Path, country_code: str) -> Path:
-    return cache_dir / f"overpass_{country_code.upper()}_plants.parquet"
-
-
-def _load_parquet(parquet_path: Path) -> pd.DataFrame | None:
-    try:
-        df = pd.read_parquet(parquet_path)
-        logger.info(
-            f"Loaded {len(df)} OSM rows from local parquet for "
-            f"'{parquet_path.stem.split('_')[1]}'."
-        )
-        return df
-    except Exception as e:
-        logger.warning(f"Could not read parquet '{parquet_path}': {e}")
-        return None
-
-
-def _save_parquet(parquet_path: Path, df: pd.DataFrame) -> None:
-    try:
-        parquet_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(parquet_path, index=False)
-        logger.info(f"OSM plant data saved → {parquet_path} ({len(df)} rows)")
-    except Exception as e:
-        logger.warning(f"Could not write parquet '{parquet_path}': {e}")
-
-
-def _load_cached_overpass(cache_path: Path) -> dict | None:
-    try:
-        with cache_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Could not read Overpass cache '{cache_path}': {e}")
-        return None
-
-
-def _save_cached_overpass(cache_path: Path, data: dict) -> None:
-    try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with cache_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f)
-    except OSError as e:
-        logger.warning(f"Could not write Overpass cache '{cache_path}': {e}")
-
-
+# ---------------------------------------------------------------------------
+# OSM data extraction helpers
+# ---------------------------------------------------------------------------
 def _elements_to_df(data: dict) -> pd.DataFrame:
+    """Extract relevant elements from OSM data and transform into DataFrame.
+
+    Args:
+        data (dict): OSM data received from API call.
+
+    Returns:
+        df (pd.DataFrame): DataFrame containing structured OSM data.
+    """
     results = []
     for el in data.get("elements", []):
         tags = el.get("tags", {})
@@ -166,9 +169,8 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
         osm_geometry = _geometry_to_geojson(el)
         fueltype = tags.get("plant:source", tags.get("generator:source", "Unknown"))
 
-        # Collect all known name variants (local, English, alternate) so matching
-        # can try each of them — especially important for Balkan countries where
-        # ENTSO-E may use a different language variant than the primary OSM name.
+        # Collect all known name variants (local, English, alternate) so matching can try all
+        # -> especially important for countries with different language variants.
         name_variants = list(
             {
                 v
@@ -206,117 +208,163 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
 
     df = pd.DataFrame(results)
     if len(df) == 0:
-        return _empty_osm_df()
+        return pd.DataFrame(columns=OUT_COLUMNS)  # empty df
+
     return df
 
 
-def query_osm_country_plants(
-    country_code: str = "FR",
-    cache_dir: Path | str | None = None,
-    force_update: bool = False,
-    live: bool = False,
-) -> pd.DataFrame:
-    """Queries Overpass API for power plants in a specific country.
-
-    By default the result is cached as ``overpass_<CC>_plants.parquet`` inside
-    ``cache_dir`` and loaded from there on subsequent calls.
+def _compute_centroid(el: dict) -> tuple[float | None, float | None]:
+    """Compute centroid from available OSM geometry/center/point fields.
 
     Args:
-        country_code (str, optional): ISO 3166-1 alpha-2 country code.
-        cache_dir (Path | str | None, optional): Directory for the local OSM power
-            plant files.  When provided a ``.parquet`` file is written on the first
-            successful fetch and read back on all subsequent calls.
-        force_update (bool): Ignore any existing local file and re-fetch from
-            Overpass, then overwrite it.  Corresponds to ``--update``.
-        live (bool): Query Overpass directly without reading or writing any local
-            file.  Corresponds to ``--live``.
+        el (dict): OSM data element.
 
     Returns:
-        pd.DataFrame: DataFrame of power plants in given country.
+        lat, lon (tuple[float | None, float | None]): Latitude and longitude of centroid.
     """
-    # overpass query to search for nodes, ways, relations that
-    overpass_query = f"""
-    [out:json][timeout:180];
-    area["ISO3166-1"="{country_code}"]->.searchArea;
-    (
-      // Active Infrastructure
-      nwr["power"="plant"](area.searchArea);
+    geometry = el.get("geometry", None)
+    if isinstance(geometry, list) and geometry:
+        lat_vals: list[float] = [
+            float(p["lat"])
+            for p in geometry
+            if isinstance(p, dict) and isinstance(p.get("lat"), (int, float))
+        ]
+        lon_vals: list[float] = [
+            float(p["lon"])
+            for p in geometry
+            if isinstance(p, dict) and isinstance(p.get("lon"), (int, float))
+        ]
+        if lat_vals and lon_vals:
+            return float(sum(lat_vals) / len(lat_vals)), float(
+                sum(lon_vals) / len(lon_vals)
+            )
 
-      // Historic / Decommissioned Plants
-      nwr["abandoned:power"="plant"](area.searchArea);
-      nwr["demolished:power"="plant"](area.searchArea);
-      nwr["was:power"="plant"](area.searchArea);
-      nwr["disused:power"="plant"](area.searchArea);
-    );
-    out body geom center;
+    center = el.get("center", None)
+    if isinstance(center, dict):
+        lat = center.get("lat", None)
+        lon = center.get("lon", None)
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            return float(lat), float(lon)
+
+    lat = el.get("lat", None)
+    lon = el.get("lon", None)
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        return float(lat), float(lon)
+
+    return None, None
+
+
+def _geometry_to_geojson(el: dict) -> dict | None:
+    """Convert OSM element geometry to a GeoJSON-like dictionary when possible.
+
+    Args:
+        el (dict): OSM data element.
+
+    Returns:
+        dict | None: Extracted GeoJSON-like dictionary, if extractable.
     """
+    geometry = el.get("geometry", None)
+    osm_type = str(el.get("type", "")).lower()
 
-    cache_path = None
-    parquet_path = None
-    if not live and cache_dir is not None:
-        resolved_dir = Path(cache_dir)
-        parquet_path = _parquet_file(resolved_dir, country_code)
-        cache_path = _cache_file(resolved_dir, country_code)
+    if not isinstance(geometry, list) or not geometry:
+        lat = el.get("lat", None)
+        lon = el.get("lon", None)
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            return {"type": "Point", "coordinates": [float(lon), float(lat)]}
+        center = el.get("center", None)
+        if isinstance(center, dict):
+            c_lat = center.get("lat", None)
+            c_lon = center.get("lon", None)
+            if isinstance(c_lat, (int, float)) and isinstance(c_lon, (int, float)):
+                return {"type": "Point", "coordinates": [float(c_lon), float(c_lat)]}
+        return None
 
-        if not force_update:
-            # Fast path: local parquet (processed DataFrame, loads in milliseconds)
-            if parquet_path.exists():
-                df_parquet = _load_parquet(parquet_path)
-                if df_parquet is not None and len(df_parquet) > 0:
-                    return df_parquet
+    coords = []
+    for p in geometry:
+        if not isinstance(p, dict):
+            continue
+        lat = p.get("lat", None)
+        lon = p.get("lon", None)
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            coords.append([float(lon), float(lat)])
 
-            # Fallback: raw JSON cache (re-parse on load)
-            if cache_path.exists():
-                cached = _load_cached_overpass(cache_path)
-                if isinstance(cached, dict):
-                    df_cached = _elements_to_df(cached)
-                    if len(df_cached) > 0:
-                        logger.info(
-                            f"Loaded {len(df_cached)} OSM rows from JSON cache for "
-                            f"country '{country_code}'."
-                        )
-                        return df_cached
+    if not coords:
+        return None
 
-    for endpoint in OVERPASS_URLS:
-        try:
-            response = requests.post(
-                endpoint,
-                data={"data": overpass_query},
-                headers=HEADER,
-                timeout=120,
-            )
-            response.raise_for_status()
-            data = response.json()
-            df = _elements_to_df(data)
-            if len(df) > 0 and not live:
-                if parquet_path is not None:
-                    _save_parquet(parquet_path, df)
-                if cache_path is not None:
-                    _save_cached_overpass(cache_path, data)
-            logger.info(
-                f"Overpass endpoint '{endpoint}' returned {len(df)} rows "
-                f"for '{country_code}'."
-            )
-            return df
+    if osm_type in {"way", "relation"} and len(coords) >= 3:
+        if coords[0] != coords[-1]:
+            coords.append(coords[0])
+        return {"type": "Polygon", "coordinates": [coords]}
 
-        except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
-            logger.warning(
-                f"Overpass endpoint '{endpoint}' failed for '{country_code}': {e}"
-            )
+    return {"type": "LineString", "coordinates": coords}
 
-    if not live and cache_path is not None and cache_path.exists():
-        cached = _load_cached_overpass(cache_path)
-        if isinstance(cached, dict):
-            df_cached = _elements_to_df(cached)
-            if len(df_cached) > 0:
-                logger.warning(
-                    f"All Overpass endpoints failed for '{country_code}'. "
-                    "Using stale cached OSM data."
-                )
-                return df_cached
 
-    logger.error(
-        f"All Overpass endpoints failed for country '{country_code}', "
-        "and no usable cache was found."
-    )
-    return _empty_osm_df()
+# ---------------------------------------------------------------------------
+# I/O (read/write) helpers
+# ---------------------------------------------------------------------------
+def _load_parquet(parquet_path: Path) -> pd.DataFrame | None:
+    """Load parquet data from a file.
+
+    Args:
+        parquet_path (Path): Parquet file path.
+
+    Returns:
+        pd.DataFrame | None: Parquet data loaded as a DataFrame, if extractable.
+    """
+    try:
+        df = pd.read_parquet(parquet_path)
+        logger.info(
+            f"Loaded {len(df)} OSM rows from local parquet for "
+            f"'{parquet_path.stem.split('_')[1]}'."
+        )
+        return df
+    except Exception as e:
+        logger.warning(f"Could not read parquet '{parquet_path}': {e}")
+        return None
+
+
+def _save_parquet(parquet_path: Path, df: pd.DataFrame) -> None:
+    """Save DataFrame data to a parquet file.
+
+    Args:
+        parquet_path (Path): Parquet file path to save DataFrame to.
+        df (pd.DataFrame): DataFrame data to save.
+    """
+    try:
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(parquet_path, index=False)
+        logger.info(f"OSM plant data saved → {parquet_path} ({len(df)} rows)")
+    except Exception as e:
+        logger.warning(f"Could not write parquet '{parquet_path}': {e}")
+
+
+def _load_cached_overpass(cache_path: Path) -> dict | None:
+    """Load cached Overpass data from a file.
+
+    Args:
+        cache_path (Path): Overpass cache JSON path.
+
+    Returns:
+        dict | None: Loaded cached Overpass data loaded as a dict, if extractable.
+    """
+    try:
+        with cache_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not read Overpass cache '{cache_path}': {e}")
+        return None
+
+
+def _save_cached_overpass(cache_path: Path, data: dict) -> None:
+    """Save cached Overpass data to a JSON file.
+
+    Args:
+        cache_path (Path): Overpass cache JSON path to save data to.
+        data (dict): Overpass data to be stored.
+    """
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError as e:
+        logger.warning(f"Could not write Overpass cache '{cache_path}': {e}")
