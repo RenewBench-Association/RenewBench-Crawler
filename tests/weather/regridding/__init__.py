@@ -1,0 +1,1 @@
+"""HEALPix regridding tests."""

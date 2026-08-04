@@ -34,6 +34,8 @@ class GridRegridder(ABC):
             chosen per source, close to that source's own native resolution, not
             shared across sources.
         variables (list[str]): Canonical variable names to regrid.
+        years (list[int]): Years to process.
+        months (list[str]): Zero-padded months to process (e.g. "01").
         dry_run (bool): If True, resolve inputs/weights but skip the actual regrid
             and skip yielding data.
         resume (bool): If True, load an existing checkpoint on init.
@@ -49,6 +51,8 @@ class GridRegridder(ABC):
         min_level: int,
         max_level: int,
         variables: list[str],
+        years: list[int],
+        months: list[str] | None = None,
         dry_run: bool = False,
         resume: bool = True,
     ) -> None:
@@ -64,6 +68,9 @@ class GridRegridder(ABC):
             max_level (int): Finest HEALPix pyramid level to compute directly
                 from native data.
             variables (list[str]): Canonical variable names to regrid.
+            years (list[int]): Years to process.
+            months (list[str] | None, optional): Zero-padded months to
+                process. Defaults to all 12 months.
             dry_run (bool, optional): If True, resolve inputs/weights but skip
                 the actual regrid. Defaults to False.
             resume (bool, optional): If True, load an existing checkpoint on
@@ -91,6 +98,8 @@ class GridRegridder(ABC):
         self.min_level = min_level
         self.max_level = max_level
         self.variables = variables
+        self.years = sorted(years)
+        self.months = months or [f"{i:02d}" for i in range(1, 13)]
         self.dry_run = dry_run
         self.resume = resume
 
@@ -142,13 +151,18 @@ class GridRegridder(ABC):
         self.checkpoint[task] = 1
         self._save_checkpoint()
 
-    @abstractmethod
     def _get_tasks(self) -> list[tuple]:
-        """Return ordered list of task tuples to execute.
+        """Return (year, month) tasks for every configured year/month.
+
+        Every currently-planned source (ERA5, BARRA2, ICON-DREAM) uses this
+        same task granularity, since weights depend only on horizontal
+        geometry, not on which month is being processed. Override only if a
+        source genuinely needs a different task shape.
 
         Returns:
-            list[tuple]: List of task tuples (e.g. (year, month)).
+            list[tuple]: Ordered list of (year, month) tuples.
         """
+        return [(year, month) for year in self.years for month in self.months]
 
     @abstractmethod
     def _load_source_chunk(self, task: tuple) -> xr.Dataset:

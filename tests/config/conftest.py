@@ -58,6 +58,27 @@ def source_configs(tmp_path: Path) -> dict:
         "icon_dream_global": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
         },
+        "regrid_healpix": {
+            "paths": {
+                "era5_raw_dir": str(Path(tmp_path, "era5")),
+                "barra2_r2_raw_dir": str(Path(tmp_path, "barra2_r2")),
+                "barra2_c2_raw_dir": str(Path(tmp_path, "barra2_c2")),
+                "barra2_c2_20min_raw_dir": str(Path(tmp_path, "barra2_c2_20min")),
+                "icon_dream_global_raw_dir": str(Path(tmp_path, "icon_dream_global")),
+                "icon_dream_eu_raw_dir": str(Path(tmp_path, "icon_dream_eu")),
+                "weights_cache_dir": str(Path(tmp_path, "weights_cache")),
+                "dst_zarr_store": str(Path(tmp_path, "combined.zarr")),
+            },
+            "healpix_min_level": 4,
+            "healpix_max_level": {
+                "era5": 7,
+                "barra2_r2": 8,
+                "barra2_c2": 10,
+                "barra2_c2_20min": 10,
+                "icon_dream_global": 9,
+                "icon_dream_eu": 10,
+            },
+        },
     }
 
 

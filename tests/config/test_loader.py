@@ -9,6 +9,20 @@ import rbc.config.loader as loader
 from rbc.config.schema import SCHEMA_REGISTRY
 
 
+def _override_value(value):
+    """Produce a schema-valid override, distinct from the original value.
+
+    Args:
+        value: Original config value.
+
+    Returns:
+        A different value of a type the same field would still accept.
+    """
+    if isinstance(value, int):
+        return value + 1
+    return "override"
+
+
 # ----------------------------------
 # Tests
 # ----------------------------------
@@ -48,9 +62,9 @@ class TestLoadConfig:
         cfg_dict = source_configs[source]
         overrides = {
             k: (
-                {sub_k: "override" for sub_k in v}
+                {sub_k: _override_value(sub_v) for sub_k, sub_v in v.items()}
                 if isinstance(v, dict)
-                else "override"
+                else _override_value(v)
             )
             for k, v in cfg_dict.items()
         }
