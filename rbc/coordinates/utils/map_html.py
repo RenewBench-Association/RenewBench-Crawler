@@ -4,29 +4,6 @@ Keeping these as plain string templates here keeps map.py focused on data logic
 (which rows go where, which color to use) rather than markup.
 """
 
-# Folium's named marker colors have no hex table -> this is used to render in the HTML legend
-FOLIUM_TO_HEX: dict[str, str] = {
-    "red": "#d63031",
-    "blue": "#0984e3",
-    "green": "#27ae60",
-    "purple": "#8e44ad",
-    "orange": "#e67e22",
-    "darkred": "#922b21",
-    "lightred": "#f1948a",
-    "beige": "#f5cba7",
-    "darkblue": "#1a5276",
-    "darkgreen": "#1e8449",
-    "cadetblue": "#2e86c1",
-    "darkpurple": "#6c3483",
-    "white": "#ffffff",
-    "pink": "#f48fb1",
-    "lightblue": "#5dade2",
-    "lightgreen": "#82e0aa",
-    "gray": "#aaaaaa",
-    "black": "#222222",
-    "lightgray": "#cccccc",
-}
-
 # ---------------------------------------------------------------------------
 # Marker popup table
 # ---------------------------------------------------------------------------
@@ -39,7 +16,7 @@ _POPUP_HEADER = (
 
 _POPUP_ROW = (
     "<tr style='border-bottom:1px solid #eeeeee'>"
-    "<td style='color:#666;padding:3px 8px;white-space:nowrap;vertical-align:top'>{col}</td>"
+    "<td style='color:#666;padding:3px 8px;word-break:break-word;vertical-align:top'>{col}</td>"
     "<td style='padding:3px 8px;word-break:break-word'>{display}</td>"
     "</tr>"
 )
@@ -73,42 +50,110 @@ def popup_table_html(plant_name: str, rows_html: str) -> str:
 # ---------------------------------------------------------------------------
 # Legend
 # ---------------------------------------------------------------------------
+# Folium's named marker colors have no hex table -> this is used to render in the HTML legend
+FOLIUM_TO_HEX: dict[str, str] = {
+    "red": "#d63031",
+    "blue": "#0984e3",
+    "green": "#27ae60",
+    "purple": "#8e44ad",
+    "orange": "#e67e22",
+    "darkred": "#922b21",
+    "lightred": "#f1948a",
+    "beige": "#f5cba7",
+    "darkblue": "#1a5276",
+    "darkgreen": "#1e8449",
+    "cadetblue": "#2e86c1",
+    "darkpurple": "#6c3483",
+    "white": "#ffffff",
+    "pink": "#f48fb1",
+    "lightblue": "#5dade2",
+    "lightgreen": "#82e0aa",
+    "gray": "#aaaaaa",
+    "black": "#222222",
+    "lightgray": "#cccccc",
+}
+
 _LEGEND_ROW = (
     "<div style='display:flex;align-items:center;margin-bottom:4px'>"
-    "<span style='display:inline-block;width:12px;height:12px;border-radius:50%;"
-    "background:{css_color};margin-right:7px;flex-shrink:0;border:1px solid rgba(0,0,0,0.2)'></span>"
+    "{swatch}"
     "<span style='font-size:12px;color:#333'>{label}</span>"
     "</div>"
 )
 
+_LEGEND_SWATCH_COLOR = (
+    "<span style='display:inline-block;width:12px;height:12px;border-radius:50%;"
+    "background:{color};margin-right:7px;flex-shrink:0;"
+    "border:1px solid rgba(0,0,0,0.2)'></span>"
+)
+_LEGEND_SWATCH_ICON = (
+    "<span style='display:inline-block;width:16px;text-align:center;"
+    "margin-right:7px;flex-shrink:0;color:#555'>"
+    "<i class='fa fa-{icon}'></i></span>"
+)
+
 _LEGEND_PANEL = (
-    "<div id='rbc-legend' style='"
-    "position:fixed;bottom:30px;right:10px;z-index:9999;"
-    "background:rgba(255,255,255,0.95);border:1px solid #bbb;"
-    "border-radius:6px;padding:10px 14px;"
-    "box-shadow:0 2px 8px rgba(0,0,0,0.18);font-family:sans-serif'>"
+    "<div style='background:rgba(255,255,255,0.95);border:1px solid #bbb;"
+    "border-radius:6px;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.18);"
+    "font-family:sans-serif'>"
     "<div style='font-weight:700;font-size:12px;margin-bottom:7px;"
     "border-bottom:1px solid #eee;padding-bottom:5px'>{title}</div>{rows}</div>"
 )
 
 
-def legend_html(colors: dict[str, str], title: str = "Marker color legend") -> str:
-    """Render the fixed-position map legend from a label -> folium-color mapping.
+def color_legend_panel(colors: dict[str, str]) -> str:
+    """Render the legend panel for colors.
 
     Args:
-        colors: Mapping of label -> folium color name (e.g. ``{"ppm_direct": "green"}``).
-        title: Legend heading text.
+        colors (dict): Dictionary of used colors and their meanings.
 
     Returns:
-        str: HTML/CSS to inject into the folium map.
+        HTML string for the color legend panel.
     """
     rows_html = "".join(
         _LEGEND_ROW.format(
-            css_color=FOLIUM_TO_HEX.get(color.lower(), color), label=label
+            swatch=_LEGEND_SWATCH_COLOR.format(color=FOLIUM_TO_HEX.get(c.lower(), c)),
+            label=label,
         )
-        for label, color in colors.items()
+        for label, c in colors.items()
     )
-    return _LEGEND_PANEL.format(title=title, rows=rows_html)
+    return _LEGEND_PANEL.format(title="Color legend (match algorithms)", rows=rows_html)
+
+
+def icon_legend_panel(icons: dict[str, str]) -> str:
+    """Render the legend panel for icons.
+
+    Args:
+        icons (dict): Dictionary of used icons and their meanings.
+
+    Returns:
+        HTML string for the color legend panel.
+    """
+    rows_html = "".join(
+        _LEGEND_ROW.format(swatch=_LEGEND_SWATCH_ICON.format(icon=icon), label=label)
+        for label, icon in icons.items()
+    )
+    return _LEGEND_PANEL.format(title="Icon legend (fuel types)", rows=rows_html)
+
+
+_LEGEND_CONTAINER = (
+    "<div id='rbc-legend' style='"
+    "position:fixed;bottom:30px;right:10px;z-index:9999;"
+    "display:flex;flex-direction:column;gap:10px;align-items:flex-end'>"
+    "{panels}</div>"
+)
+
+
+def legend_html(panels: list[str]) -> str:
+    """Wrap one or more legend panels in a single fixed, stacked container.
+
+    Args:
+        panels (list): Pre-rendered HTML panels (e.g. from `_color_legend_panel` /
+            `_icon_legend_panel`), in the order they should stack, top to bottom.
+
+    Returns:
+        str: Combined HTML/CSS to inject into the folium map.
+    """
+    return _LEGEND_CONTAINER.format(panels="".join(panels))
 
 
 # ---------------------------------------------------------------------------
