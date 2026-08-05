@@ -1,3 +1,5 @@
+"""ENTSOE location/coordinate finding pipeline."""
+
 import re
 from pathlib import Path
 
@@ -7,6 +9,7 @@ from loguru import logger
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry, _alpha_prefix
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
+from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import normalize_name
 
@@ -15,8 +18,6 @@ class EntsoePipeline(BasePipeline):
     """Entsoe location/coordinate finding pipeline."""
 
     STEPS: list[str] = [
-        "_step_load_and_dedupe",
-        "_step_map_fuel_type",
         "_step_entsoe_eic_lookup",
         "_step_entsoe_match_by_id",
         "_step_entsoe_resolve_parent_unit",
@@ -24,7 +25,6 @@ class EntsoePipeline(BasePipeline):
         "_step_fuzzy_match",
         "_step_validate_fueltype",
         "_step_sibling_fallback_eic",
-        "_step_finalize",
     ]
 
     def __init__(
@@ -60,7 +60,7 @@ class EntsoePipeline(BasePipeline):
         super().__init__(
             input_dir=input_dir,
             output_dir=output_dir,
-            gemloc=gem_loc,
+            gem_loc=gem_loc,
             ppdb_loc=ppm_loc,
             osm_update=osm_update,
             osm_live=osm_live,
@@ -134,18 +134,18 @@ class EntsoePipeline(BasePipeline):
             hit, source = None, None
 
             # 1. GEM: try the unit (generation) EIC directly
-            if self.gemloc and pd.notna(eic) and str(eic).strip():
-                hit = self.gemloc.match_by_entsoe_id(str(eic).strip())
+            if self.gem_loc and pd.notna(eic) and str(eic).strip():
+                hit = self.gem_loc.match_by_entsoe_id(str(eic).strip())
                 source = "gem_direct"
 
             # 2. GEM: try the parent (production) EIC from wcode.EicParent
             if (
                 hit is None
-                and self.gemloc
+                and self.gem_loc
                 and pd.notna(parent_eic)
                 and str(parent_eic).strip()
             ):
-                hit = self.gemloc.match_by_entsoe_id(str(parent_eic).strip())
+                hit = self.gem_loc.match_by_entsoe_id(str(parent_eic).strip())
                 source = "gem_parent_direct"
 
             # 3. ppdb (PPM) fallback: unit EIC directly
@@ -252,7 +252,9 @@ class EntsoePipeline(BasePipeline):
             parent_eic_str = str(parent_eic).strip()
 
             hit = (
-                self.gemloc.match_by_entsoe_id(parent_eic_str) if self.gemloc else None
+                self.gem_loc.match_by_entsoe_id(parent_eic_str)
+                if self.gem_loc
+                else None
             )
             if hit is not None:
                 for col in gem_cols:
@@ -359,4 +361,61 @@ class EntsoePipeline(BasePipeline):
             eic_parent.combine_first(distinct_parent_eic)
             .combine_first(long_name_key)
             .combine_first(display_prefix)
+        )
+
+    # ------------------------------------------------------------------
+    # HELPERS (overwrite BasePipeline methods for EntsoePipeline use)
+    # ------------------------------------------------------------------
+    def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatrixMatcher) -> None:
+        """Add alternative EGE names based on EICRegistry to matcher.
+
+        Args:
+            df (pd.DataFrame): Df
+            matcher (NameMatrixMatcher): NameMatrixMatcher instance.
+        """
+        for _, row in df[self._still_unmatched(df)].iterrows():
+            raw_name = str(row.get(self.sysop_name_col, "") or "")
+            if not raw_name:
+                continue
+
+            alt_names: list[str] = []
+            for name_src in (
+                "wcode.EicLongName",
+                "wcode.EicDisplayName",
+                "wcode.parent.EicLongName",
+            ):
+                n = row.get(name_src)
+                if pd.notna(n) and str(n).strip() and str(n).strip() != raw_name:
+                    alt_names.append(str(n).strip())
+
+            if alt_names:
+                matcher.add_alternative_names(raw_name, alt_names)
+
+    def _name_candidates(self, row: pd.Series) -> list[str | None]:
+        """Define EGE candidate names to try against matcher. Overwritable by child pipeline.
+
+        Args:
+            row (pd.Series): The row to try against.
+
+        Returns:
+            list[str]: List of EGE candidate names to try against the matcher.
+        """
+        return [
+            row.get("wcode.EicLongName"),  # entsoe alternative
+            row.get("wcode.parent.EicLongName"),  # entsoe alternative
+            row.get(self.sysop_name_col),
+        ]
+
+    @staticmethod
+    def _clean_str_series(series: pd.Series) -> pd.Series:
+        """Clean up a series of strings.
+
+        Args:
+            series (pd.Series): Series of strings.
+
+        Returns:
+            pd.Series: Cleaned series.
+        """
+        return series.map(
+            lambda v: str(v).strip() if pd.notna(v) and str(v).strip() else None
         )

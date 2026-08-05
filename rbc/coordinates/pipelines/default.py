@@ -1,3 +1,5 @@
+"""Default location/coordinate finding pipeline."""
+
 from pathlib import Path
 
 import pandas as pd
@@ -13,12 +15,9 @@ class DefaultPipeline(BasePipeline):
     """Default location/coordinate finding pipeline."""
 
     STEPS: list[str] = [
-        "_step_load_and_dedupe",
-        "_step_map_fuel_type",
         "_step_fuzzy_match",
         "_step_validate_fueltype",
         "_step_sibling_fallback_name",
-        "_step_finalize",
     ]
 
     def __init__(
@@ -50,7 +49,7 @@ class DefaultPipeline(BasePipeline):
         super().__init__(
             input_dir=input_dir,
             output_dir=output_dir,
-            gemloc=gem_loc,
+            gem_loc=gem_loc,
             ppdb_loc=osmpp_loc,
             osm_update=osm_update,
             osm_live=osm_live,

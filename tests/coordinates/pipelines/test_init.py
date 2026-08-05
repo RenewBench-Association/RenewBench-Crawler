@@ -3,11 +3,9 @@
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import create_autospec
 
 import pytest
 
-from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.pipelines import build_shared_locators, make_pipeline
@@ -18,45 +16,6 @@ from rbc.coordinates.pipelines.entsoe import EntsoePipeline
 # ----------------------------------
 # Fixtures
 # ----------------------------------
-@pytest.fixture(autouse=True)
-def mock_expensive_locators(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace ppdb locators / EICCodeRegistry with autospecced mocks wherever constructed.
-
-    Locators (PPM, OSMPP, EICCodeRegistry) do real network I/O when they're instantiated.
-    As the here tested functions use them, leaving them real makes these unit tests slow
-    and network-dependent.
-
-    `create_autospec` (rather than a bare `MagicMock()`) is required here: the code under
-    test calls these as constructors (e.g. `OSMPPLocator()`), and callers like
-    `test_default_pipeline`/`test_entsoe_pipeline` below assert `isinstance(result, ...)`
-    on what that call returns -- a bare `MagicMock()` returns a generic `MagicMock` on
-    call, which fails `isinstance`; `create_autospec` makes the call return an
-    autospecced instance that passes it.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest-provided monkeypatch fixture.
-    """
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.OSMPPLocator", create_autospec(OSMPPLocator)
-    )
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.PPMLocator", create_autospec(PPMLocator)
-    )
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.EICCodeRegistry", create_autospec(EICCodeRegistry)
-    )
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.default.OSMPPLocator", create_autospec(OSMPPLocator)
-    )
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.entsoe.PPMLocator", create_autospec(PPMLocator)
-    )
-    monkeypatch.setattr(
-        "rbc.coordinates.pipelines.entsoe.EICCodeRegistry",
-        create_autospec(EICCodeRegistry),
-    )
-
-
 @pytest.fixture
 def eia_dir(tmp_path: Path) -> Path:
     """A real "eia" operator directory (default pipeline).

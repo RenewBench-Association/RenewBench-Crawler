@@ -87,9 +87,8 @@ def eia_pipeline(eia_input_dir: Path, tmp_path: Path) -> DefaultPipeline:
             ),
         ),
     )
-    # Pre-populate df_osm (non-empty) so _ensure_osm_loaded's `len(self.df_osm) == 0` check
-    # is False and real Overpass network call is skipped entirely.
-    pipeline.df_osm = pd.DataFrame(
+    # skip the live Overpass call by pre-populating osm_df (before _step_fuzzy_match)
+    pipeline.osm_df = pd.DataFrame(
         [
             {
                 "Name": "Unrelated OSM Plant",

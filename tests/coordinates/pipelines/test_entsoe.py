@@ -56,7 +56,7 @@ def entsoe_input_dir(tmp_path: Path) -> Path:
 def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
     """Returns a real EntsoePipeline for "10YNL----------L", backed by fake locators.
 
-    eic_reg/ppdb_loc/gemloc are all faked to avoid the real network/CSV fetches
+    eic_reg/ppdb_loc/gem_loc are all faked to avoid the real network/CSV fetches
     their real constructors would otherwise perform, and to keep every
     exact-ID lookup a clean miss so the pipeline falls through to fuzzy
     matching against the fake GEM data.
@@ -109,9 +109,8 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
             ),
         ),
     )
-    # Pre-populate df_osm (non-empty) so _ensure_osm_loaded's `len(self.df_osm) == 0` check
-    # is False and real Overpass network call is skipped entirely.
-    pipeline.df_osm = pd.DataFrame(
+    # skip the live Overpass call by pre-populating osm_df (before _step_fuzzy_match)
+    pipeline.osm_df = pd.DataFrame(
         [
             {
                 "Name": "Unrelated OSM Plant",

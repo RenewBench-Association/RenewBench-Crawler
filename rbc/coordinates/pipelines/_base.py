@@ -14,6 +14,7 @@ This class shouldn't be instantiated directly -- its __init__ raises TypeError i
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -53,7 +54,7 @@ class BasePipeline:
         self,
         input_dir: Path,
         output_dir: Path | None,
-        gemloc: GEMLocator | None,
+        gem_loc: GEMLocator | None,
         ppdb_loc: PPMLocator | OSMPPLocator | None,
         osm_update: bool = False,
         osm_live: bool = False,
@@ -64,7 +65,7 @@ class BasePipeline:
             input_dir (Path): Path to the raw energy generation file (assuming CSV here).
             output_dir (Path, optional): Path to the directory where any output files may be
                 saved. If None, output files are not saved.
-            gemloc (GEMLocator, optional): Pre-built GEM locator to reuse. If None,
+            gem_loc (GEMLocator, optional): Pre-built GEM locator to reuse. If None,
                 GEM is disabled.
             ppdb_loc (PPMLocator | OSMPPLocator optional): Pre-built locator to reuse the
                 European PPM CSV or global OSMPP CSV. If None, CSV-based location is disabled.
@@ -82,6 +83,13 @@ class BasePipeline:
                 "BasePipeline must be subclassed, not instantiated directly!"
             )
 
+        self.ALL_STEPS: list[str] = [
+            "_step_load_and_dedupe",
+            "_step_prepare_matching",
+            *self.STEPS,
+            "_step_finalize",
+        ]
+
         self.input_dir = input_dir
         self.output_dir = output_dir
         if self.output_dir:
@@ -92,7 +100,6 @@ class BasePipeline:
         if not self.input_dir.is_dir():
             raise ValueError(f"Input directory '{input_dir}' is not a directory!")
 
-        self.df_osm = pd.DataFrame()
         try:
             self.operator = [p for p in self.input_dir.parts if p in OPERATOR_METADATA][
                 0
@@ -114,6 +121,14 @@ class BasePipeline:
                     ACTIVE_ZONES_METADATA[bz]["alias"]
                 )  # incorrect for DE!
 
+            self.country_code = COUNTRY_ISO2_MAP.get(
+                str(self.country).strip().lower(), None
+            )
+            if self.country_code is None:
+                logger.warning(
+                    f"No country code found for {self.country}! OSM matching not possible."
+                )
+
         except IndexError:
             raise ValueError(f"No country match found for '{self.input_dir}'!")
 
@@ -125,16 +140,17 @@ class BasePipeline:
         except MissingDataError as e:
             raise e
 
-        # Locators are expensive to construct, so they should be pre-built and only shared.
-        self.gemloc: GEMLocator | None = gemloc
+        # Pre-build expensive-to-construct items: locators, dfs
+        self.gem_loc: GEMLocator | None = gem_loc
         self.ppdb_loc: PPMLocator | OSMPPLocator | None = ppdb_loc
+        self.osm_df = pd.DataFrame()  # loaded later if required as very I/O expensive!
 
         logger.info(
             f"{type(self).__name__} initialized for: {self.operator} ({self.country})"
         )
 
     def run_pipeline(self) -> pd.DataFrame:
-        """Run this pipeline's STEPS end-to-end.
+        """Run this pipeline's ALL_STEPS end-to-end.
 
         Threads one DataFrame through each step (`self.STEPS`, in order) in turn.
 
@@ -142,7 +158,7 @@ class BasePipeline:
             pd.DataFrame: Enriched dataframe, one row per unique generation unit.
         """
         df = pd.DataFrame()
-        for step_name in self.STEPS:
+        for step_name in self.ALL_STEPS:
             df = getattr(self, step_name)(df)
 
             # stop if the first step didn't return a populated df with which to continue work
@@ -152,7 +168,7 @@ class BasePipeline:
         return df
 
     # ------------------------------------------------------------------
-    # CLASS PROPERTIES (shared across steps)
+    # CLASS PROPERTIES AND COLUMN SCHEMA (shared across steps)
     # ------------------------------------------------------------------
     @property
     def sysop_name_col(self) -> str:
@@ -168,6 +184,28 @@ class BasePipeline:
     def sysop_fuel_col(self) -> str | None:
         """The name of the SysOp's fuel column, if existent (e.g. 'fuel_code')."""
         return f"sysop.{self.fuel_col}" if self.fuel_col else "sysop.fuel_type"
+
+    @staticmethod
+    def _create_match_method_columns(df: pd.DataFrame) -> None:
+        """Create all columns generally required by the matching methods/algorithms.
+
+        This method ensures the generally required columns lat/lon/match_source for the
+        matching methods (ppdb.*/gem.*/osm.*) are created as None to prevent KeyErrors.
+        Pipelines with an exact-ID stage (e.g. entsoe) normally create these directly;
+        pipelines with no exact-ID stage do not necessarily. Does nothing if a column exists.
+        """
+        for col in (
+            "ppdb.lat",
+            "ppdb.lon",
+            "ppdb.match_source",
+            "gem.lat",
+            "gem.lon",
+            "gem.match_source",
+            "osm.lat",
+            "osm.lon",
+        ):
+            if col not in df.columns:
+                df[col] = None
 
     # ------------------------------------------------------------------
     # SHARED STEP METHODS (run by every pipeline)
@@ -213,7 +251,7 @@ class BasePipeline:
         )
         return df_unique
 
-    def _step_map_fuel_type(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _step_prepare_matching(self, df: pd.DataFrame) -> pd.DataFrame:
         """PREP STEP --- Rename columns with a "sysop." prefix and flesh out the fuel column.
 
         Args:
@@ -228,13 +266,15 @@ class BasePipeline:
         # 2. create SysOp fuel column with None values if fuel column is missing/unconfigured
         if not self.fuel_col or self.sysop_fuel_col not in df.columns:
             df[self.sysop_fuel_col] = None
-            return df
 
         # 3. apply mapping to SysOp fuel column if mapping was provided
-        if self.fuel_mapping:
+        elif self.fuel_mapping:
             df[self.sysop_fuel_col] = df[self.sysop_fuel_col].map(
                 lambda x: self.fuel_mapping.get(str(x).strip()) if pd.notna(x) else None
             )
+
+        # 4. ensure the required columns for matching algorithms are created
+        self._create_match_method_columns(df)
         return df
 
     def _step_fuzzy_match(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -258,27 +298,28 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with fuzzy matchings).
         """
-        self._ensure_exact_match_columns(df)
-        country_code = COUNTRY_ISO2_MAP.get(str(self.country).strip().lower(), None)
-        self._ensure_osm_loaded(country_code)
+        self._create_match_method_columns(df)
+
+        # OSM Dataframe: only fetch once and only for pipelines that use this step.
+        if self.country_code and self.osm_df.empty:
+            self.osm_df = query_osm_country_plants(
+                self.country_code,
+                cache_dir=self.input_dir,
+                force_update=self.osm_update,
+                live=self.osm_live,
+            )
 
         matcher = NameMatrixMatcher(
             country=self.country,
-            country_code=country_code,
+            country_code=self.country_code,
             ppdb_locator=self.ppdb_loc,
-            gem_locator=self.gemloc,
-            osm_df=self.df_osm if len(self.df_osm) > 0 else None,
+            gem_locator=self.gem_loc,
+            osm_df=self.osm_df if len(self.osm_df) > 0 else None,
         )
-        self._add_eic_alt_names(df, matcher)
+        self._add_alt_names(df, matcher)
 
         return self._fuzzy_match_core(
-            df,
-            matcher,
-            lambda row: [
-                row.get("wcode.EicLongName"),  # entsoe alternative
-                row.get("wcode.parent.EicLongName"),  # entsoe alternative
-                row.get(self.sysop_name_col),
-            ],
+            df, matcher, lambda row: self._name_candidates(row)
         )
 
     def _step_validate_fueltype(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -331,14 +372,16 @@ class BasePipeline:
         df["lat"] = interim_lat.combine_first(df["sibling.lat"])
         df["lon"] = interim_lon.combine_first(df["sibling.lon"])
 
-        def _derived_source_row(r: pd.Series) -> str:
-            if pd.notna(r.get("osm.lat")):
-                return "osm"
-            if pd.notna(r.get("sibling.lat")):
-                return "sibling_unit"
-            return "unmatched"
+        fallback = pd.Series(False, index=df.index)
+        conditions = [
+            df["osm.lat"].notna() if "osm.lat" in df else fallback,
+            df["sibling.lat"].notna() if "sibling.lat" in df else fallback,
+        ]
+        choices = ["osm", "sibling_unit"]
+        derived_source = pd.Series(
+            np.select(conditions, choices, default="unmatched"), index=df.index
+        )
 
-        derived_source = df.apply(_derived_source_row, axis=1)
         df["match_source"] = (
             df["ppdb.match_source"]
             .combine_first(df["gem.match_source"])
@@ -382,7 +425,7 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): Updated working dataframe (now with ppdb, gem, osm matches).
         """
-        self._ensure_exact_match_columns(df)  # defensive; no-op if already done
+        self._create_match_method_columns(df)  # defensive; no-op if already done
         matcher.build_matrix()
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
@@ -409,7 +452,7 @@ class BasePipeline:
                         df.at[idx, "ppdb.Country"] = candidate.country
                         df.at[idx, "ppdb.match_source"] = "ppdb_fuzzy_matrix"
 
-                    elif candidate.source == "gem" and self.gemloc:
+                    elif candidate.source == "gem" and self.gem_loc:
                         df.at[idx, "gem.lat"] = candidate.lat
                         df.at[idx, "gem.lon"] = candidate.lon
                         df.at[idx, "gem.plant_name"] = candidate.name
@@ -428,8 +471,8 @@ class BasePipeline:
 
                     break
 
-        # Initialize OSM columns if they don't exist
-        for col in ["lat", "lon", "id", "type", "url", "geometry"]:
+        # Initialize specific OSM columns if they don't exist
+        for col in ["id", "type", "url", "geometry"]:
             if f"osm.{col}" not in df.columns:
                 df[f"osm.{col}"] = None
 
@@ -501,82 +544,21 @@ class BasePipeline:
         )
         return df
 
-    def _add_eic_alt_names(self, df: pd.DataFrame, matcher: NameMatrixMatcher) -> None:
-        """Add alternative EIC names to provided matcher.
-
-        A no-op for pipelines with no wcode.* columns (see _step_fuzzy_match).
-
-        Args:
-            df (pd.DataFrame): Df
-            matcher (NameMatrixMatcher): NameMatrixMatcher instance.
-        """
-        for _, row in df[self._still_unmatched(df)].iterrows():
-            raw_name = str(row.get(self.sysop_name_col, "") or "")
-            if not raw_name:
-                continue
-
-            alt_names: list[str] = []
-            for name_src in (
-                "wcode.EicLongName",
-                "wcode.EicDisplayName",
-                "wcode.parent.EicLongName",
-            ):
-                n = row.get(name_src)
-                if pd.notna(n) and str(n).strip() and str(n).strip() != raw_name:
-                    alt_names.append(str(n).strip())
-
-            if alt_names:
-                matcher.add_alternative_names(raw_name, alt_names)
-
     # ------------------------------------------------------------------
     # GENERAL HELPER METHODS
     # ------------------------------------------------------------------
     @staticmethod
-    def _ensure_exact_match_columns(df: pd.DataFrame) -> None:
-        """Ensure ppdb.*/gem.* lat/lon/match_source columns exist (in place).
-
-        Pipelines with an exact-ID stage (e.g. entsoe) normally create these first;
-        pipelines with no exact-ID stage at all would otherwise KeyError the first
-        time anything that reads these columns (_still_unmatched, _add_eic_alt_names,
-        _fuzzy_match_core, _interim_coords, ...) runs. No-op once the columns
-        already exist.
-        """
-        for col in (
-            "ppdb.lat",
-            "ppdb.lon",
-            "ppdb.match_source",
-            "gem.lat",
-            "gem.lon",
-            "gem.match_source",
-        ):
-            if col not in df.columns:
-                df[col] = None
-
-    @staticmethod
     def _still_unmatched(df: pd.DataFrame) -> pd.Series:
-        """Check which rows / EGs have no  according to ppdb and GEM.
+        """Check which rows / EGEs have no match from any coordinate finding source yet.
 
         Args:
-            df (pd.DataFrame): Df to check for ppdb and GEM coordinate matches.
+            df (pd.DataFrame): Df to parse for identified (PPDB/GEM/OSM) coordinate matches.
 
         Returns:
             pd.Series: Series of unmatched rows.
         """
-        return df["ppdb.lat"].isna() & df["gem.lat"].isna()
-
-    def _ensure_osm_loaded(self, country_code: str | None) -> None:
-        """Ensure the OSM dataframe for the specific country code is loaded.
-
-        Args:
-            country_code (str | None): The country code, or None if no country is loaded.
-        """
-        if country_code and len(self.df_osm) == 0:
-            self.df_osm = query_osm_country_plants(
-                country_code,
-                cache_dir=self.input_dir,
-                force_update=self.osm_update,
-                live=self.osm_live,
-            )
+        lat_cols = [col for col in df.columns if col.endswith(".lat")]
+        return df[lat_cols].isna().all(axis=1)
 
     @staticmethod
     def _interim_coords(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
@@ -592,16 +574,22 @@ class BasePipeline:
         lon = df["ppdb.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
         return lat, lon
 
-    @staticmethod
-    def _clean_str_series(series: pd.Series) -> pd.Series:
-        """Clean up a series of strings.
+    def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatrixMatcher) -> None:
+        """Add alternative names to matcher. Overwritable by child pipeline (i.e. entsoe).
 
         Args:
-            series (pd.Series): Series of strings.
+            df (pd.DataFrame): Dataframe with names for which alternatives will be found.
+            matcher (NameMatrixMatcher): NameMatrixMatcher instance.
+        """
+        return None
+
+    def _name_candidates(self, row: pd.Series) -> list[str | None]:
+        """Define EGE candidate names to try against matcher. Overwritable by child pipeline.
+
+        Args:
+            row (pd.Series): The row to try against.
 
         Returns:
-            pd.Series: Cleaned series.
+            list[str]: List of EGE candidate names to try against the matcher.
         """
-        return series.map(
-            lambda v: str(v).strip() if pd.notna(v) and str(v).strip() else None
-        )
+        return [row.get(self.sysop_name_col)]

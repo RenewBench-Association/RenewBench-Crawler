@@ -29,24 +29,32 @@ def eia_csv_dir(tmp_path: Path) -> Path:
 
 
 class _DummyPipeline(BasePipeline):
-    """Minimal concrete BasePipeline subclass for checking shared STEPS loop independently."""
+    """Minimal concrete BasePipeline subclass for checking shared ALL_STEPS loop.
 
-    STEPS = ["_step_one", "_step_two"]
-    call_log: list[str]
+    Overrides `BasePipeline`'s load/finalize steps so only the child STEPS-running mechanism
+    itself is tested, not pipeline-specific behavior. BasePipeline's prep is used directly.
+    """
 
-    def _step_one(self, df: pd.DataFrame) -> pd.DataFrame:
-        self.call_log.append("one")
+    STEPS = ["_step_individual"]
+    call_log: list[str] = []
+
+    def _step_load_and_dedupe(self, df: pd.DataFrame) -> pd.DataFrame:
+        self.call_log.append("load")
         return pd.DataFrame({"x": [1]})
 
-    def _step_two(self, df: pd.DataFrame) -> pd.DataFrame:
-        self.call_log.append("two")
+    def _step_individual(self, df: pd.DataFrame) -> pd.DataFrame:
+        self.call_log.append("individual")
+        return df
+
+    def _step_finalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        self.call_log.append("finalize")
         return df
 
 
 class _StopsEarlyPipeline(BasePipeline):
     """Concrete subclass using the real (inherited) `_step_load_and_dedupe`."""
 
-    STEPS = ["_step_load_and_dedupe", "_step_flag"]
+    STEPS = ["_step_flag"]
     later_step_called: bool = False
 
     def _step_flag(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -75,7 +83,7 @@ class TestBasePipelineInit:
         """
         with pytest.raises(TypeError, match="BasePipeline must be subclassed"):
             BasePipeline(
-                input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
+                input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
             )
 
 
@@ -83,20 +91,22 @@ class TestBasePipelineRunPipeline:
     """Tests for BasePipeline's run_pipeline method."""
 
     def test_executes_steps_in_order(self, eia_csv_dir: Path) -> None:
-        """Happy path: run_pipeline calls each STEPS entry, in order, exactly once.
+        """Happy path: run_pipeline calls ALL_STEPS entries, in order, exactly once.
+
+        Verifies both the pipeline-specific STEPS and the automatic BasePipeline predefined
+        load & finalize steps. The real `_step_prepare_matching` runs in between "load" and
+        "individual" (renames columns with "sysop." prefix, so that is checked).
 
         Args:
             eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
         """
         pipeline = _DummyPipeline(
-            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
+            input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
         )
-        pipeline.call_log = []
-
         df = pipeline.run_pipeline()
 
-        assert pipeline.call_log == ["one", "two"]
-        assert list(df["x"]) == [1]
+        assert pipeline.call_log == ["load", "individual", "finalize"]
+        assert list(df["sysop.x"]) == [1]
 
     def test_stops_early_when_load_and_dedupe_is_empty(self, eia_csv_dir: Path):
         """Failure path: run_pipeline stops early when the first step returns empty.
@@ -105,9 +115,8 @@ class TestBasePipelineRunPipeline:
             eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
         """
         pipeline = _StopsEarlyPipeline(
-            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
+            input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
         )
-
         df = pipeline.run_pipeline()
 
         assert df.empty
@@ -120,7 +129,7 @@ class TestBasePipelineRunPipeline:
             eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
         """
         pipeline = _DummyPipeline(
-            input_dir=eia_csv_dir, output_dir=None, gemloc=None, ppdb_loc=None
+            input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
         )
 
         assert pipeline.sysop_name_col == "sysop.respondent-name"
@@ -138,5 +147,5 @@ class TestBasePipelineRunPipeline:
 
         with pytest.raises(ValueError, match="No country match found"):
             _DummyPipeline(
-                input_dir=unknown_dir, output_dir=None, gemloc=None, ppdb_loc=None
+                input_dir=unknown_dir, output_dir=None, gem_loc=None, ppdb_loc=None
             )
