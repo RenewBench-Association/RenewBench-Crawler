@@ -1,4 +1,4 @@
-# Finding coordinates to combine energy and meterological data
+# Finding coordinates to combine energy and meteorological data
 
 The majority of energy sources do not provide location information on their generating
 entities (units, plants, facilities). This poses a considerable challenge to consolidating
@@ -86,3 +86,20 @@ Optional arguments are:
 >
 > This can only be run one source at a time. The current implementation is only developed
 > for ENTSOE and will only work for CSV files (not f.e. REI's JSONs)!
+
+
+# Ensuring up-to-date OSM parsing
+
+OSM data is queried for the given operator regions by specifying the area bounds of the
+Overpass Turbo API request. Often, the ISO3166-1 alpha-2 country code is definitive enough
+in defining this. However, in some instances (i.e. disputed territories), it may not yield
+any results. In those cases the so-called OSM country relation IDs can be used instead.
+
+These IDs describe administrative relations with `admin_level=2` and are hard-coded into
+the [mappings.py](../../rbc/coordinates/mappings.py) under the global parameter
+`COUNTRY_OSM_RELATION_ID_MAP`. However, these IDs may change depending on what the OSM
+community decides. Therefore, a script is included to automatically update the
+`COUNTRY_OSM_RELATION_ID_MAP`. It can be run whenever required via:
+```bash
+$ python -m scripts.coordinates.update_osm_relation_ids
+```
