@@ -6,7 +6,6 @@ import pandas as pd
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
-from rbc.coordinates.mappings import COUNTRY_ISO2_MAP
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import base_name_key
 
@@ -87,12 +86,11 @@ class DefaultPipeline(BasePipeline):
         group -- there is no unique per-plant ID to fall back on for sources
         without EIC/wcode data.
         """
-        country_code = COUNTRY_ISO2_MAP.get(str(self.country).strip().lower(), None)
 
         def _key(name: object) -> str | None:
             if pd.isna(name) or not str(name).strip():
                 return None
-            base = base_name_key(str(name).strip(), country_code)
+            base = base_name_key(str(name).strip(), self.country_code)
             return f"name_base:{base}" if base else None
 
         return df[self.sysop_name_col].map(_key)

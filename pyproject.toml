@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "boxsdk",
     "cdsapi",
+    "country-converter",
     "entsoe-apy",
     "eptr2",
     "folium",

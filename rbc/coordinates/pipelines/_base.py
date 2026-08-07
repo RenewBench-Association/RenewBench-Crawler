@@ -13,7 +13,9 @@ This class shouldn't be instantiated directly -- its __init__ raises TypeError i
 """
 
 from pathlib import Path
+from pprint import pformat
 
+import country_converter as coco
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -22,7 +24,7 @@ from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osm_api import query_osm_country_plants
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.mappings import COUNTRY_ISO2_MAP, OPERATOR_METADATA
+from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
@@ -115,16 +117,16 @@ class BasePipeline:
                     f"'{[self.operator]}':\n{OPERATOR_METADATA[self.operator]}"
                 )
 
+            self.country_code: str | None = None
             if self.country == "Europe":
                 bz = self.input_dir.stem
-                self.country = str(
-                    ACTIVE_ZONES_METADATA[bz]["alias"]
-                )  # incorrect for DE!
+                self.country = str(ACTIVE_ZONES_METADATA[bz]["country"])
+                self.country_code = str(ACTIVE_ZONES_METADATA[bz]["alpha2"])
+            else:
+                self.country_code = coco.convert(names=self.country, to="ISO2")
 
-            self.country_code = COUNTRY_ISO2_MAP.get(
-                str(self.country).strip().lower(), None
-            )
-            if self.country_code is None:
+            if self.country_code == "not found":
+                self.country_code = None
                 logger.warning(
                     f"No country code found for {self.country}! OSM matching not possible."
                 )
@@ -146,7 +148,8 @@ class BasePipeline:
         self.osm_df = pd.DataFrame()  # loaded later if required as very I/O expensive!
 
         logger.info(
-            f"{type(self).__name__} initialized for: {self.operator} ({self.country})"
+            f"{type(self).__name__} initialized for '{self.operator}' ({self.country})\n"
+            f"{pformat(vars(self), indent=4, sort_dicts=False)}"
         )
 
     def run_pipeline(self) -> pd.DataFrame:
