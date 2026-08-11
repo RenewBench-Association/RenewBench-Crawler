@@ -1,6 +1,7 @@
-"""Coordinate finding for energy entities using the osm-powerplants package.
+"""Coordinate finding for EGEs using the osm-powerplants package.
 
-Source: OSM data
+Source: GitHub package (https://github.com/open-energy-transition/osm-powerplants)
+Data foundation: OSM data
 """
 
 import pandas as pd

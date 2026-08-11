@@ -1,6 +1,7 @@
-"""Coordinate finding for energy entities using the powerplantmatching package.
+"""Coordinate finding for EGEs using the powerplantmatching package.
 
-Source: OSMPP CSV (based on OSM data), other European data sources.
+Source: GitHub package (https://github.com/PyPSA/powerplantmatching/)
+Data foundation: OSMPP CSV (based on OSM data), other European data sources.
 """
 
 import ast

@@ -6,12 +6,32 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locators.eic_registry import EICCodeRegistry, _alpha_prefix
+from rbc.coordinates.locators.eic_registry import (
+    DISPLAY_NAME_COL,
+    EIC_COL,
+    LONG_NAME_COL,
+    PARENT_COL,
+    PARTY_COL,
+    EICCodeRegistry,
+    alpha_prefix,
+    safe_str,
+)
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import normalize_name
+
+# Constants for WCODE-related column headers
+WCODE_PREFIX = "wcode"
+WCODE_PARENT_PREFIX = f"{WCODE_PREFIX}.parent"
+
+WCODE_PARENT = f"{WCODE_PREFIX}.{PARENT_COL}"  # "wcode.EicParent"
+WCODE_LONGNAME = f"{WCODE_PREFIX}.{LONG_NAME_COL}"
+WCODE_DISPLAYNAME = f"{WCODE_PREFIX}.{DISPLAY_NAME_COL}"
+WCODE_PARTY = f"{WCODE_PREFIX}.{PARTY_COL}"
+WCODE_PARENT_EIC = f"{WCODE_PARENT_PREFIX}.{EIC_COL}"  # "wcode.parent.EicCode"
+WCODE_PARENT_LONGNAME = f"{WCODE_PARENT_PREFIX}.{LONG_NAME_COL}"
 
 
 class EntsoePipeline(BasePipeline):
@@ -79,7 +99,7 @@ class EntsoePipeline(BasePipeline):
     # PIPELINE STEPS (for EntsoePipeline only)
     # ------------------------------------------------------------------
     def _step_entsoe_eic_lookup(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Enrich data using the 'W_eicCodes.csv' (specifically the wcode.* columns).
+        """Enrich data using the 'W_eicCodes.csv' (specifically the ``wcode.*`` columns).
 
         Args:
             df (pd.DataFrame): The working dataframe.
@@ -90,7 +110,7 @@ class EntsoePipeline(BasePipeline):
         assert self.eic_reg is not None
         wcode_fields = list(self.eic_reg.WCODE_FIELDS)
         for col in wcode_fields:
-            df[f"wcode.{col}"] = None
+            df[f"{WCODE_PREFIX}.{col}"] = None
 
         for idx, row in df.iterrows():
             eic = row.get(self.sysop_code_col)
@@ -98,9 +118,9 @@ class EntsoePipeline(BasePipeline):
                 continue
             full_row = self.eic_reg.lookup_full_row(str(eic).strip())
             for col in wcode_fields:
-                df.at[idx, f"wcode.{col}"] = full_row.get(col)
+                df.at[idx, f"{WCODE_PREFIX}.{col}"] = full_row.get(col)
 
-        wcode_populated = df["wcode.EicLongName"].notna().sum()
+        wcode_populated = df[WCODE_LONGNAME].notna().sum()
         logger.info(
             f"[{self.input_dir.name}] W_eicCodes enrichment: {wcode_populated}/{len(df)} "
             f"units found in EIC directory."
@@ -108,7 +128,7 @@ class EntsoePipeline(BasePipeline):
         return df
 
     def _step_entsoe_match_by_id(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Find matches by directly comparing EGE EIC codes / wcode.EicParent to GEM / PPM.
+        """Find matches by directly comparing EGE EIC codes/``wcode.EicParent`` to GEM/PPM.
 
         Args:
             df (pd.DataFrame): The working dataframe.
@@ -130,7 +150,7 @@ class EntsoePipeline(BasePipeline):
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
             eic = row.get(self.sysop_code_col)
-            parent_eic = row.get("wcode.EicParent")
+            parent_eic = row.get(WCODE_PARENT)
             hit, source = None, None
 
             # 1. GEM: try the unit (generation) EIC directly
@@ -196,28 +216,28 @@ class EntsoePipeline(BasePipeline):
             "match_method",
         ]
         for col in parent_meta:
-            df[f"wcode.parent.{col}"] = None
+            df[f"{WCODE_PARENT_PREFIX}.{col}"] = None
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent = self.eic_reg.find_parent_production_unit(
-                eic_parent=row.get("wcode.EicParent")
-                if pd.notna(row.get("wcode.EicParent"))
+                eic_parent=row.get(WCODE_PARENT)
+                if pd.notna(row.get(WCODE_PARENT))
                 else None,
-                display_name=row.get("wcode.EicDisplayName")
-                if pd.notna(row.get("wcode.EicDisplayName"))
+                display_name=row.get(WCODE_DISPLAYNAME)
+                if pd.notna(row.get(WCODE_DISPLAYNAME))
                 else None,
-                long_name=row.get("wcode.EicLongName")
-                if pd.notna(row.get("wcode.EicLongName"))
+                long_name=row.get(WCODE_LONGNAME)
+                if pd.notna(row.get(WCODE_LONGNAME))
                 else None,
-                responsible_party=row.get("wcode.EicResponsibleParty")
-                if pd.notna(row.get("wcode.EicResponsibleParty"))
+                responsible_party=row.get(WCODE_PARTY)
+                if pd.notna(row.get(WCODE_PARTY))
                 else None,
             )
             if parent is not None:
                 for col in parent_meta:
-                    df.at[idx, f"wcode.parent.{col}"] = parent.get(col)
+                    df.at[idx, f"{WCODE_PARENT_PREFIX}.{col}"] = parent.get(col)
 
-        parent_found = df["wcode.parent.EicCode"].notna().sum()
+        parent_found = df[WCODE_PARENT_EIC].notna().sum()
         logger.info(
             f"[{self.input_dir.name}] Fuzzy parent matching: {parent_found} parent "
             f"production units resolved."
@@ -244,10 +264,10 @@ class EntsoePipeline(BasePipeline):
         gem_cols = list(GEMLocator.GEM_COLS)
         ppdb_cols = list(self.ppdb_loc.PPM_COLS)
         for idx, row in df[self._still_unmatched(df)].iterrows():
-            parent_eic = row.get("wcode.parent.EicCode")
+            parent_eic = row.get(WCODE_PARENT_EIC)
             if pd.isna(parent_eic) or not str(parent_eic).strip():
                 continue
-            if row.get("wcode.parent.match_confidence") != "high":
+            if row.get(f"{WCODE_PARENT_PREFIX}.match_confidence") != "high":
                 continue
             parent_eic_str = str(parent_eic).strip()
 
@@ -303,16 +323,16 @@ class EntsoePipeline(BasePipeline):
         Returns:
             pd.Series: Combined series of fallback options.
         """
-        eic_parent = self._clean_str_series(df["wcode.EicParent"])
+        eic_parent = df[WCODE_PARENT].map(safe_str)
 
         # OPTION 1: use fuzzy-resolved parent EIC code
-        sysop_code_col = self.sysop_code_col
+        sysop_code_col = self.sysop_code_col  # define to prevent recall of property
         own_eic = (
-            self._clean_str_series(df[sysop_code_col])
+            df[sysop_code_col].map(safe_str)
             if sysop_code_col and sysop_code_col in df
             else None
         )
-        parent_eic_resolved = self._clean_str_series(df["wcode.parent.EicCode"])
+        parent_eic_resolved = df[WCODE_PARENT_EIC].map(safe_str)
         distinct_parent_eic = pd.Series(
             [
                 p if p is not None and (own_eic is None or p != o) else None
@@ -346,12 +366,12 @@ class EntsoePipeline(BasePipeline):
             base = " ".join(tokens).strip()
             return base or None
 
-        long_name_key = df["wcode.EicLongName"].map(_plant_base_key)
+        long_name_key = df[WCODE_LONGNAME].map(_plant_base_key)
         long_name_key = long_name_key.map(lambda k: f"long_name:{k}" if k else None)
 
         # OPTION 3: group by the shared alphabetic prefix of the official EIC display name
-        display_prefix = df["wcode.EicDisplayName"].map(
-            lambda v: _alpha_prefix(v) if pd.notna(v) else ""
+        display_prefix = df[WCODE_DISPLAYNAME].map(
+            lambda v: alpha_prefix(v) if pd.notna(v) else ""
         )
         display_prefix = display_prefix.map(
             lambda p: f"display_prefix:{p}" if len(p) >= 3 else None
@@ -379,11 +399,7 @@ class EntsoePipeline(BasePipeline):
                 continue
 
             alt_names: list[str] = []
-            for name_src in (
-                "wcode.EicLongName",
-                "wcode.EicDisplayName",
-                "wcode.parent.EicLongName",
-            ):
+            for name_src in (WCODE_LONGNAME, WCODE_DISPLAYNAME, WCODE_PARENT_LONGNAME):
                 n = row.get(name_src)
                 if pd.notna(n) and str(n).strip() and str(n).strip() != raw_name:
                     alt_names.append(str(n).strip())
@@ -401,21 +417,7 @@ class EntsoePipeline(BasePipeline):
             list[str]: List of EGE candidate names to try against the matcher.
         """
         return [
-            row.get("wcode.EicLongName"),  # entsoe alternative
-            row.get("wcode.parent.EicLongName"),  # entsoe alternative
+            row.get(WCODE_LONGNAME),
+            row.get(WCODE_PARENT_LONGNAME),
             row.get(self.sysop_name_col),
         ]
-
-    @staticmethod
-    def _clean_str_series(series: pd.Series) -> pd.Series:
-        """Clean up a series of strings.
-
-        Args:
-            series (pd.Series): Series of strings.
-
-        Returns:
-            pd.Series: Cleaned series.
-        """
-        return series.map(
-            lambda v: str(v).strip() if pd.notna(v) and str(v).strip() else None
-        )

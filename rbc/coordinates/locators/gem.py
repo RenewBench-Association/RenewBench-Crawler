@@ -1,4 +1,4 @@
-"""Coordinate finding for energy entities using Global Energy Monitor (GEM) trackers.
+"""Coordinate finding for EGEs using Global Energy Monitor (GEM) trackers.
 
 Source: Global Energy Monitor (https://globalenergymonitor.org/download-data)
 

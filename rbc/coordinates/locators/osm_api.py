@@ -1,3 +1,9 @@
+"""Coordinate finding for EGEs using the OSM Overpass Turbo API directly.
+
+Source: API (https://overpass-turbo.eu/)
+Data foundation: OpenStreetMap (https://www.openstreetmap.org)
+"""
+
 import json
 import re
 from pathlib import Path
