@@ -434,6 +434,57 @@ class TestRenameToCanonical:
 
 
 # ----------------------------------
+# GridRegridder._filter_variables
+# ----------------------------------
+class TestFilterVariables:
+    """Tests for GridRegridder._filter_variables()."""
+
+    def test_restricts_to_requested_variables(self, base_args: dict) -> None:
+        """Only variables named in self.variables survive.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        ds = xr.Dataset({"temperature": ("x", [1, 2, 3]), "u_wind": ("x", [4, 5, 6])})
+        base_args["variables"] = ["temperature"]
+        rg = _ConcreteRegridder(**base_args)
+
+        filtered = rg._filter_variables(ds)
+
+        assert list(filtered.data_vars) == ["temperature"]
+
+    def test_missing_requested_variable_is_silently_skipped(
+        self, base_args: dict
+    ) -> None:
+        """A requested variable absent from ds doesn't raise.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        ds = xr.Dataset({"temperature": ("x", [1, 2, 3])})
+        base_args["variables"] = ["temperature", "does_not_exist"]
+        rg = _ConcreteRegridder(**base_args)
+
+        filtered = rg._filter_variables(ds)
+
+        assert list(filtered.data_vars) == ["temperature"]
+
+    def test_empty_variables_list_means_no_filtering(self, base_args: dict) -> None:
+        """An empty self.variables leaves ds completely unchanged.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        ds = xr.Dataset({"temperature": ("x", [1, 2, 3]), "u_wind": ("x", [4, 5, 6])})
+        base_args["variables"] = []
+        rg = _ConcreteRegridder(**base_args)
+
+        filtered = rg._filter_variables(ds)
+
+        assert set(filtered.data_vars) == {"temperature", "u_wind"}
+
+
+# ----------------------------------
 # GridRegridder._get_weights
 # ----------------------------------
 class TestGetWeights:

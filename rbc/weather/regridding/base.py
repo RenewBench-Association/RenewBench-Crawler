@@ -124,6 +124,7 @@ class GridRegridder(ABC):
 
             ds = self._load_source_chunk(task)
             ds = self._rename_to_canonical(ds)
+            ds = self._filter_variables(ds)
             weights = self._get_weights(ds)
 
             if self.dry_run:
@@ -208,6 +209,22 @@ class GridRegridder(ABC):
             k: v for k, v in self._variable_mapping().items() if k in ds.data_vars
         }
         return ds.rename_vars(mapping)
+
+    def _filter_variables(self, ds: xr.Dataset) -> xr.Dataset:
+        """Restrict `ds` to `self.variables`, if any were requested.
+
+        Args:
+            ds (xr.Dataset): Dataset already renamed to canonical variable names.
+
+        Returns:
+            xr.Dataset: `ds` unchanged if `self.variables` is empty (matches
+                today's "no filter configured" behavior); otherwise restricted
+                to whichever of `self.variables` are actually present in `ds`.
+        """
+        if not self.variables:
+            return ds
+        keep = [v for v in self.variables if v in ds.data_vars]
+        return ds[keep]
 
     def _regrid_kwargs(self) -> dict:
         """Extra keyword arguments forwarded to `create_healpix_pyramid()`.

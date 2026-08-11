@@ -301,7 +301,7 @@ class TestBuildRegionalHealpixPyramid:
             ) as mock_regrid,
             patch("rbc.weather.regridding.regional.coarsen_regional") as mock_coarsen,
         ):
-            mock_regrid.return_value = "FINEST"
+            mock_regrid.return_value.compute.return_value = "FINEST"
             mock_coarsen.side_effect = lambda ds, target_level: f"L{target_level}"
 
             pyramid = build_regional_healpix_pyramid(
@@ -330,7 +330,7 @@ class TestBuildRegionalHealpixPyramid:
             ) as mock_regrid,
             patch("rbc.weather.regridding.regional.coarsen_regional") as mock_coarsen,
         ):
-            mock_regrid.return_value = "FINEST"
+            mock_regrid.return_value.compute.return_value = "FINEST"
 
             pyramid = build_regional_healpix_pyramid(
                 ds_input, weights_path, max_level=6, min_level=6

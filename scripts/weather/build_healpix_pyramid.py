@@ -79,9 +79,8 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         default=None,
         metavar="VARIABLES",
-        help="Canonical variable names to regrid. NOTE: not yet enforced -- "
-        "every variable present in the raw files is currently processed "
-        "regardless of this flag.",
+        help="Canonical variable names to regrid. Default: every variable "
+        "present in the raw files.",
     )
     parser.add_argument(
         "--healpix-min-level",

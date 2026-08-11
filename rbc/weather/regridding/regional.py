@@ -204,6 +204,10 @@ def build_regional_healpix_pyramid(
         dict[int, xr.Dataset]: Pyramid keyed by level, max_level down to min_level.
     """
     finest = regrid_regional_to_healpix(ds, weights_path, level=max_level)
+    # Materialize now, before coarsening: chaining coarsen_regional()'s
+    # groupby().mean() lazily over several levels makes dask graph
+    # *construction* itself expensive, independent of compute cost.
+    finest = finest.compute()
     pyramid = {max_level: finest}
     current = finest
     for level in range(max_level - 1, min_level - 1, -1):
