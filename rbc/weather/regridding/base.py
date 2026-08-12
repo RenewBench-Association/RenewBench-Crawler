@@ -11,6 +11,7 @@ from pathlib import Path
 import grid_doctor as gd
 import xarray as xr
 from loguru import logger
+from tqdm.dask import TqdmCallback
 
 
 class GridRegridder(ABC):
@@ -122,9 +123,12 @@ class GridRegridder(ABC):
                 logger.info(f"Task {task}: previously regridded. Skipping.")
                 continue
 
+            logger.info(f"Task {task}: loading source data...")
             ds = self._load_source_chunk(task)
             ds = self._rename_to_canonical(ds)
             ds = self._filter_variables(ds)
+
+            logger.info(f"Task {task}: resolving HEALPix weights...")
             weights = self._get_weights(ds)
 
             if self.dry_run:
@@ -134,7 +138,13 @@ class GridRegridder(ABC):
                 )
                 continue
 
-            pyramid = self._regrid_chunk(ds, weights)
+            logger.info(
+                f"Task {task}: regridding to level {self.max_level} "
+                f"(pyramid down to level {self.min_level})..."
+            )
+            with TqdmCallback(desc=f"Task {task}"):
+                pyramid = self._regrid_chunk(ds, weights)
+            logger.info(f"Task {task}: regridding complete.")
             yield task, pyramid
 
         logger.info(f"All regridding tasks completed for '{self.source_name}'!")

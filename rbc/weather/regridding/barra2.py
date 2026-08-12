@@ -135,7 +135,7 @@ class Barra2Regridder(GridRegridder):
                 das, dim=xr.DataArray(list(levels), dims="height", name="height")
             )
 
-        return xr.merge([*single_level, xr.Dataset(merged_vars)])
+        return xr.merge([*single_level, xr.Dataset(merged_vars)], compat="no_conflicts")
 
     def _grid_metadata_path(self) -> Path | None:
         """BARRA2 is regional lat-lon with no separate grid definition file.

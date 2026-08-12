@@ -3,11 +3,13 @@
 Shared Zarr store writer for regridded HEALPix pyramids.
 """
 
+import time
 from pathlib import Path
 
 import pandas as pd
 import xarray as xr
 from loguru import logger
+from tqdm.dask import TqdmCallback
 
 
 class HealpixZarrWriter:
@@ -67,8 +69,10 @@ class HealpixZarrWriter:
                 f"({self.min_level}); got levels {sorted(pyramid)}."
             )
 
+        task_start = time.time()
         for level, ds in pyramid.items():
             group = self._group(source_name, level)
+            level_start = time.time()
 
             if self._group_exists(group):
                 self._validate_consistency(group, ds)
@@ -81,17 +85,28 @@ class HealpixZarrWriter:
                         f"the store (e.g. {sorted(overlap)[0]}). Refusing to "
                         "append duplicates."
                     )
-                logger.info(f"{group}: appending task {task}.")
-                ds.to_zarr(
-                    self.store_path,
-                    group=group,
-                    mode="a",
-                    append_dim="time",
-                    consolidated=False,
-                )
+                logger.info(f"{group}: appending task {task}...")
+                with TqdmCallback(desc=group):
+                    ds.to_zarr(
+                        self.store_path,
+                        group=group,
+                        mode="a",
+                        append_dim="time",
+                        consolidated=False,
+                    )
             else:
-                logger.info(f"{group}: creating group for task {task}.")
-                ds.to_zarr(self.store_path, group=group, mode="w", consolidated=False)
+                logger.info(f"{group}: creating group for task {task}...")
+                with TqdmCallback(desc=group):
+                    ds.to_zarr(
+                        self.store_path, group=group, mode="w", consolidated=False
+                    )
+
+            logger.info(f"{group}: write finished ({time.time() - level_start:.1f}s).")
+
+        logger.info(
+            f"'{source_name}' task {task}: all {len(pyramid)} levels written "
+            f"({time.time() - task_start:.1f}s total)."
+        )
 
     def already_written(self, source_name: str, level: int) -> set:
         """Return timestamps already present in a (source, level) group.

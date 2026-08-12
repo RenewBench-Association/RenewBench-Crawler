@@ -14,26 +14,29 @@ from rbc.config.loader import load_config, parse_key_value_pairs
 from rbc.utils import setup_logging
 from rbc.weather.regridding.barra2 import Barra2Regridder
 from rbc.weather.regridding.era5 import Era5Regridder
+from rbc.weather.regridding.icon_dream import IconDreamRegridder
 from rbc.weather.regridding.store import HealpixZarrWriter
 
 SOURCE = "regrid_healpix"
 
-# Only sources with an implemented regridder can be processed. Extend as
-# IconDreamRegridder lands.
 REGRIDDER_CLASSES = {
     "era5": Era5Regridder,
     "barra2_r2": Barra2Regridder,
     "barra2_c2": Barra2Regridder,
     "barra2_c2_20min": Barra2Regridder,
+    "icon_dream_global": IconDreamRegridder,
+    "icon_dream_eu": IconDreamRegridder,
 }
 
-# Barra2Regridder needs a "model" kwarg the other regridders don't -- kept
-# separate from REGRIDDER_CLASSES so the main loop's constructor call stays
-# generic for every source.
+# Barra2Regridder/IconDreamRegridder each need a "model" kwarg the other
+# regridders don't -- kept separate from REGRIDDER_CLASSES so the main loop's
+# constructor call stays generic for every source.
 _EXTRA_KWARGS: dict[str, dict] = {
     "barra2_r2": {"model": "R2"},
     "barra2_c2": {"model": "C2"},
     "barra2_c2_20min": {"model": "C2_20min"},
+    "icon_dream_global": {"model": "global"},
+    "icon_dream_eu": {"model": "eu"},
 }
 
 
@@ -51,8 +54,7 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         choices=list(REGRIDDER_CLASSES),
         default=list(REGRIDDER_CLASSES),
-        help=f"Sources to regrid. Currently implemented: {list(REGRIDDER_CLASSES)}. "
-        "ICON-DREAM regridders are not implemented yet.",
+        help=f"Sources to regrid. Choices: {list(REGRIDDER_CLASSES)}.",
     )
     parser.add_argument(
         "-y",
