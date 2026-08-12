@@ -475,7 +475,7 @@ class EICCodeRegistry:
                 best_score = float(hit[1])
                 best_match_name = str(hit[0])
 
-        if best_score < MIN_MATCH_SCORE or best_match_name is None:
+        if best_match_name is None:
             return None
 
         # Locate the matching row in self._production_df
