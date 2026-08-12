@@ -9,6 +9,8 @@ import ast
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.utils.values import strip_str
+
 PPM_CSV_URL = "https://raw.githubusercontent.com/PyPSA/powerplantmatching/refs/heads/master/powerplants.csv"
 
 
@@ -133,10 +135,10 @@ class PPMLocator:
             dict: matched row values with keys from `PPM_COLS`, or `None` if not found or the
                 row has no coordinates.
         """
-        if not entsoe_id or pd.isna(entsoe_id):
+        target = strip_str(entsoe_id)
+        if target is None:
             return None
 
-        target = str(entsoe_id).strip()
         pos = self._entsoe_id_index.get(target)
         if pos is None:
             return None

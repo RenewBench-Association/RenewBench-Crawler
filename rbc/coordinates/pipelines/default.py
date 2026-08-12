@@ -8,6 +8,7 @@ from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import base_name_key
+from rbc.coordinates.utils.values import strip_str
 
 
 class DefaultPipeline(BasePipeline):
@@ -88,9 +89,10 @@ class DefaultPipeline(BasePipeline):
         """
 
         def _key(name: object) -> str | None:
-            if pd.isna(name) or not str(name).strip():
+            clean_name = strip_str(name)
+            if clean_name is None:
                 return None
-            base = base_name_key(str(name).strip(), self.country_code)
+            base = base_name_key(clean_name, self.country_code)
             return f"name_base:{base}" if base else None
 
         return df[self.sysop_name_col].map(_key)

@@ -25,6 +25,7 @@ from rbc.coordinates.mappings import (
     GENERIC_UNIT_TOKENS,
     PLANT_NAME_EXPANSIONS,
 )
+from rbc.coordinates.utils.values import strip_lower_str
 
 LOW_WEIGHT = 0.1
 DEFAULT_WEIGHT = 1.0
@@ -53,12 +54,10 @@ def normalize_name(value: Optional[str]) -> str:
     Lowercase, strip diacritics, replace non-alphanumeric runs with a single
     space, collapse whitespace.
     """
-    if value is None:
-        return ""
-    if isinstance(value, float) and value != value:  # NaN, without importing pandas
+    text = strip_lower_str(value)
+    if not text:
         return ""
 
-    text = str(value).lower().strip()
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"[^a-z0-9]+", " ", text)

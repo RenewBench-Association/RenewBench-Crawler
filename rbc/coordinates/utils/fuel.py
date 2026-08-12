@@ -5,6 +5,7 @@ Utility functions for handling fuel type-related logic.
 
 import pandas as pd
 
+from rbc.coordinates.utils.values import is_missing, strip_lower_str
 from rbc.energy.entsoe.mappings import FUELTYPE_MAPPINGS
 
 
@@ -14,16 +15,16 @@ def normalize_fueltype(value: str | None) -> str:
     Args:
         value (str | None): Fuel type string/code to normalize.
     """
-    if value is None or pd.isna(value):
+    if is_missing(value):
         return ""
 
-    raw = str(value).strip()
+    raw = str(value).strip()  # case-sensitive lookup
     mapped = FUELTYPE_MAPPINGS.get(raw, raw)
-    return str(mapped).lower().strip()
+    return strip_lower_str(mapped)
 
 
 def is_fueltype_compatible(eg_type: str | None, pp_type: str | None) -> bool:
-    """Validate if the eg fuel type matches the pp database fuel type.
+    """Validate if the EGE fuel type matches the pp database fuel type.
 
     Handles basic string cleaning and empty values gracefully.
 

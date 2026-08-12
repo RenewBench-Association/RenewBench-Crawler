@@ -17,7 +17,6 @@ from rbc.coordinates.locators.eic_registry import (
     TYPE_COL,
     EICCodeRegistry,
     extract_prefix,
-    safe_str,
 )
 
 MOCK_ROWS = [
@@ -216,7 +215,7 @@ class TestEICCodeRegistryPublicAPI:
 # Tests - Helper functions
 # ----------------------------------
 class TestHelperFunctions:
-    """Tests for helper functions (extract_prefix and safe_str)."""
+    """Tests for helper functions (extract_prefix)."""
 
     @pytest.mark.parametrize(
         "name, expected_output",
@@ -235,23 +234,3 @@ class TestHelperFunctions:
             expected_output (str): Expected output to be returned by function.
         """
         assert extract_prefix(name) == expected_output
-
-    @pytest.mark.parametrize(
-        "val, expected_output",
-        [
-            ("MGRES", "MGRES"),
-            ("  MGRES  ", "MGRES"),
-            ("", None),
-            ("   ", None),
-            (None, None),
-            (float("nan"), None),
-        ],
-    )
-    def test_safe_str(self, val: object, expected_output: str | None) -> None:
-        """Happy + failure paths: Strings are stripped, blank/missing values become None.
-
-        Args:
-            val (object): Value to provide as input.
-            expected_output (str | None): Expected output to be returned by function.
-        """
-        assert safe_str(val) == expected_output

@@ -28,6 +28,7 @@ from rbc.coordinates.utils.tokenizer import (
     weighted_token_score,
     weighted_tokenize,
 )
+from rbc.coordinates.utils.values import is_missing, strip_str
 
 if TYPE_CHECKING:
     from rbc.coordinates.locators.gem import GEMLocator
@@ -250,7 +251,7 @@ class NameMatrixMatcher:
         if name in self._variant_cache:
             return self._variant_cache[name]
 
-        if not name or pd.isna(name):
+        if is_missing(name):
             self._variant_cache[name] = []
             return []  # skip empty names
 
@@ -379,7 +380,7 @@ class NameMatrixMatcher:
         Returns:
             MatchResult with matched candidate or None if no match found.
         """
-        if not target_name or pd.isna(target_name):
+        if is_missing(target_name):
             return MatchResult(
                 matched=False,
                 candidate=None,
@@ -585,9 +586,8 @@ class NameMatrixMatcher:
 
         candidates = []
         for _, row in df.iterrows():
-            name_val = row[adapter.name_col]
-            name = str(name_val) if pd.notna(name_val) else ""
-            if not name:
+            name = strip_str(row[adapter.name_col])
+            if name is None:
                 continue
 
             # Normalize and expand plant name tokens for better cross-language
@@ -598,29 +598,24 @@ class NameMatrixMatcher:
 
             other_names = ""
             if adapter.other_names_col:
-                other_names_val = row.get(adapter.other_names_col)
-                other_names = str(other_names_val) if pd.notna(other_names_val) else ""
-
-            country_val = row.get(adapter.country_col) if adapter.country_col else None
+                other_names = strip_str(row.get(adapter.other_names_col)) or ""
 
             candidates.append(
                 MatchCandidate(
                     name=name,
                     normalized=expanded if expanded else normalized,
                     source=adapter.source,
-                    fueltype=str(row[adapter.fueltype_col])
-                    if pd.notna(row[adapter.fueltype_col])
-                    else None,
+                    fueltype=strip_str(row[adapter.fueltype_col]),
                     lat=float(row[adapter.lat_col])
                     if pd.notna(row[adapter.lat_col])
                     else None,
                     lon=float(row[adapter.lon_col])
                     if pd.notna(row[adapter.lon_col])
                     else None,
-                    country=str(country_val) if pd.notna(country_val) else None,
-                    source_id=str(row.get(adapter.id_col))
-                    if pd.notna(row.get(adapter.id_col))
+                    country=strip_str(row.get(adapter.country_col))
+                    if adapter.country_col
                     else None,
+                    source_id=strip_str(row.get(adapter.id_col)),
                     confidence=adapter.confidence_fn(row),
                     other_names=other_names,
                 )

@@ -27,6 +27,7 @@ from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
+from rbc.coordinates.utils.values import strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
 from rbc.energy.utils import MissingDataError, load_df_from_file
 
@@ -273,7 +274,7 @@ class BasePipeline:
         # 3. apply mapping to SysOp fuel column if mapping was provided
         elif self.fuel_mapping:
             df[self.sysop_fuel_col] = df[self.sysop_fuel_col].map(
-                lambda x: self.fuel_mapping.get(str(x).strip()) if pd.notna(x) else None
+                lambda x: self.fuel_mapping.get(strip_str(x) or "")
             )
 
         # 4. ensure the required columns for matching algorithms are created
@@ -435,11 +436,12 @@ class BasePipeline:
             sysop_fuel = row.get(self.sysop_fuel_col)
 
             for name_candidate in name_candidates_fn(row):
-                if pd.isna(name_candidate) or not str(name_candidate).strip():
+                clean_candidate = strip_str(name_candidate)
+                if clean_candidate is None:
                     continue
 
                 result = matcher.match(
-                    target_name=str(name_candidate).strip(),
+                    target_name=clean_candidate,
                     fuel_type=sysop_fuel,
                     threshold=75,  # lower to get more matches with enhanced fuzzy matching
                 )

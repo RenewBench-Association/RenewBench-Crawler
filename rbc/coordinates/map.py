@@ -31,6 +31,7 @@ import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.utils import map_html as tpl
+from rbc.coordinates.utils.values import is_missing, strip_lower_str, strip_str
 
 BROWSERS = ["safari", "google-chrome", "chrome"]  # browsers that display without error
 _LINK_COL_PATTERNS = {"_url", "_link", "website", "contact:website"}  # cols with links
@@ -309,8 +310,8 @@ class _EgeMap:
 
             for _, row in matched.iterrows():
                 ms_algorithm = (
-                    str(row[self.match_source_col])
-                    if self.match_source_col and pd.notna(row[self.match_source_col])
+                    strip_str(row[self.match_source_col]) or "unknown"
+                    if self.match_source_col
                     else "unknown"
                 )
                 ms_groups.setdefault(ms_algorithm, []).append(row)
@@ -377,7 +378,7 @@ class _EgeMap:
                 rows_html.append(tpl.popup_row_html(col, _geometry_summary(val)))
                 continue
 
-            if not isinstance(val, (dict, list)) and pd.isna(val):
+            if is_missing(val):
                 continue
 
             # define how row values are displayed (simple values as is or links as href)
@@ -408,7 +409,7 @@ class _EgeMap:
             tooltip (str): Text for tooltip (pop-up box).
         """
         geom = row.get("osm_geometry")
-        if geom is None or (isinstance(geom, float) and pd.isna(geom)):
+        if is_missing(geom):
             return
         if isinstance(geom, str):
             try:
@@ -443,12 +444,12 @@ class _EgeMap:
 
         for df in self.dfs:
             for val in df.get(self.match_source_col, fallback).dropna().unique():
-                key = str(val).strip().lower()
-                used_ms_algorithms.setdefault(key, _match_source_color(val))
+                used_ms_algorithms.setdefault(
+                    strip_lower_str(val), _match_source_color(val)
+                )
 
             for val in df.get(self.fuel_col, fallback).dropna().unique():
-                key = str(val).strip().lower()
-                used_fueltypes.setdefault(key, _fueltype_icon(val))
+                used_fueltypes.setdefault(strip_lower_str(val), _fueltype_icon(val))
 
         panels = []
         if used_ms_algorithms:
@@ -481,9 +482,9 @@ class _EgeMap:
                 fuel = None
 
                 if self.fuel_col:
-                    f = row[self.fuel_col]
-                    if f is not None and not (isinstance(f, float) and pd.isna(f)):
-                        fuel = _html.escape(str(f).strip())
+                    f = strip_str(row[self.fuel_col])
+                    if f:
+                        fuel = _html.escape(f)
 
                 items.append(tpl.sidebar_item_html(name, fuel))
 
@@ -512,9 +513,7 @@ def _match_source_color(source: Any) -> str:
     Returns:
         str: Color defined by `match_source` value. Defaults to _DEFAULT_COLOR ("lightgray").
     """
-    if source is None or (isinstance(source, float) and pd.isna(source)):
-        return _DEFAULT_COLOR
-    return _MATCH_SOURCE_COLORS.get(str(source).strip().lower(), _DEFAULT_COLOR)
+    return _MATCH_SOURCE_COLORS.get(strip_lower_str(source), _DEFAULT_COLOR)
 
 
 def _fueltype_icon(fueltype: Any) -> str:
@@ -526,10 +525,10 @@ def _fueltype_icon(fueltype: Any) -> str:
     Returns:
         str: Icon defined by fuel type value. Defaults to _DEFAULT_ICON ("bolt").
     """
-    if fueltype is None or (isinstance(fueltype, float) and pd.isna(fueltype)):
+    key = strip_lower_str(fueltype)
+    if not key:
         return _DEFAULT_ICON
 
-    key = str(fueltype).strip().lower()
     for fragment, icon in _FUEL_ICONS.items():
         if fragment in key:
             return icon
@@ -545,7 +544,7 @@ def _geometry_summary(geom: Any) -> str:
     Returns:
         str: Description of the ``osm_geometry`` value.
     """
-    if geom is None or (isinstance(geom, float) and pd.isna(geom)):
+    if is_missing(geom):
         return "—"
 
     if isinstance(geom, str):

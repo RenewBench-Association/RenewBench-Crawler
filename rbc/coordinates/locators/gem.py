@@ -20,6 +20,8 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.utils.values import strip_str
+
 # Per-tracker file glob pattern, main data sheet name, and default fuel type (used
 # when the tracker itself doesn't carry a per-row "Fuel" column).
 _TRACKER_SPECS: dict[str, dict[str, str | None]] = {
@@ -391,10 +393,10 @@ class GEMLocator:
             dict: matched row values with keys from `GEM_COLS`, or `None` if not found or the
                 row has no coordinates.
         """
-        if len(self.df_gem) == 0 or not entsoe_id or pd.isna(entsoe_id):
+        target = strip_str(entsoe_id)
+        if len(self.df_gem) == 0 or target is None:
             return None
 
-        target = str(entsoe_id).strip()
         pos = self._entsoe_id_index.get(target)
         if pos is None:
             return None

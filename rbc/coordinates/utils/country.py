@@ -5,6 +5,8 @@ Utility functions for handling country-related logic.
 
 import re
 
+from rbc.coordinates.utils.values import strip_lower_str, strip_str
+
 
 def normalize_country_for_matching(country: str | None) -> str | None:
     """Normalize a country name to match PPM database country names.
@@ -19,10 +21,9 @@ def normalize_country_for_matching(country: str | None) -> str | None:
     Returns:
         Normalized country name or provided "country" value if no normalization possible.
     """
-    if not country:
+    country = strip_str(country)
+    if country is None:
         return None
-
-    country = str(country).strip()
 
     # 1. Extract base country name by removing suffixes (e.g. "Germany (tennet)" -> "Germany")
     base_country = re.sub(r"\s*\([^)]*\)\s*$", "", country).strip()
@@ -75,5 +76,5 @@ def get_ppm_country_name(country: str | None) -> str | None:
         "fr": "France",
     }
 
-    country_lower = str(country).strip().lower()
+    country_lower = strip_lower_str(country)
     return ppm_country_aliases.get(country_lower, country)

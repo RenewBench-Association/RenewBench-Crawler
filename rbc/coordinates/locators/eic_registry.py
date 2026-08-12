@@ -18,6 +18,8 @@ import requests
 from loguru import logger
 from rapidfuzz import fuzz, process
 
+from rbc.coordinates.utils.values import strip_str
+
 EIC_DIRECTORY_URL = (
     "https://eepublicdownloads.blob.core.windows.net/cio-lio/csv/W_eicCodes.csv"
 )
@@ -63,24 +65,13 @@ def extract_prefix(name: str | None) -> str:
         name (str | None): Name string to be assessed.
 
     Returns:
-        str | None: Upper-case leading alphabetic prefix of ``name`` or "" if no ``name``.
+        str: Upper-case leading alphabetic prefix of ``name`` or "" if no ``name``.
     """
-    if not name:
+    clean_name = strip_str(name)
+    if clean_name is None:
         return ""
-    match = _ALPHA_PREFIX_PATTERN.match(str(name).strip())
+    match = _ALPHA_PREFIX_PATTERN.match(clean_name)
     return match.group(0).upper() if match else ""
-
-
-def safe_str(val: object) -> str | None:
-    """Return a safe string (stripped) from a provided object.
-
-    Args:
-        val (object): Value to be stripped.
-
-    Returns:
-        str | None: Stripped string or None if value is missing/blank.
-    """
-    return str(val).strip() if pd.notna(val) and str(val).strip() else None
 
 
 class EICCodeRegistry:
@@ -252,7 +243,7 @@ class EICCodeRegistry:
 
         index: dict[str, int] = {}
         for pos, code in enumerate(self.df_eic[CODE_COL]):
-            if clean_code := safe_str(code):
+            if clean_code := strip_str(code):
                 index.setdefault(clean_code, pos)
         self._eic_index = index
 
@@ -270,10 +261,11 @@ class EICCodeRegistry:
             ``EicDisplayName``, ``EicLongName``, ``EicParent``, ``EicResponsibleParty``,
             ``EicStatus``, ``EicTypeFunctionList``. Values are stripped strings or None.
         """
-        if self.df_eic.empty or not eic_code:
+        clean_code = strip_str(eic_code)
+        if self.df_eic.empty or clean_code is None:
             return {}
 
-        pos = self._eic_index.get(str(eic_code).strip())
+        pos = self._eic_index.get(clean_code)
         if pos is None:
             return {}
 
@@ -281,7 +273,7 @@ class EICCodeRegistry:
         result: dict[str, str | None] = {}
         for col in self.WCODE_FIELDS:
             if col in row.index:
-                result[col] = safe_str(row[col])
+                result[col] = strip_str(row[col])
             else:
                 result[col] = None
         return result
@@ -361,7 +353,7 @@ class EICCodeRegistry:
         Returns:
             dict | None: Details on the matched EGE, if a parent exists and match was found.
         """
-        parent_code = safe_str(parent)
+        parent_code = strip_str(parent)
         if parent_code is None:
             return None
 
@@ -420,7 +412,7 @@ class EICCodeRegistry:
                     cand_long = cand_row.get(LONGNAME_COL)
                     sub_score = (
                         fuzz.token_set_ratio(long_name, cand_long)
-                        if long_name and cand_long and pd.notna(cand_long)
+                        if long_name and strip_str(cand_long)
                         else 0.0
                     )
                     if sub_score > best_sub_score:
@@ -458,10 +450,7 @@ class EICCodeRegistry:
             return None
 
         # Build query names from the generation EGE (prefer LongName)
-        unit_names: list[str] = []
-        for n in (long_name, display_name):
-            if n and str(n).strip():
-                unit_names.append(str(n).strip())
+        unit_names = [n for n in map(strip_str, (long_name, display_name)) if n]
         if not unit_names:
             return None
 
@@ -513,20 +502,20 @@ class EICCodeRegistry:
             dict[str, str | float | None] | None: Dictionary of match result details
                 or None if score is lower than threshold.
         """
-        if party and safe_str(row.get(PARTY_COL)) == safe_str(party):
+        if party and strip_str(row.get(PARTY_COL)) == strip_str(party):
             score = min(100.0, score + PARTY_BONUS)
 
         if score < MIN_MATCH_SCORE:
             return None
 
         return {
-            CODE_COL: safe_str(row[CODE_COL]),  # keep direct; should not fail quietly!
-            DISPLAYNAME_COL: safe_str(row.get(DISPLAYNAME_COL)),
-            LONGNAME_COL: safe_str(row.get(LONGNAME_COL)),
-            PARENT_COL: safe_str(row.get(PARENT_COL)),
-            PARTY_COL: safe_str(row.get(PARTY_COL)),
-            STATUS_COL: safe_str(row.get(STATUS_COL)),
-            TYPE_COL: safe_str(row.get(TYPE_COL)),
+            CODE_COL: strip_str(row[CODE_COL]),  # keep direct; should not fail quietly!
+            DISPLAYNAME_COL: strip_str(row.get(DISPLAYNAME_COL)),
+            LONGNAME_COL: strip_str(row.get(LONGNAME_COL)),
+            PARENT_COL: strip_str(row.get(PARENT_COL)),
+            PARTY_COL: strip_str(row.get(PARTY_COL)),
+            STATUS_COL: strip_str(row.get(STATUS_COL)),
+            TYPE_COL: strip_str(row.get(TYPE_COL)),
             "match_score": score,
             "match_confidence": "high" if score >= HIGH_MATCH_SCORE else "medium",
             "match_method": method,
