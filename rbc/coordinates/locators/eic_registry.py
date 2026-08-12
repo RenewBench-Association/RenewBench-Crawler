@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import re
+from functools import cached_property
 from pathlib import Path
 
 import pandas as pd
@@ -28,13 +29,19 @@ HEADER = {
 }
 
 # Column names in the W-type EIC CSV (semicolon-delimited, stable as of 2026)
-EIC_COL = "EicCode"
-DISPLAY_NAME_COL = "EicDisplayName"
-LONG_NAME_COL = "EicLongName"
+CODE_COL = "EicCode"
+DISPLAYNAME_COL = "EicDisplayName"
+LONGNAME_COL = "EicLongName"
 PARENT_COL = "EicParent"
 PARTY_COL = "EicResponsibleParty"
 STATUS_COL = "EicStatus"
 TYPE_COL = "EicTypeFunctionList"
+
+_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    CODE_COL: ("eiccode", "eic_code", "eic code", "eic", "code"),
+    DISPLAYNAME_COL: ("eicdisplayname", "display_name", "displayname"),
+    LONGNAME_COL: ("eiclongname", "long_name", "longname"),
+}
 
 # Constants for threshold / score values
 MIN_MATCH_SCORE, HIGH_MATCH_SCORE = 80.0, 90.0
@@ -42,15 +49,15 @@ EXACT_PREFIX_SCORE, PARTIAL_PREFIX_SCORE = 95.0, 85.0
 MIN_PREFIX_OVERLAP = 5
 PARTY_BONUS = 5.0
 
-# Match the leading alphabetic run ('BASE' of '<BASE>_<suffix>') of an EIC display name
+# Match the leading alphabetic run ('PREFIX' of '<PREFIX>_<SUFFIX>') of an EIC display name
 _ALPHA_PREFIX_PATTERN = re.compile(r"^[A-Za-z]+")
 
 
-def alpha_prefix(name: str | None) -> str:
+def extract_prefix(name: str | None) -> str:
     """Extract the leading alphabetic run of ``name`` string (e.g. 'MGRES' from 'MGRES_G4').
 
-    Gets the 'BASE' in strings following the '<BASE>_<suffix>' naming convention,
-    where 'BASE' is shared between child generation and parent production EGEs.
+    Gets the 'PREFIX' in strings following the '<PREFIX>_<SUFFIX>' naming convention,
+    where 'PREFIX' is shared between child generation and parent production EGEs.
 
     Args:
         name (str | None): Name string to be assessed.
@@ -91,12 +98,20 @@ class EICCodeRegistry:
 
     # Fields returned by lookup_full_row
     WCODE_FIELDS: tuple[str, ...] = (
-        DISPLAY_NAME_COL,
-        LONG_NAME_COL,
+        DISPLAYNAME_COL,
+        LONGNAME_COL,
         PARENT_COL,
         PARTY_COL,
         STATUS_COL,
         TYPE_COL,
+    )
+    # Fields returned by find_parent_production_unit
+    MATCH_FIELDS: tuple[str, ...] = (
+        CODE_COL,
+        *WCODE_FIELDS,
+        "match_score",
+        "match_confidence",
+        "match_method",
     )
 
     def __init__(self, cache_dir: Path | None = None) -> None:
@@ -104,18 +119,70 @@ class EICCodeRegistry:
 
         Args:
             cache_dir (Path, optional): Directory for caching the downloaded registry.
-                Defaults to None (no caching).
+                Defaults to None, in which case no caching occurs.
         """
         self.cache_dir = cache_dir
         self.df_eic: pd.DataFrame = pd.DataFrame()
-        self._eic_col: str | None = None
-        self._display_name_col: str | None = None
-        self._long_name_col: str | None = None
         self._eic_index: dict[str, int] = {}
-        self._df_prod_cache: pd.DataFrame | None = None
-        self._prod_prefixes_cache: pd.Series | None = None
-        self._prod_candidates_cache: list[str] | None = None
+
+        # setup registry
         self._load()
+        self._build_eic_index()
+
+    # ------------------------------------------------------------------
+    # Cached properties (calculated once and re-used)
+    # ------------------------------------------------------------------
+    @cached_property
+    def _production_df(self) -> pd.DataFrame:
+        """Get dataframe of EIC entries defined as being "Production Unit" EGEs.
+
+        Returns:
+            pd.DataFrame: Df of "Production Unit" EGEs or empty one, if no TYPE_COL exists.
+        """
+        if TYPE_COL not in self.df_eic.columns:
+            logger.warning(
+                f"EICCodeRegistry: No {TYPE_COL} column exists, no production df!"
+            )
+            return pd.DataFrame()
+
+        # log EicTypeFunctionList once so exact string can be confirmed in this CSV version
+        distinct = sorted(self.df_eic[TYPE_COL].dropna().unique().tolist())
+        logger.debug(f"EICCodeRegistry: {TYPE_COL} values include:\n{distinct[:30]}")
+
+        mask = self.df_eic[TYPE_COL].str.contains(
+            r"Production.?Unit|A26", na=False, regex=True, case=False
+        )
+        return self.df_eic[mask].copy()
+
+    @cached_property
+    def _production_prefixes(self) -> pd.Series:
+        """Get prefixes of EIC's "Production Unit" EGEs with ``<prefix>_<suffix>`` matching.
+
+        Returns:
+            pd.Series: List of prefixes of "Production Unit" EGEs.
+        """
+        return self._production_df[DISPLAYNAME_COL].apply(extract_prefix)
+
+    @cached_property
+    def _production_candidates(self) -> list[str]:
+        """Build static candidate list of "Production Unit" EGE's long/display names once.
+
+        Returns:
+            list[str]: List of EGE candidates.
+        """
+        candidates: list[str] = []
+        for col in (LONGNAME_COL, DISPLAYNAME_COL):
+            if col in self._production_df.columns:
+                candidates.extend(
+                    self._production_df[col].dropna().str.strip().tolist()
+                )
+        seen: set[str] = set()
+        unique_candidates: list[str] = []
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                unique_candidates.append(c)
+        return unique_candidates
 
     # ------------------------------------------------------------------
     # Setup helpers
@@ -129,7 +196,7 @@ class EICCodeRegistry:
         if cache_path and cache_path.exists():
             logger.info(f"EICCodeRegistry: loading from cache '{cache_path}'")
             self.df_eic = pd.read_csv(cache_path, sep=";", dtype=str)
-            self._detect_columns()
+            self._check_columns()
             return
 
         try:
@@ -138,7 +205,7 @@ class EICCodeRegistry:
             resp.raise_for_status()
 
             self.df_eic = pd.read_csv(io.StringIO(resp.text), sep=";", dtype=str)
-            self._detect_columns()
+            self._check_columns()
 
             if cache_path and not self.df_eic.empty:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,57 +218,42 @@ class EICCodeRegistry:
                 "Name enrichment via EIC directory will be unavailable."
             )
 
-    def _detect_columns(self) -> None:
-        """Detect which columns hold EIC codes and display/long names."""
-        # Prefer known stable column names from the W-type CSV format.
-        if EIC_COL in self.df_eic.columns:
-            self._eic_col = EIC_COL
-            if DISPLAY_NAME_COL in self.df_eic.columns:
-                self._display_name_col = DISPLAY_NAME_COL
-            if LONG_NAME_COL in self.df_eic.columns:
-                self._long_name_col = LONG_NAME_COL
-            logger.info(f"EICCodeRegistry initialized: {len(self.df_eic)} entries")
-            self._build_eic_index()
-            return
-
-        # Fallback: case-insensitive detection for cached files with different format.
-        cols_lower = {c.strip().lower(): c for c in self.df_eic.columns}
-        for candidate in ("eiccode", "eic_code", "eic code", "eic", "code"):
-            if candidate in cols_lower:
-                self._eic_col = cols_lower[candidate]
-                break
-        for candidate in ("eicdisplayname", "display_name", "displayname", "name"):
-            if candidate in cols_lower:
-                self._display_name_col = cols_lower[candidate]
-                break
-
-        for candidate in ("eiclongname", "long_name", "longname"):
-            if candidate in cols_lower:
-                self._long_name_col = cols_lower[candidate]
-                break
-
-        if self._eic_col and (self._display_name_col or self._long_name_col):
+    def _check_columns(self) -> None:
+        """Ensure columns that hold relevant info exist; rename if they're not the default."""
+        cols = self.df_eic.columns
+        cols_lower = {c.strip().lower(): c for c in cols}
+        renames = {
+            cols_lower[alias]: default
+            for default, aliases in _COLUMN_ALIASES.items()
+            if default not in cols
+            for alias in aliases
+            if alias in cols_lower
+        }
+        if renames:
             logger.info(
-                f"EICCodeRegistry initialized: {len(self.df_eic)} entries | "
-                f"EIC col='{self._eic_col}' | "
-                f"long='{self._long_name_col}' | display='{self._display_name_col}'"
+                f"EICCodeRegistry: Default column names not present; renaming required. "
+                f"\nNormalized columns: {renames}"
             )
-        else:
+            self.df_eic = self.df_eic.rename(columns=renames)
+
+        if CODE_COL not in self.df_eic.columns:
             logger.warning(
-                "EICCodeRegistry: could not identify required columns. "
-                f"Available: {list(self.df_eic.columns)}"
+                f"EICCodeRegistry: Could not identify required columns (EIC code and names)! "
+                f"\nAvailable columns: {list(self.df_eic.columns)}"
             )
-        self._build_eic_index()
+            self.df_eic = pd.DataFrame()
+
+        logger.info(f"EICCodeRegistry initialized: {len(self.df_eic)} entries")
 
     def _build_eic_index(self) -> None:
         """Pre-compute an index for EIC codes and their row positions once (for 30k+ rows)."""
-        if len(self.df_eic) == 0 or not self._eic_col:
+        if self.df_eic.empty:
             return
 
         index: dict[str, int] = {}
-        for pos, code in enumerate(self.df_eic[self._eic_col]):
-            if pd.notna(code):
-                index.setdefault(str(code).strip(), pos)
+        for pos, code in enumerate(self.df_eic[CODE_COL]):
+            if clean_code := safe_str(code):
+                index.setdefault(clean_code, pos)
         self._eic_index = index
 
     # ------------------------------------------------------------------
@@ -214,11 +266,11 @@ class EICCodeRegistry:
             eic_code (str): ENTSO-E EIC code to look up.
 
         Returns:
-            dict with keys EicDisplayName, EicLongName, EicParent,
-            EicResponsibleParty, EicStatus, EicTypeFunctionList.  Values are
-            stripped strings or None.  Returns an empty dict if not found.
+            dict: Select columns and values for a given EIC code, with columns as keys:
+            ``EicDisplayName``, ``EicLongName``, ``EicParent``, ``EicResponsibleParty``,
+            ``EicStatus``, ``EicTypeFunctionList``. Values are stripped strings or None.
         """
-        if len(self.df_eic) == 0 or not self._eic_col or not eic_code:
+        if self.df_eic.empty or not eic_code:
             return {}
 
         pos = self._eic_index.get(str(eic_code).strip())
@@ -236,7 +288,7 @@ class EICCodeRegistry:
 
     def find_parent_production_unit(
         self,
-        eic_parent: str | None,
+        parent: str | None,
         display_name: str | None,
         long_name: str | None,
         responsible_party: str | None,
@@ -247,8 +299,8 @@ class EICCodeRegistry:
         1. Direct lookup (``match_method = "direct_parent"``):
             If `eic_parent` is not empty, look it up directly in the EIC and return that row.
         2. Display-name prefix match (``match_method = "display_prefix"``):
-            Many EIC entries follow a ``"<BASE>_<suffix>"`` naming convention where a
-            generation EGE and its parent production EGE share the same alphabetic base token
+            Many EIC entries follow a ``"<PREFIX>_<SUFFIX>"`` naming convention where a
+            generation EGE and parent production EGE share the same alphabetic prefix token
             (e.g. "MGRES_G4", "MGRES_PU"). Find cases where `eic_parent` is empty and the long
             names are too generic/dissimilar for the fuzzy fallback (3.) to reach the score.
         3. Fuzzy search (``match_method = "fuzzy"``):
@@ -259,7 +311,7 @@ class EICCodeRegistry:
         Only accepted when the final score ≥ 80. Match confidence is "high" when ≥ 90.
 
         Args:
-            eic_parent (str | None): EicParent value from the generation EGE's own EIC row.
+            parent (str | None): EicParent value from the generation EGE's own EIC row.
             display_name (str | None): EicDisplayName of the generation EGE.
             long_name (str | None): EicLongName of the generation EGE.
             responsible_party (str | None): EicResponsibleParty of the generation EGE;
@@ -267,71 +319,86 @@ class EICCodeRegistry:
 
         Returns:
             dict | None: Details on the identified matching parent production EGE with keys
-            ``EicCode``, ``EicDisplayName``, ``EicLongName``, `EicResponsibleParty``,
+            ``EicCode``, ``EicDisplayName``, ``EicLongName``, ``EicParent``,
+            `EicResponsibleParty``, ``EicStatus``, ``EicTypeFunctionList``,
             ``match_score``, ``match_confidence`` (high ≥ 90 / medium ≥ 80),
             ``match_method`` ("direct_parent" / "display_prefix" / "fuzzy")
             or None if no match was found.
         """
-        if len(self.df_eic) == 0 or not self._eic_col:
+        if self.df_eic.empty:
             return None
 
-        # --- Strategy 1: direct parent EIC lookup ---
-        if eic_parent and str(eic_parent).strip():
-            parent_data = self.lookup_full_row(str(eic_parent).strip())
-            if parent_data:
-                return {
-                    "EicCode": str(eic_parent).strip(),
-                    **parent_data,
-                    "match_score": 100.0,
-                    "match_confidence": "high",
-                    "match_method": "direct_parent",
-                }
+        # === Strategy 1: direct parent EIC lookup ===
+        if (hit := self._match_direct_parent(parent)) is not None:
+            return hit
 
-        # --- Strategy 2: fuzzy match against Production Unit entries ---
-        if TYPE_COL not in self.df_eic.columns:
+        # --- Strategies 2 & 3: match against "Production Unit" entries ---
+        # compute the static "Production Unit" EGE subset (and its derivations) once
+        if self._production_df.empty:
+            logger.warning("EICCodeRegistry: No 'Production Unit' EGEs in EIC!")
             return None
 
-        # Log EicTypeFunctionList once so exact string can be confirmed in this CSV version
-        if not getattr(self, "_prod_type_logged", False):
-            distinct = sorted(self.df_eic[TYPE_COL].dropna().unique().tolist())
-            logger.debug(
-                f"EICCodeRegistry: distinct EicTypeFunctionList values "
-                f"(first 30): {distinct[:30]}"
-            )
-            self._prod_type_logged = True
+        # === Strategy 2: display-name prefix match (fast, high precision) ===
+        if (
+            hit := self._match_prefix(display_name, long_name, responsible_party)
+        ) is not None:
+            return hit
 
-        # Compute the static "Production Unit" EGE subset (and its derivations) once
-        if self._df_prod_cache is None:
-            prod_mask = self.df_eic[TYPE_COL].str.contains(
-                r"Production.?Unit|A26", na=False, regex=True, case=False
-            )
-            self._df_prod_cache = self.df_eic[prod_mask].copy()
-        df_prod = self._df_prod_cache
-        if len(df_prod) == 0:
-            logger.debug(
-                "EICCodeRegistry: no 'Production Unit' EGE entries found in EIC "
-                "directory for fuzzy parent matching."
-            )
+        # === Strategy 3: fuzzy match against "Production Unit" entries ===
+        return self._match_fuzzy(display_name, long_name, responsible_party)
+
+    # ------------------------------------------------------------------
+    # Strategy & general helper methods
+    # ------------------------------------------------------------------
+    def _match_direct_parent(
+        self, parent: str | None
+    ) -> dict[str, str | float | None] | None:
+        """Strategy 1: direct parent EIC lookup.
+
+        Args:
+            parent (str | None): EICParent value from the generation EGE's own EIC row.
+
+        Returns:
+            dict | None: Details on the matched EGE, if a parent exists and match was found.
+        """
+        parent_code = safe_str(parent)
+        if parent_code is None:
             return None
 
-        # --- Strategy 2: display-name prefix match (fast, high precision) ---
+        pos = self._eic_index.get(parent_code)
+        if pos is None:
+            return None
+
+        return self._build_match_result(
+            row=self.df_eic.iloc[pos], score=100.0, method="direct_parent"
+        )
+
+    def _match_prefix(
+        self, display_name: str | None, long_name: str | None, party: str | None
+    ) -> dict[str, str | float | None] | None:
+        """Strategy 2: display-name prefix match (fast, high precision).
+
+        Args:
+            display_name (str | None): EICDisplayName of the generation EGE.
+            long_name (str | None): EICLongName of the generation EGE.
+            party (str | None): EICResponsibleParty of the generation EGE.
+
+        Returns:
+            dict | None: Details on the matched EGE, if a match was found.
+        """
         prefix_hit_row = None
         prefix_score = -1.0
-        child_prefix = alpha_prefix(display_name)
-        if child_prefix and len(child_prefix) >= 3 and self._display_name_col:
-            if self._prod_prefixes_cache is None:
-                self._prod_prefixes_cache = df_prod[self._display_name_col].apply(
-                    alpha_prefix
-                )
-            prod_prefixes = self._prod_prefixes_cache
-            exact_candidates = df_prod[prod_prefixes == child_prefix]
+        child_prefix = extract_prefix(display_name)
+        if child_prefix and len(child_prefix) >= 3:
+            prod_prefixes = self._production_prefixes
+            exact_candidates = self._production_df[prod_prefixes == child_prefix]
 
             if len(exact_candidates) > 0:
                 df_prefix_candidates = exact_candidates
                 base_score = EXACT_PREFIX_SCORE
             else:
-                # Requires a reasonably long shared prefix to avoid false groupings
-                # E.g. wrong match: "HPPENGURIUNIT" (GE) → "HPP_SESTRIMO" (BG) due to "HPP"
+                # requires a reasonably long shared prefix to avoid false groupings
+                # e.g. wrong match: "HPPENGURIUNIT" (GE) → "HPP_SESTRIMO" (BG) due to "HPP"
                 contains_mask = prod_prefixes.apply(
                     lambda p: (
                         bool(p)
@@ -339,21 +406,18 @@ class EICCodeRegistry:
                         and (p.startswith(child_prefix) or child_prefix.startswith(p))
                     )
                 )
-                df_prefix_candidates = df_prod[contains_mask]
+                df_prefix_candidates = self._production_df[contains_mask]
                 base_score = PARTIAL_PREFIX_SCORE
 
             if len(df_prefix_candidates) == 1:
                 prefix_hit_row = df_prefix_candidates.iloc[0]
                 prefix_score = base_score
+
             elif len(df_prefix_candidates) > 1:
-                # Multiple candidates share prefix: find match in subset with long-name fuzzy
+                # multiple candidates share prefix: find match in subset with long-name fuzzy
                 best_sub_score = -1.0
                 for _, cand_row in df_prefix_candidates.iterrows():
-                    cand_long = (
-                        cand_row.get(self._long_name_col)
-                        if self._long_name_col
-                        else None
-                    )
+                    cand_long = cand_row.get(LONGNAME_COL)
                     sub_score = (
                         fuzz.token_set_ratio(long_name, cand_long)
                         if long_name and cand_long and pd.notna(cand_long)
@@ -364,53 +428,32 @@ class EICCodeRegistry:
                         prefix_hit_row = cand_row
                 prefix_score = min(base_score, MIN_MATCH_SCORE + best_sub_score * 0.15)
                 logger.debug(
-                    f"EICCodeRegistry: {len(df_prefix_candidates)} production units "
-                    f"share display-name prefix '{child_prefix}' — picked best long-name match."
+                    f"EICCodeRegistry: {len(df_prefix_candidates)} production units share "
+                    f"display-name prefix '{child_prefix}' — picked best long-name match."
                 )
 
-        if prefix_hit_row is not None:
-            # Apply responsible-party bonus
-            if (
-                responsible_party
-                and PARTY_COL in prefix_hit_row.index
-                and pd.notna(prefix_hit_row[PARTY_COL])
-                and str(responsible_party).strip()
-                == str(prefix_hit_row[PARTY_COL]).strip()
-            ):
-                prefix_score = min(100.0, prefix_score + PARTY_BONUS)
+        if prefix_hit_row is None:
+            return None
 
-            confidence = "high" if prefix_score >= HIGH_MATCH_SCORE else "medium"
-            return {
-                "EicCode": safe_str(prefix_hit_row[self._eic_col]),
-                "EicDisplayName": safe_str(prefix_hit_row.get(self._display_name_col))
-                if self._display_name_col
-                else None,
-                "EicLongName": safe_str(prefix_hit_row.get(self._long_name_col))
-                if self._long_name_col
-                else None,
-                "EicResponsibleParty": safe_str(prefix_hit_row.get(PARTY_COL))
-                if PARTY_COL in prefix_hit_row.index
-                else None,
-                "match_score": prefix_score,
-                "match_confidence": confidence,
-                "match_method": "display_prefix",
-            }
+        return self._build_match_result(
+            row=prefix_hit_row, score=prefix_score, method="display_prefix", party=party
+        )
 
-        # --- Strategy 3: fuzzy match against "Production Unit" entries ---
+    def _match_fuzzy(
+        self, display_name: str | None, long_name: str | None, party: str | None
+    ) -> dict[str, str | float | None] | None:
+        """Strategy 3: fuzzy match against "Production Unit" entries.
+
+        Args:
+            display_name (str | None): EICDisplayName of the generation EGE.
+            long_name (str | None): EICLongName of the generation EGE.
+            party (str | None): EICResponsibleParty of the generation EGE.
+
+        Returns:
+            dict | None: Details on the matched EGE, if a match was found.
+        """
         # Build the static candidate name list from production EGE long/display names once
-        if self._prod_candidates_cache is None:
-            candidates: list[str] = []
-            for col in (self._long_name_col, self._display_name_col):
-                if col and col in df_prod.columns:
-                    candidates.extend(df_prod[col].dropna().str.strip().tolist())
-            seen: set[str] = set()
-            unique_candidates: list[str] = []
-            for c in candidates:
-                if c and c not in seen:
-                    seen.add(c)
-                    unique_candidates.append(c)
-            self._prod_candidates_cache = unique_candidates
-        unique_candidates = self._prod_candidates_cache
+        unique_candidates = self._production_candidates
         if not unique_candidates:
             return None
 
@@ -435,43 +478,56 @@ class EICCodeRegistry:
         if best_score < MIN_MATCH_SCORE or best_match_name is None:
             return None
 
-        # Locate the matching row in df_prod
+        # Locate the matching row in self._production_df
         hit_row = None
-        for col in (self._long_name_col, self._display_name_col):
-            if col and col in df_prod.columns:
-                matches = df_prod[df_prod[col].str.strip() == best_match_name]
+        for col in (LONGNAME_COL, DISPLAYNAME_COL):
+            if col in self._production_df.columns:
+                matches = self._production_df[
+                    self._production_df[col].str.strip() == best_match_name
+                ]
                 if len(matches) > 0:
                     hit_row = matches.iloc[0]
                     break
+
         if hit_row is None:
             return None
 
-        # Apply responsible-party bonus
-        if (
-            responsible_party
-            and PARTY_COL in hit_row.index
-            and pd.notna(hit_row[PARTY_COL])
-            and str(responsible_party).strip() == str(hit_row[PARTY_COL]).strip()
-        ):
-            best_score = min(100.0, best_score + PARTY_BONUS)
+        return self._build_match_result(
+            row=hit_row, score=best_score, method="fuzzy", party=party
+        )
 
-        if best_score < MIN_MATCH_SCORE:
+    @staticmethod
+    def _build_match_result(
+        row: pd.Series, score: float, method: str, party: str | None = None
+    ) -> dict[str, str | float | None] | None:
+        """Build the match result dict to be returned by ``find_parent_production_unit``.
+
+        Args:
+            row (pandas.Series): Matched production EGE data row.
+            score (float): Matching score achieved by the row.
+            method (str): Method by which the match was found (e.g. "direct_parent").
+            party (str | None): EicResponsibleParty of the generation EGE;
+                used as a matching bonus. Defaults to None, when no bonus is applied.
+
+        Returns:
+            dict[str, str | float | None] | None: Dictionary of match result details
+                or None if score is lower than threshold.
+        """
+        if party and safe_str(row.get(PARTY_COL)) == safe_str(party):
+            score = min(100.0, score + PARTY_BONUS)
+
+        if score < MIN_MATCH_SCORE:
             return None
 
-        confidence = "high" if best_score >= HIGH_MATCH_SCORE else "medium"
-
         return {
-            "EicCode": safe_str(hit_row[self._eic_col]),
-            "EicDisplayName": safe_str(hit_row.get(self._display_name_col))
-            if self._display_name_col
-            else None,
-            "EicLongName": safe_str(hit_row.get(self._long_name_col))
-            if self._long_name_col
-            else None,
-            "EicResponsibleParty": safe_str(hit_row.get(PARTY_COL))
-            if PARTY_COL in hit_row.index
-            else None,
-            "match_score": best_score,
-            "match_confidence": confidence,
-            "match_method": "fuzzy",
+            CODE_COL: safe_str(row[CODE_COL]),  # keep direct; should not fail quietly!
+            DISPLAYNAME_COL: safe_str(row.get(DISPLAYNAME_COL)),
+            LONGNAME_COL: safe_str(row.get(LONGNAME_COL)),
+            PARENT_COL: safe_str(row.get(PARENT_COL)),
+            PARTY_COL: safe_str(row.get(PARTY_COL)),
+            STATUS_COL: safe_str(row.get(STATUS_COL)),
+            TYPE_COL: safe_str(row.get(TYPE_COL)),
+            "match_score": score,
+            "match_confidence": "high" if score >= HIGH_MATCH_SCORE else "medium",
+            "match_method": method,
         }

@@ -73,39 +73,57 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
         output_dir=Path(tmp_path, "out"),
         gem_loc=cast(
             GEMLocator,
-            SimpleNamespace(
-                match_by_entsoe_id=lambda eic: None,
-                df_gem=pd.DataFrame(
-                    [
-                        {
-                            "plant_name": "Riverside Plant",
-                            "other_names": "",
-                            "Country": "Netherlands",
-                            "Fueltype": "Nuclear",
-                            "lat": 52.0,
-                            "lon": 5.0,
-                            "gem_unit_id": "gem-nl-1",
-                        }
-                    ]
+            cast(
+                object,
+                SimpleNamespace(
+                    match_by_entsoe_id=lambda eic: None,
+                    df_gem=pd.DataFrame(
+                        [
+                            {
+                                "plant_name": "Riverside Plant",
+                                "other_names": "",
+                                "Country": "Netherlands",
+                                "Fueltype": "Nuclear",
+                                "lat": 52.0,
+                                "lon": 5.0,
+                                "gem_unit_id": "gem-nl-1",
+                            }
+                        ]
+                    ),
                 ),
             ),
         ),
         ppm_loc=cast(
             PPMLocator,
-            SimpleNamespace(
-                PPM_COLS=PPMLocator.PPM_COLS,
-                match_by_entsoe_id=lambda eic: None,
-                df=pd.DataFrame(
-                    columns=["Name", "Country", "Fueltype", "lat", "lon", "id", "EIC"]
+            cast(
+                object,
+                SimpleNamespace(
+                    PPM_COLS=PPMLocator.PPM_COLS,
+                    match_by_entsoe_id=lambda eic: None,
+                    df=pd.DataFrame(
+                        columns=[
+                            "Name",
+                            "Country",
+                            "Fueltype",
+                            "lat",
+                            "lon",
+                            "id",
+                            "EIC",
+                        ]
+                    ),
                 ),
             ),
         ),
         eic_reg=cast(
             EICCodeRegistry,
-            SimpleNamespace(
-                WCODE_FIELDS=EICCodeRegistry.WCODE_FIELDS,
-                lookup_full_row=lambda eic: {},
-                find_parent_production_unit=lambda **kwargs: None,
+            cast(
+                object,
+                SimpleNamespace(
+                    WCODE_FIELDS=EICCodeRegistry.WCODE_FIELDS,
+                    MATCH_FIELDS=EICCodeRegistry.MATCH_FIELDS,
+                    lookup_full_row=lambda eic: {},
+                    find_parent_production_unit=lambda **kwargs: None,
+                ),
             ),
         ),
     )

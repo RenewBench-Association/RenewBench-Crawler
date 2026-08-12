@@ -6,16 +6,8 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locators.eic_registry import (
-    DISPLAY_NAME_COL,
-    EIC_COL,
-    LONG_NAME_COL,
-    PARENT_COL,
-    PARTY_COL,
-    EICCodeRegistry,
-    alpha_prefix,
-    safe_str,
-)
+import rbc.coordinates.locators.eic_registry as eic
+from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.matcher import NameMatrixMatcher
@@ -26,12 +18,12 @@ from rbc.coordinates.utils.tokenizer import normalize_name
 WCODE_PREFIX = "wcode"
 WCODE_PARENT_PREFIX = f"{WCODE_PREFIX}.parent"
 
-WCODE_PARENT = f"{WCODE_PREFIX}.{PARENT_COL}"  # "wcode.EicParent"
-WCODE_LONGNAME = f"{WCODE_PREFIX}.{LONG_NAME_COL}"
-WCODE_DISPLAYNAME = f"{WCODE_PREFIX}.{DISPLAY_NAME_COL}"
-WCODE_PARTY = f"{WCODE_PREFIX}.{PARTY_COL}"
-WCODE_PARENT_EIC = f"{WCODE_PARENT_PREFIX}.{EIC_COL}"  # "wcode.parent.EicCode"
-WCODE_PARENT_LONGNAME = f"{WCODE_PARENT_PREFIX}.{LONG_NAME_COL}"
+WCODE_PARENT = f"{WCODE_PREFIX}.{eic.PARENT_COL}"  # "wcode.EicParent"
+WCODE_LONGNAME = f"{WCODE_PREFIX}.{eic.LONGNAME_COL}"
+WCODE_DISPLAYNAME = f"{WCODE_PREFIX}.{eic.DISPLAYNAME_COL}"
+WCODE_PARTY = f"{WCODE_PREFIX}.{eic.PARTY_COL}"
+WCODE_PARENT_EIC = f"{WCODE_PARENT_PREFIX}.{eic.CODE_COL}"  # "wcode.parent.EicCode"
+WCODE_PARENT_LONGNAME = f"{WCODE_PARENT_PREFIX}.{eic.LONGNAME_COL}"
 
 
 class EntsoePipeline(BasePipeline):
@@ -89,7 +81,7 @@ class EntsoePipeline(BasePipeline):
         self.eic_reg: EICCodeRegistry | None = (
             eic_reg
             if eic_reg is not None
-            else (EICCodeRegistry(cache_dir=self.output_dir))
+            else EICCodeRegistry(cache_dir=self.output_dir)
         )
         self.ppdb_loc: PPMLocator = (  # type: ignore[assignment]
             self.ppdb_loc if self.ppdb_loc is not None else PPMLocator()
@@ -206,21 +198,13 @@ class EntsoePipeline(BasePipeline):
             df (pd.DataFrame): The updated dataframe (now with parent units identified).
         """
         assert self.eic_reg is not None
-        parent_meta = [
-            "EicCode",
-            "EicDisplayName",
-            "EicLongName",
-            "EicResponsibleParty",
-            "match_score",
-            "match_confidence",
-            "match_method",
-        ]
-        for col in parent_meta:
+
+        for col in self.eic_reg.MATCH_FIELDS:
             df[f"{WCODE_PARENT_PREFIX}.{col}"] = None
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent = self.eic_reg.find_parent_production_unit(
-                eic_parent=row.get(WCODE_PARENT)
+                parent=row.get(WCODE_PARENT)
                 if pd.notna(row.get(WCODE_PARENT))
                 else None,
                 display_name=row.get(WCODE_DISPLAYNAME)
@@ -234,7 +218,7 @@ class EntsoePipeline(BasePipeline):
                 else None,
             )
             if parent is not None:
-                for col in parent_meta:
+                for col in self.eic_reg.MATCH_FIELDS:
                     df.at[idx, f"{WCODE_PARENT_PREFIX}.{col}"] = parent.get(col)
 
         parent_found = df[WCODE_PARENT_EIC].notna().sum()
@@ -323,16 +307,16 @@ class EntsoePipeline(BasePipeline):
         Returns:
             pd.Series: Combined series of fallback options.
         """
-        eic_parent = df[WCODE_PARENT].map(safe_str)
+        eic_parent = df[WCODE_PARENT].map(eic.safe_str)
 
         # OPTION 1: use fuzzy-resolved parent EIC code
         sysop_code_col = self.sysop_code_col  # define to prevent recall of property
         own_eic = (
-            df[sysop_code_col].map(safe_str)
+            df[sysop_code_col].map(eic.safe_str)
             if sysop_code_col and sysop_code_col in df
             else None
         )
-        parent_eic_resolved = df[WCODE_PARENT_EIC].map(safe_str)
+        parent_eic_resolved = df[WCODE_PARENT_EIC].map(eic.safe_str)
         distinct_parent_eic = pd.Series(
             [
                 p if p is not None and (own_eic is None or p != o) else None
@@ -371,7 +355,7 @@ class EntsoePipeline(BasePipeline):
 
         # OPTION 3: group by the shared alphabetic prefix of the official EIC display name
         display_prefix = df[WCODE_DISPLAYNAME].map(
-            lambda v: alpha_prefix(v) if pd.notna(v) else ""
+            lambda v: eic.extract_prefix(v) if pd.notna(v) else ""
         )
         display_prefix = display_prefix.map(
             lambda p: f"display_prefix:{p}" if len(p) >= 3 else None
