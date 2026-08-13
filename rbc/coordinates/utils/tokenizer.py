@@ -8,15 +8,13 @@ names via the same tokenize-and-weight function on both sides, instead of
 each candidate source expanding its own names ad hoc.
 
 Weighting is dictionary-based only (GENERIC_UNIT_TOKENS / PLANT_NAME_EXPANSIONS
-/ COUNTRY_PLANT_NAME_EXPANSIONS from mappings.py) -- no corpus-frequency
-statistics.
+/ COUNTRY_PLANT_NAME_EXPANSIONS from mappings.py).
 """
 
 import re
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
 
 from rapidfuzz import fuzz
 
@@ -27,28 +25,19 @@ from rbc.coordinates.mappings import (
 )
 from rbc.coordinates.utils.values import strip_lower_str
 
-LOW_WEIGHT = 0.1
-DEFAULT_WEIGHT = 1.0
 
-# Short alphanumeric unit-designator patterns not otherwise caught by the
-# vocabulary: "g1"/"u2" (letters+digits), bare digits like "3", or a bare
-# 1-2 letter block designator ("q", "h", "aa") as seen in e.g. "KW Boxberg
-# Block Q" / "Neurath F" / "Weisweiler H".
-UNIT_DESIGNATOR_RE = re.compile(r"^(?:[a-z]{1,4}\d{1,3}|\d{1,3}|[a-z]{1,2})$")
+@dataclass(frozen=True)
+class WeightedTokens:
+    """A name decomposed into its tokens and their importance weights."""
 
-# Minimum length of a vocabulary word considered by the *glued-name stripper*
-# (strip_vocabulary_glued). Vocabulary contains 2-letter ENTSO-E abbreviation
-# codes (he/te/ve/fe/ne/re) that are meant to match as a *whole* token (see
-# tokenize_and_expand's exact-key branch) -- allowing the stripper to also
-# treat them as strippable prefixes/suffixes causes false positives on
-# ordinary place names that merely happen to end in those two letters, e.g.
-# "auvere" ends in "re" then (after stripping) "ve", which would otherwise
-# mangle it down to "au". Restricting the stripper to length>=3 words avoids
-# this while still handling genuinely glued cases like "hpp"+"river"+"unit".
-MIN_STRIP_WORD_LEN = 3
+    tokens: tuple[str, ...]
+    weights: tuple[float, ...]
 
 
-def normalize_name(value: Optional[str]) -> str:
+# ---------------------------------------------------------------------------
+# Independent functions (pure string operators - no vocab, no country)
+# ---------------------------------------------------------------------------
+def normalize_name(value: str | None) -> str:
     """Normalize a power plant name for robust cross-source matching.
 
     Lowercase, strip diacritics, replace non-alphanumeric runs with a single
@@ -119,113 +108,22 @@ def strip_trailing_unit_suffix(value: str) -> str:
     return stripped if stripped and stripped != normalized else ""
 
 
-@lru_cache(maxsize=None)
-def build_vocabulary(country_code: Optional[str]) -> dict[str, str]:
-    """Merge GENERIC_UNIT_TOKENS + PLANT_NAME_EXPANSIONS + country overrides.
+def get_weighted_token_score(
+    target: WeightedTokens, candidate: WeightedTokens
+) -> float:
+    """Get the weighted-average best-token-match score between two WeightedTokens (0-100).
 
-    Keys are the strippable/expandable vocabulary words; values are what an
-    exact-key match expands to (generic unit tokens map to themselves).
-    """
-    vocabulary: dict[str, str] = {tok: tok for tok in GENERIC_UNIT_TOKENS}
-    vocabulary.update(PLANT_NAME_EXPANSIONS)
-    if country_code:
-        vocabulary.update(COUNTRY_PLANT_NAME_EXPANSIONS.get(country_code, {}))
-    return vocabulary
+    Each token in the target is matched against its best-fitting candidate token via
+    rapidfuzz.ratio (weighted by importance and normalized by total weight).
+    True distinctive name matches are rewarded far more than incidental matches on generic
+    (low-weight) tokens (e.g. two different EGEs both having "g1" are not weighted highly).
 
+    Args:
+        target (WeightedTokens): WeightedTokens to score.
+        candidate (WeightedTokens): WeightedTokens to score.
 
-def strip_vocabulary_glued(token: str, vocabulary: dict[str, str]) -> str:
-    """Repeatedly strip a known vocabulary word off the start or end of `token`.
-
-    Only whole vocabulary words of length >= MIN_STRIP_WORD_LEN are
-    considered (see module docstring for why short 2-letter entries are
-    excluded here). Returns the residual token, unchanged if nothing strips.
-    """
-    words = sorted(
-        (w for w in vocabulary if len(w) >= MIN_STRIP_WORD_LEN),
-        key=len,
-        reverse=True,
-    )
-    current = token
-    changed = True
-    while changed and current:
-        changed = False
-        for word in words:
-            if len(word) >= len(current):
-                continue
-            if current.startswith(word):
-                current = current[len(word) :]
-                changed = True
-                break
-            if current.endswith(word):
-                current = current[: len(current) - len(word)]
-                changed = True
-                break
-    return current
-
-
-def tokenize_and_expand(name: Optional[str], country_code: Optional[str]) -> list[str]:
-    """Normalize, split, and expand/strip each token against the vocabulary.
-
-    Exact vocabulary-key tokens (e.g. "he", "unit") expand to their mapped
-    value (split into separate tokens if multi-word, e.g. "ej" -> "power
-    plant elektrijaam" -> 3 tokens). Non-vocabulary tokens are passed through
-    the bidirectional glued-name stripper as a fallback.
-    """
-    vocabulary = build_vocabulary(country_code)
-    normalized = normalize_name(name)
-    if not normalized:
-        return []
-
-    out: list[str] = []
-    for tok in normalized.split():
-        if tok in vocabulary:
-            out.extend(vocabulary[tok].split())
-        else:
-            stripped = strip_vocabulary_glued(tok, vocabulary)
-            out.append(stripped if stripped else tok)
-    return out
-
-
-def token_weight(token: str, vocabulary: dict[str, str]) -> float:
-    """Dictionary-based token importance weight (no corpus-frequency stats).
-
-    - Exact vocabulary key (generic unit/plant-type word) -> LOW_WEIGHT
-    - Short alphanumeric unit-designator pattern (g1, u2, bare digits) -> LOW_WEIGHT
-    - Everything else (presumed discriminative place/plant name) -> DEFAULT_WEIGHT
-    """
-    if token in vocabulary:
-        return LOW_WEIGHT
-    if UNIT_DESIGNATOR_RE.match(token):
-        return LOW_WEIGHT
-    return DEFAULT_WEIGHT
-
-
-@dataclass(frozen=True)
-class WeightedTokens:
-    """A name decomposed into tokens paired with their importance weights."""
-
-    tokens: tuple[str, ...]
-    weights: tuple[float, ...]
-
-
-def weighted_tokenize(
-    name: Optional[str], country_code: Optional[str]
-) -> WeightedTokens:
-    """Tokenize + expand `name`, then weight each resulting token."""
-    vocabulary = build_vocabulary(country_code)
-    tokens = tuple(tokenize_and_expand(name, country_code))
-    weights = tuple(token_weight(tok, vocabulary) for tok in tokens)
-    return WeightedTokens(tokens=tokens, weights=weights)
-
-
-def weighted_token_score(target: WeightedTokens, candidate: WeightedTokens) -> float:
-    """Weighted-average best-token-match score between two WeightedTokens, 0-100.
-
-    Each target token is matched against its best-fitting candidate token via
-    rapidfuzz.ratio, weighted by importance, normalized by total weight.
-    Rewards true discriminative-name matches far more than incidental
-    matches on generic/low-weight tokens (e.g. two different plants both
-    having a "g1" unit).
+    Returns:
+        float: Weighted-average best token match score.
     """
     if not target.tokens or not candidate.tokens:
         return 0.0
@@ -241,18 +139,162 @@ def weighted_token_score(target: WeightedTokens, candidate: WeightedTokens) -> f
     return weighted_sum / total_weight
 
 
-def base_name_key(name: Optional[str], country_code: Optional[str]) -> Optional[str]:
-    """Reduce a name to its DEFAULT_WEIGHT ("discriminative") tokens, joined.
+# ---------------------------------------------------------------------------
+# Country-/vocabulary-based class functionality
+# ---------------------------------------------------------------------------
+LOW_WEIGHT = 0.1
+DEFAULT_WEIGHT = 1.0
 
-    Drops generic/unit-designator tokens so e.g. "Plant X Unit 1" and "Plant
-    X Unit 2" both reduce to "plant x" -- used to group sibling units of the
-    same physical plant by name alone, for sources with no unique per-plant
-    ID (unlike ENTSO-E's EIC codes). Returns None if no discriminative token
-    survives (the name was entirely generic).
+# Short alphanumeric patterns for designating units that are not caught by the vocabulary:
+# - letters+digits (e.g. "g1"/"u2"),
+# - bare digits (e.g. "3"),
+# - bare 1-2 letter blocks (e.g. "q"/"aa"  in "KW Boxberg Block Q"/"Neurath AA")
+_SHORT_EGE_DESCRIPTOR_PATTERNS = re.compile(
+    r"^(?:[a-z]{1,4}\d{1,3}|\d{1,3}|[a-z]{1,2})$"
+)
+
+
+@lru_cache(maxsize=None)
+def build_vocabulary(country_code: str | None) -> dict[str, str]:
+    """Merge GENERIC_UNIT_TOKENS + PLANT_NAME_EXPANSIONS + country overrides into vocabulary.
+
+    Keys are the vocabulary words/abbreviations; values are their meanings/def expansions
+    (generic words map to themselves). Independent of NameTokenizer instance state.
+
+    Args:
+        country_code (str | None): The country code to check for overrides. Defaults to None.
+
+    Returns:
+        vocabulary (dict): Vocabulary words and their expansions.
     """
-    wt = weighted_tokenize(name, country_code)
-    survivors = [
-        tok for tok, weight in zip(wt.tokens, wt.weights) if weight == DEFAULT_WEIGHT
-    ]
-    key = " ".join(survivors).strip()
-    return key or None
+    vocabulary: dict[str, str] = {tok: tok for tok in GENERIC_UNIT_TOKENS}
+    vocabulary.update(PLANT_NAME_EXPANSIONS)
+    if country_code:
+        vocabulary.update(COUNTRY_PLANT_NAME_EXPANSIONS.get(country_code, {}))
+    return vocabulary
+
+
+class NameTokenizer:
+    """Vocabulary-driven tokenization and weighting for one country."""
+
+    def __init__(self, country_code: str | None = None) -> None:
+        """Initialize the name-tokenizer class.
+
+        Args:
+            country_code (str | None): The country code (ISO3166-1:alpha-2 code) to use for
+                tokenization. Defaults to None.
+        """
+        self.country_code = country_code
+        self._vocabulary = build_vocabulary(country_code)
+
+        # list of whole vocabulary words = more than 3 characters (excludes 2-letter codes!)
+        self._vocabulary_words = sorted(
+            (w for w in self._vocabulary if len(w) >= 3),
+            key=len,
+            reverse=True,
+        )
+
+        # Cache to store name's tokens and their weights: normalized_name -> WeightedTokens
+        self._weighted_cache: dict[str, WeightedTokens] = {}
+
+    # ---------------------------------------------------------------------------
+    # Public API
+    # ---------------------------------------------------------------------------
+    def tokenize(self, name: str | None) -> list[str]:
+        """Normalize name, split into tokens and expand/strip each token using the vocabulary.
+
+        Exact vocabulary-keys (e.g. "he", "unit") expand to their mapped vocab value and are
+        split into separate if multi-word (e.g. "ej" -> "power plant elektrijaam" -> 3 tok).
+        Non-vocabulary tokens go to the bidirectional glued-name stripper as a fallback.
+
+        Args:
+            name (str | None): The name to tokenize.
+
+        Returns:
+            list[str]: The name's (normalized and expanded) tokens.
+        """
+        normalized = normalize_name(name)
+        if not normalized:
+            return []
+
+        out: list[str] = []
+        for tok in normalized.split():  # split into tokens
+            if tok in self._vocabulary:
+                out.extend(self._vocabulary[tok].split())
+            else:
+                stripped = self._strip_glued(tok)
+                out.append(stripped if stripped else tok)
+        return out
+
+    def weighted_tokenize(self, name: str | None) -> WeightedTokens:
+        """Normalize, tokenize and expand `name` (``tokenize``), then weight each token.
+
+        Args:
+            name (str | None): The name to tokenize and weight.
+
+        Returns:
+            WeightedTokens: The name's (normalized and expanded) weighted tokens.
+        """
+        normalized = normalize_name(name)
+        cached = self._weighted_cache.get(normalized)
+        if cached is not None:
+            return cached
+
+        tokens = tuple(self.tokenize(normalized))
+        weights = tuple(self._get_weight(tok) for tok in tokens)
+
+        result = WeightedTokens(tokens, weights)
+        self._weighted_cache[normalized] = result
+        return result
+
+    # ---------------------------------------------------------------------------
+    # Helper methods
+    # ---------------------------------------------------------------------------
+    def _get_weight(self, token: str) -> float:
+        """Dictionary-based token importance weight (no corpus-frequency stats).
+
+        - Exact vocabulary key (generic unit/plant-type word) -> LOW_WEIGHT
+        - Short alphanumeric unit-designator pattern (g1, u2, bare digits) -> LOW_WEIGHT
+        - Everything else (presumed discriminative place/plant name) -> DEFAULT_WEIGHT
+
+        Args:
+            token (str): The token to calculate weight for.
+
+        Returns:
+            float: The weight of the token.
+        """
+        if token in self._vocabulary:
+            return LOW_WEIGHT
+        if _SHORT_EGE_DESCRIPTOR_PATTERNS.match(token):
+            return LOW_WEIGHT
+        return DEFAULT_WEIGHT
+
+    def _strip_glued(self, token: str) -> str:
+        """Repeatedly strip known vocabulary words off the start or end of a token.
+
+        Only whole vocabulary words of length >= 3 are considered. This prevents 2-letter
+        codes (he/te/...) from being falsely matched and the accidental removal of
+        important name parts (e.g. place name "auvere" → "auve" → "au").
+
+        Args:
+            token (str): The token to inspect and strip (e.g. "riverunit").
+
+        Returns:
+            str: The stripped residual token (e.g. "river") or the input if nothing changed.
+        """
+        current = token
+        changed = True
+        while changed and current:
+            changed = False
+            for word in self._vocabulary_words:
+                if len(word) >= len(current):
+                    continue
+                if current.startswith(word):
+                    current = current[len(word) :]
+                    changed = True
+                    break
+                if current.endswith(word):
+                    current = current[: len(current) - len(word)]
+                    changed = True
+                    break
+        return current

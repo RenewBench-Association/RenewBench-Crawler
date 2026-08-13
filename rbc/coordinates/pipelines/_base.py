@@ -27,6 +27,7 @@ from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.matcher import NameMatrixMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
+from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
 from rbc.energy.utils import MissingDataError, load_df_from_file
@@ -142,6 +143,9 @@ class BasePipeline:
 
         except MissingDataError as e:
             raise e
+
+        # Pre-build tokenizer for later use
+        self.tok: NameTokenizer = NameTokenizer(country_code=self.country_code)
 
         # Pre-build expensive-to-construct items: locators, dfs
         self.gem_loc: GEMLocator | None = gem_loc

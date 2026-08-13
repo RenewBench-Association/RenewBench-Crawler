@@ -213,3 +213,32 @@ class TestDefaultPipelineHelpers:
         assert pd.isna(
             result.loc[0, "sibling.lat"]
         )  # already matched, no fallback needed
+
+    def test_base_name_key_collapses_sibling_units(
+        self, eia_pipeline: DefaultPipeline
+    ) -> None:
+        """Happy path: units differing only by a unit designator share one base key.
+
+        Args:
+            eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
+        """
+        assert eia_pipeline.base_name_key(
+            "Plant X Unit 1"
+        ) == eia_pipeline.base_name_key("Plant X Unit 2")
+
+    def test_base_name_key_all_generic_returns_none(
+        self, eia_pipeline: DefaultPipeline
+    ) -> None:
+        """Failure path: a name with no discriminative tokens has no base key.
+
+        Every weighting rule that can classify a token LOW_WEIGHT (vocabulary
+        membership, or the bare-1-2-letter/1-3-digit designator pattern)
+        guarantees any surviving DEFAULT_WEIGHT token is already >=3 chars, so
+        an explicit length guard on the joined key would be unreachable -- this
+        case (zero survivors) is the only way to end up with no usable key.
+
+        Args:
+            eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
+        """
+        assert eia_pipeline.base_name_key("Unit 1") is None
+        assert eia_pipeline.base_name_key("Q1") is None

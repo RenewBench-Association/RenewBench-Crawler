@@ -13,27 +13,27 @@ Key Features:
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import Callable
 
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.utils import tokenizer as _tokenizer
+from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osmpp import OSMPPLocator
+from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.utils.country import (
     get_ppm_country_name,
     normalize_country_for_matching,
 )
 from rbc.coordinates.utils.fuel import is_fueltype_compatible
 from rbc.coordinates.utils.tokenizer import (
-    weighted_token_score,
-    weighted_tokenize,
+    NameTokenizer,
+    get_weighted_token_score,
+    normalize_name,
+    strip_numeric_tokens,
+    strip_trailing_unit_suffix,
 )
 from rbc.coordinates.utils.values import is_missing, strip_str
-
-if TYPE_CHECKING:
-    from rbc.coordinates.locators.gem import GEMLocator
-    from rbc.coordinates.locators.osmpp import OSMPPLocator
-    from rbc.coordinates.locators.ppm import PPMLocator
 
 
 # ---------------------------------------------------------------------------
@@ -46,11 +46,11 @@ class MatchCandidate:
     name: str
     normalized: str
     source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
-    fueltype: Optional[str]
-    lat: Optional[float]
-    lon: Optional[float]
-    country: Optional[str]
-    source_id: Optional[str]
+    fueltype: str | None
+    lat: float | None
+    lon: float | None
+    country: str | None
+    source_id: str | None
     match_score: float = 0.0
     confidence: str = "high"  # 'high', 'medium', 'low'
     other_names: str = ""  # GEM-specific: comma-separated alternate names
@@ -61,7 +61,7 @@ class MatchResult:
     """Result of a name matching operation."""
 
     matched: bool
-    candidate: Optional[MatchCandidate]
+    candidate: MatchCandidate | None
     score: float
     variants_tried: list[str]
     top_candidates: list[MatchCandidate]  # Top 5 for debugging
@@ -76,36 +76,16 @@ class SourceAdapter:
     """
 
     source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
-    get_df: Callable[["NameMatrixMatcher"], Optional[pd.DataFrame]]
+    get_df: Callable[["NameMatrixMatcher"], pd.DataFrame | None]
     name_col: str
-    country_col: Optional[str]  # None if the source has no country column (e.g. OSM)
+    country_col: str | None  # None if the source has no country column (e.g. OSM)
     fueltype_col: str
     id_col: str
     lat_col: str = "lat"
     lon_col: str = "lon"
-    other_names_col: Optional[str] = None  # GEM only: comma-joined alt names
+    other_names_col: str | None = None  # GEM only: comma-joined alt names
     confidence_fn: Callable[[pd.Series], str] = lambda row: "medium"
 
-
-PPDB_ADAPTER = SourceAdapter(
-    source="ppdb",
-    get_df=lambda m: getattr(m.ppdb_locator, "df", None),
-    name_col="Name",
-    country_col="Country",
-    fueltype_col="Fueltype",
-    id_col="id",
-    confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
-)
-
-# PPM_ADAPTER = SourceAdapter(
-#     source="ppm",
-#     get_df=lambda m: getattr(m.ppdb_locator, "df", None),
-#     name_col="Name",
-#     country_col="Country",
-#     fueltype_col="Fueltype",
-#     id_col="id",
-#     confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
-# )
 
 GEM_ADAPTER = SourceAdapter(
     source="gem",
@@ -118,13 +98,20 @@ GEM_ADAPTER = SourceAdapter(
     confidence_fn=lambda row: "high",
 )
 
+# todo: confidence def means PPDB all non-entsoe operators have "medium" confidence level
+PPDB_ADAPTER = SourceAdapter(
+    source="ppdb",
+    get_df=lambda m: getattr(m.ppdb_locator, "df", None),
+    name_col="Name",
+    country_col="Country",
+    fueltype_col="Fueltype",
+    id_col="id",
+    confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
+)
+
 OSM_ADAPTER = SourceAdapter(
     source="osm",
-    # OSM's alt-name tag variants (name:en, alt_name, old_name, ...) are
-    # already exploded into separate rows sharing the same OSM_ID upstream
-    # (osm_api.py), so no other_names_col/extra handling is needed
-    # here -- iterating rows picks them up for free.
-    get_df=lambda m: m.osm_df,
+    get_df=lambda m: m.osm_df,  # duplicated rows for each alt name (s. osm_api.py)
     name_col="Name",
     country_col=None,  # no country column; relies on the matrix-level filter
     fueltype_col="Fueltype",
@@ -168,67 +155,66 @@ class NameMatrixMatcher:
 
     def __init__(
         self,
-        country: Optional[str] = None,
-        country_code: Optional[str] = None,
-        fuel_type: Optional[str] = None,
-        gem_locator: Optional["GEMLocator"] = None,
-        ppdb_locator: Optional["PPMLocator"] | Optional["OSMPPLocator"] = None,
-        osm_df: Optional[pd.DataFrame] = None,
+        country: str | None = None,
+        country_code: str | None = None,
+        fuel_type: str | None = None,
+        gem_locator: GEMLocator | None = None,
+        ppdb_locator: PPMLocator | OSMPPLocator | None = None,
+        osm_df: pd.DataFrame | None = None,
+        tok: NameTokenizer | None = None,
     ) -> None:
         """Initialize the name matrix matcher.
 
         Args:
-            country (str, optional): Country name for hard filtering
-                (prevents cross-country matches).
-            country_code (str, optional): ISO-2 country code for token expansion.
-            fuel_type (str, optional): Fuel type for pre-filtering candidates.
-            gem_locator (GEMLocator, optional): GEM locator instance for GEM candidates.
-            ppdb_locator (PPMLocator | OSMPPLocator, optional): PPMLocator or OSMPPLocator
-                locator for power plant database candidates.
-            osm_df (df, Optional): DataFrame with OSM power plant data.
+            country (str | None): Country name for hard filtering (prevents cross-country
+                matches). Defaults to None.
+            country_code (str | None): ISO3166-alpha-2 country code for token expansion.
+                Defaults to None.
+            fuel_type (str | None): Fuel type for pre-filtering candidates. Defaults to None.
+            gem_locator (GEMLocator | None): GEM locator instance for GEM candidates.
+                Defaults to None.
+            ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
+                locator for power plant database candidates. Defaults to None.
+            osm_df (df | None): DataFrame with OSM power plant data.
+            tok (NameTokenizer | None): NameTokenizer instance for tokenization.
         """
         self.country = country
         self.country_code = country_code
         self.fuel_type = fuel_type
 
         # Data sources (lazy-loaded)
-        self.gem_locator: Optional["GEMLocator"] = gem_locator
-        self.ppdb_locator: Optional["PPMLocator"] | Optional["OSMPPLocator"] = (
-            ppdb_locator
-        )
-        self.osm_df: Optional[pd.DataFrame] = osm_df
+        self.gem_locator: GEMLocator | None = gem_locator
+        self.ppdb_locator: PPMLocator | OSMPPLocator | None = ppdb_locator
+        self.osm_df: pd.DataFrame | None = osm_df
 
-        # Name variant cache: original_name -> [variants]
-        self._variant_cache: dict[str, list[str]] = {}
+        # Tokenizer
+        self.tok: NameTokenizer = (
+            tok if tok is not None else NameTokenizer(country_code)
+        )
+
+        # Cache of name variants: name -> [variants]
+        self._name_variants: dict[str, list[str]] = {}
+        # Alternative names (e.g. from EIC enrichment): name -> [alternatives]
+        self._alternative_names: dict[str, list[str]] = {}
 
         # Candidate matrix: normalized_name -> [MatchCandidate]
         self._matrix: dict[str, list[MatchCandidate]] = {}
         self._matrix_built = False
 
-        # Weighted-token cache: normalized_name -> WeightedTokens. Keyed by
-        # the normalized string (not the candidate object), so it's a pure
-        # function of (normalized, self.country_code) and never needs
-        # invalidation -- also gives free cache hits across the many
-        # candidates that already share a normalized name (matrix buckets).
-        self._weighted_tokens_cache: dict[str, "_tokenizer.WeightedTokens"] = {}
-
-        # Track added alternative names for EIC enrichment
-        self._alternative_names: dict[str, list[str]] = {}
-
     # ---------------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------------
-    def add_alternative_names(self, base_name: str, alt_names: list[str]) -> None:
+    def add_alternative_names(self, name: str, alt_names: list[str]) -> None:
         """Add alternative names for a base name (e.g., from EIC directory).
 
         Args:
-            base_name: The original/primary name.
-            alt_names: List of alternative names to try for this base name.
+            name (str): The original/primary name.
+            alt_names (list[str]): List of alternative names to try for this base name.
         """
-        if base_name not in self._alternative_names:
-            self._alternative_names[base_name] = []
+        if name not in self._alternative_names:
+            self._alternative_names[name] = []
 
-        self._alternative_names[base_name].extend(alt_names)
+        self._alternative_names[name].extend(alt_names)
         self._matrix_built = False  # invalidate cache since new names were added
 
     def generate_name_variants(self, name: str) -> list[str]:
@@ -240,7 +226,7 @@ class NameMatrixMatcher:
         3. Token-expanded (abbreviations -> full names)
         4. Unit-stripped (remove "Unit 5", "Block 2", etc.)
         5. Suffix-stripped (handle "ENGURIUNIT_5" -> "enguri")
-        6. Alternative names from EIC enrichment
+        6. Alternative names (e.g. from EIC enrichment)
 
         Args:
             name: The base name to generate variants for.
@@ -248,11 +234,11 @@ class NameMatrixMatcher:
         Returns:
             result (list): List of unique name variants.
         """
-        if name in self._variant_cache:
-            return self._variant_cache[name]
+        if name in self._name_variants:
+            return self._name_variants[name]
 
         if is_missing(name):
-            self._variant_cache[name] = []
+            self._name_variants[name] = []
             return []  # skip empty names
 
         variants: set[str] = set()
@@ -261,37 +247,31 @@ class NameMatrixMatcher:
         variants.add(name)
 
         # 2. Normalized name
-        normalized = _tokenizer.normalize_name(name)
+        normalized = normalize_name(name)
         if normalized:
             variants.add(normalized)
 
         # 3. Token-expanded name
         if normalized:
-            expanded = " ".join(
-                _tokenizer.tokenize_and_expand(normalized, self.country_code)
-            )
+            expanded = " ".join(self.tok.tokenize(normalized))
             if expanded:
                 variants.add(expanded)
 
         # 4. Unit-stripped name & country-expanded unit-stripped
-        stripped_numeric = _tokenizer.strip_numeric_tokens(name)
+        stripped_numeric = strip_numeric_tokens(name)
         if stripped_numeric:
             variants.add(stripped_numeric)
 
-            expanded_stripped = " ".join(
-                _tokenizer.tokenize_and_expand(stripped_numeric, self.country_code)
-            )
+            expanded_stripped = " ".join(self.tok.tokenize(stripped_numeric))
             if expanded_stripped and expanded_stripped != stripped_numeric:
                 variants.add(expanded_stripped)
 
         # 5. Suffix-stripped name & country-expanded suff-stripped
-        stripped_suffix = _tokenizer.strip_trailing_unit_suffix(name)
+        stripped_suffix = strip_trailing_unit_suffix(name)
         if stripped_suffix and stripped_suffix != name:
             variants.add(stripped_suffix)
 
-            expanded_suffix = " ".join(
-                _tokenizer.tokenize_and_expand(stripped_suffix, self.country_code)
-            )
+            expanded_suffix = " ".join(self.tok.tokenize(stripped_suffix))
             if expanded_suffix and expanded_suffix != stripped_suffix:
                 variants.add(expanded_suffix)
 
@@ -299,13 +279,13 @@ class NameMatrixMatcher:
         for alt_name in self._alternative_names.get(name, []):
             if alt_name and alt_name not in variants:
                 variants.add(alt_name)
-                normalized_alt = _tokenizer.normalize_name(alt_name)
+                normalized_alt = normalize_name(alt_name)
                 if normalized_alt:
                     variants.add(normalized_alt)
 
         # Convert to list and cache
         result = list(variants)
-        self._variant_cache[name] = result
+        self._name_variants[name] = result
         return result
 
     def build_matrix(self) -> dict[str, list[MatchCandidate]]:
@@ -316,7 +296,7 @@ class NameMatrixMatcher:
         alternative names are added.
 
         Returns:
-            Dictionary mapping normalized_name -> [MatchCandidate]
+            dict: Dictionary mapping normalized_name -> [MatchCandidate]
         """
         if self._matrix_built:
             return self._matrix
@@ -348,34 +328,28 @@ class NameMatrixMatcher:
 
         return self._matrix
 
-    # Default score threshold for the weighted-token scoring tier (Approach 2
-    # below). NOT the same scale as `threshold` (which gauges the old
-    # exact-match-plus-bonuses score, ~100+): this is a weighted average of
-    # 0-100 per-token rapidfuzz.ratio scores plus the same source/fuel
-    # bonuses, so it needs its own, separately-calibrated cutoff.
-    DEFAULT_WEIGHTED_THRESHOLD: float = 65.0
-
     def match(
         self,
         target_name: str,
-        fuel_type: Optional[str] = None,
-        threshold: int = 85,
-        weighted_threshold: Optional[float] = None,
+        fuel_type: str | None = None,
+        threshold: float = 85.0,
+        weighted_threshold: float = 65.0,
     ) -> MatchResult:
         """Find the best match for a target name across all data sources.
 
         Uses a combined approach:
         1. First tries exact matches via matrix lookup (fast)
-        2. Falls back to source-agnostic weighted-token scoring (see
-           rbc.coordinates.tokenizer) against all valid candidates
+        2. Falls back to weighted-token scoring (s. tokenizer.py) against all valid candidates
 
         Args:
-            target_name: The name to match.
-            fuel_type: Optional fuel type for validation (overrides class default).
-            threshold: Minimum score (0-100) to accept an exact-matrix match.
-                Defaults to 85.
-            weighted_threshold: Minimum score (0-100) to accept a weighted-token
-                match. Defaults to DEFAULT_WEIGHTED_THRESHOLD.
+            target_name (str): The name to match.
+            fuel_type (str | None): Fuel type for validation (overrides class default).
+                Defaults to None.
+            threshold (float): Minimum score (0-100) to accept an exact-matrix match
+                (exact-match-plus-bonuses score). Defaults to 85.
+            weighted_threshold (float): Minimum score (0-100) to accept a weighted token
+                match (weighted average of per-token rapidfuzz.ratio scores plus the same
+                source/fuel bonuses). Defaults to 65.
 
         Returns:
             MatchResult with matched candidate or None if no match found.
@@ -389,16 +363,14 @@ class NameMatrixMatcher:
                 top_candidates=[],
             )
 
-        # Use provided fuel_type or fall back to class default
+        # --- Define vars in preparation for matching
         effective_fuel = fuel_type if fuel_type is not None else self.fuel_type
 
         # Generate all variants for the target name
-        target_variants = self.generate_name_variants(target_name)
+        target_name_variants = self.generate_name_variants(target_name)
 
-        # Build matrix if not already built
+        # Build matrix (if not already built)
         matrix = self.build_matrix()
-
-        # Debug: log matrix size for this country
         if self.country:
             logger.debug(
                 f"NameMatrixMatcher: matrix built for {self.country} with {len(matrix)} "
@@ -408,13 +380,8 @@ class NameMatrixMatcher:
         # Collect all potential matches
         all_matches: list[tuple[MatchCandidate, float]] = []
 
-        # Get all candidates for fuzzy matching (we'll use this for all approaches)
-        all_candidates = []
-        for candidates in matrix.values():
-            all_candidates.extend(candidates)
-
-        # Approach 1: Exact matches via matrix lookup (fast path)
-        for variant in target_variants:
+        # --- Approach 1: Exact matches via matrix lookup (fast path)
+        for variant in target_name_variants:
             if variant in matrix:
                 for candidate in matrix[variant]:
                     if self._is_valid_candidate(candidate):
@@ -426,50 +393,45 @@ class NameMatrixMatcher:
                                 score += 5.0
                             else:
                                 score -= 20.0
+
                         if score >= threshold:
                             all_matches.append((candidate, score))
 
-        # Approach 2: Source-agnostic weighted-token scoring (see
-        # rbc.coordinates.tokenizer.weighted_token_score) against all valid
-        # candidates. Each target token is matched against its best-fitting
-        # candidate token, weighted by importance, so a true discriminative
-        # name match (e.g. "auvere") counts far more than an incidental
-        # match on a generic/unit token shared across unrelated plants
-        # (e.g. "g1").
+        # --- Approach 2: Weighted-token scoring against all valid candidates.
+        # Each target token is matched against its best-fitting candidate token and weighted
+        # by importance, so a true discriminative name match (e.g. "auvere") counts far
+        # more than a match on a generic/unit token shared by unrelated plants (e.g. "g1").
         if not all_matches:
-            effective_weighted_threshold = (
-                weighted_threshold
-                if weighted_threshold is not None
-                else self.DEFAULT_WEIGHTED_THRESHOLD
-            )
+            all_candidates = []  # get all candidates for matching
+            for candidates in matrix.values():
+                all_candidates.extend(candidates)
+
             valid_candidates = [
-                candidate
-                for candidate in all_candidates
-                if self._is_valid_candidate(candidate)
+                c for c in all_candidates if self._is_valid_candidate(c)
             ]
-            for variant in target_variants:
-                target_wt = weighted_tokenize(variant, self.country_code)
+            for variant in target_name_variants:
+                target_wt = self.tok.weighted_tokenize(variant)
                 if not target_wt.tokens:
                     continue
+
                 for candidate in valid_candidates:
-                    candidate_wt = self._weighted_tokenize_cached(candidate.normalized)
-                    score = weighted_token_score(target_wt, candidate_wt)
+                    candidate_wt = self.tok.weighted_tokenize(candidate.normalized)
+
+                    score = get_weighted_token_score(target_wt, candidate_wt)
                     score += self.SOURCE_BONUS.get(candidate.source, 0.0)
                     if effective_fuel and candidate.fueltype:
                         if is_fueltype_compatible(effective_fuel, candidate.fueltype):
                             score += 5.0
                         else:
                             score -= 20.0
-                    if score >= effective_weighted_threshold:
+
+                    if score >= weighted_threshold:
                         all_matches.append((candidate, score))
 
-        # Sort by score (descending)
-        all_matches.sort(key=lambda x: x[1], reverse=True)
+        # --- Postprocess all identified matches
+        all_matches.sort(key=lambda x: x[1], reverse=True)  # descending by score
+        top_candidates = [m[0] for m in all_matches[:5]]  # top 5 for debugging
 
-        # Extract top 5 candidates for debugging
-        top_candidates = [m[0] for m in all_matches[:5]]
-
-        # Check if we have a match
         if all_matches:
             best_candidate = all_matches[0][0]
             best_score = all_matches[0][1]
@@ -479,7 +441,7 @@ class NameMatrixMatcher:
                 matched=True,
                 candidate=best_candidate,
                 score=best_score,
-                variants_tried=target_variants,
+                variants_tried=target_name_variants,
                 top_candidates=top_candidates,
             )
 
@@ -487,24 +449,9 @@ class NameMatrixMatcher:
             matched=False,
             candidate=None,
             score=0.0,
-            variants_tried=target_variants,
+            variants_tried=target_name_variants,
             top_candidates=top_candidates,
         )
-
-    def _weighted_tokenize_cached(self, normalized: str) -> "_tokenizer.WeightedTokens":
-        """Memoized `weighted_tokenize(normalized, self.country_code)`.
-
-        The same (small) set of candidates is rescanned for every unmatched
-        target row within a country, so without this cache the weighted
-        scoring tier recomputes identical tokenization/weighting work
-        thousands of times over on large candidate pools (observed: full
-        24-zone run time went from ~60s to ~11min without this cache).
-        """
-        cached = self._weighted_tokens_cache.get(normalized)
-        if cached is None:
-            cached = weighted_tokenize(normalized, self.country_code)
-            self._weighted_tokens_cache[normalized] = cached
-        return cached
 
     def _is_valid_candidate(self, candidate: "MatchCandidate") -> bool:
         """Check if a candidate is valid for matching (has coordinate, passes country filter).
@@ -593,8 +540,8 @@ class NameMatrixMatcher:
             # Normalize and expand plant name tokens for better cross-language
             # matching, via the shared source-agnostic tokenizer so target and
             # candidate names are tokenized identically.
-            normalized = _tokenizer.normalize_name(name)
-            expanded = " ".join(_tokenizer.tokenize_and_expand(name, self.country_code))
+            normalized = normalize_name(name)
+            expanded = " ".join(self.tok.tokenize(name))
 
             other_names = ""
             if adapter.other_names_col:
