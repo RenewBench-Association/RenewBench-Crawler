@@ -323,6 +323,7 @@ class BasePipeline:
             ppdb_locator=self.ppdb_loc,
             gem_locator=self.gem_loc,
             osm_df=self.osm_df if len(self.osm_df) > 0 else None,
+            tok=self.tok,
         )
         self._add_alt_names(df, matcher)
 
