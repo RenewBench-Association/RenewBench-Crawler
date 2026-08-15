@@ -1,11 +1,11 @@
 """Centralized name matching utilities for coordinate finding.
 
-This module provides a unified, matrix-based approach to fuzzy name matching
+This module provides a unified, lookup-based approach to fuzzy name matching
 across multiple power plant data sources, namely ppdb (PPM/OSMPP), GEM, OSM.
 
 Key Features:
 - Systematic generation of name variants for both input and candidate names
-- Pre-computed search matrix for efficient lookups
+- Pre-computed search index for efficient lookups
 - Hard country filtering to prevent cross-country false positives
 - Fuel type guardrails for validation
 - Source priority: GEM > ppdb (PPM/OSMPP) > OSM
@@ -23,7 +23,7 @@ from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.utils.country import (
     get_ppm_country_name,
-    normalize_country_for_matching,
+    normalize_country_name,
 )
 from rbc.coordinates.utils.fuel import is_fueltype_compatible
 from rbc.coordinates.utils.tokenizer import (
@@ -44,7 +44,7 @@ class MatchCandidate:
     """A single matching candidate from a data source."""
 
     name: str
-    normalized: str
+    norm_name: str  # actually tokenized & rejoined name for expanded abbreviations
     source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     fueltype: str | None
     lat: float | None
@@ -72,11 +72,11 @@ class SourceAdapter:
     """Column-mapping config that lets one candidate builder serve any source.
 
     Replaces hardcoded candidate building per locator source with a single generic builder
-    (see ``NameMatrixMatcher._build_candidates``).
+    (see ``NameMatcher._build_candidates``).
     """
 
     source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
-    get_df: Callable[["NameMatrixMatcher"], pd.DataFrame | None]
+    get_df: Callable[["NameMatcher"], pd.DataFrame | None]
     name_col: str
     country_col: str | None  # None if the source has no country column (e.g. OSM)
     fueltype_col: str
@@ -94,7 +94,7 @@ GEM_ADAPTER = SourceAdapter(
     country_col="Country",
     fueltype_col="Fueltype",
     id_col="gem_unit_id",
-    other_names_col="other_names",
+    other_names_col="other_names",  # todo: these seem to be unused?
     confidence_fn=lambda row: "high",
 )
 
@@ -123,13 +123,16 @@ OSM_ADAPTER = SourceAdapter(
 # ---------------------------------------------------------------------------
 # Main Matcher Class
 # ---------------------------------------------------------------------------
-class NameMatrixMatcher:
-    """Matrix-based fuzzy name matcher across multiple data sources.
+class NameMatcher:
+    """Lookup-based fuzzy name matcher for multiple coordinate/location data sources.
 
-    This class consolidates all name-based matching logic into a single,
-    reusable component. It builds a searchable matrix that maps normalized
-    names to candidate power plants, enabling efficient many-to-many matching
-    with systematic variant generation.
+    This class consolidates all name-based matching logic into a single, reusable component.
+    It builds a searchable lookup index that maps normalized names to candidate EGEs, enabling
+    efficient many-to-many matching with systematic variant generation.
+
+    Definitions:
+    - target(s): sys-op EGE(s) to find coordinates for.
+    - candidate(s): EGE(s) from coordinate/location data sources that may match.
 
     Features:
     - Generates all plausible name variants for both input and candidates
@@ -139,7 +142,7 @@ class NameMatrixMatcher:
     - Caching for repeated matches
 
     Example:
-        >>> matcher = NameMatrixMatcher(country="Germany",gem_locator=gem_loc,osm_df=osm_data)
+        >>> matcher = NameMatcher(country="Germany",gem_locator=gem_loc,osm_df=osm_data)
         >>> result = matcher.match("Enguri Unit 5", fuel_type="hydro")
         >>> if result.matched:
         ...     candidate = result.candidate
@@ -163,26 +166,27 @@ class NameMatrixMatcher:
         osm_df: pd.DataFrame | None = None,
         tok: NameTokenizer | None = None,
     ) -> None:
-        """Initialize the name matrix matcher.
+        """Initialize the name matcher.
 
         Args:
-            country (str | None): Country name for hard filtering (prevents cross-country
-                matches). Defaults to None.
-            country_code (str | None): ISO3166-alpha-2 country code for token expansion.
-                Defaults to None.
+            country (str | None): Target country name for hard filtering (prevents
+                cross-country matches). Defaults to None.
+            country_code (str | None): Target country ISO3166-alpha-2 code for backup tok
+                creation. Defaults to None.
             fuel_type (str | None): Fuel type for pre-filtering candidates. Defaults to None.
             gem_locator (GEMLocator | None): GEM locator instance for GEM candidates.
                 Defaults to None.
             ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
                 locator for power plant database candidates. Defaults to None.
             osm_df (df | None): DataFrame with OSM power plant data.
-            tok (NameTokenizer | None): NameTokenizer instance for tokenization.
+            tok (NameTokenizer | None): NameTokenizer instance for tokenization. Defaults
+                to None, in which case a new tokenizer is created using the country_code.
         """
-        self.country = country
-        self.country_code = country_code
+        self.target_country = country
+        self.norm_target_country = normalize_country_name(country)
         self.fuel_type = fuel_type
 
-        # Data sources (lazy-loaded)
+        # Data sources
         self.gem_locator: GEMLocator | None = gem_locator
         self.ppdb_locator: PPMLocator | OSMPPLocator | None = ppdb_locator
         self.osm_df: pd.DataFrame | None = osm_df
@@ -192,33 +196,140 @@ class NameMatrixMatcher:
             tok if tok is not None else NameTokenizer(country_code)
         )
 
-        # Cache of name variants: name -> [variants]
-        self._name_variants: dict[str, list[str]] = {}
-        # Alternative names (e.g. from EIC enrichment): name -> [alternatives]
-        self._alternative_names: dict[str, list[str]] = {}
+        # Cache for target name variants and alternatives (e.g. from EIC enrichment)
+        self._target_variants: dict[str, list[str]] = {}  # name -> [variants]
+        self._target_alternatives: dict[str, list[str]] = {}  # name -> [alternatives]
 
-        # Candidate matrix: normalized_name -> [MatchCandidate]
-        self._matrix: dict[str, list[MatchCandidate]] = {}
-        self._matrix_built = False
+        # Cache for candidate index/lookup: norm_name -> [MatchCandidates]
+        self._candidate_index: dict[str, list[MatchCandidate]] = {}
+        self._candidate_index_built = False
 
     # ---------------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------------
-    def add_alternative_names(self, name: str, alt_names: list[str]) -> None:
-        """Add alternative names for a base name (e.g., from EIC directory).
+    def match(
+        self,
+        target_name: str,
+        fuel_type: str | None = None,
+        threshold: float = 85.0,
+        weighted_threshold: float = 65.0,
+    ) -> MatchResult:
+        """Find the best match for a target EGE name across all candidate data sources.
+
+        Uses a combined approach:
+        1. Tries exact matches via candidate_index lookup (fast)
+        2. Falls back to weighted-token scoring (s. tokenizer.py) against all valid candidates
 
         Args:
-            name (str): The original/primary name.
-            alt_names (list[str]): List of alternative names to try for this base name.
+            target_name (str): The name to match.
+            fuel_type (str | None): Fuel type for validation (overrides class default).
+                Defaults to None.
+            threshold (float): Minimum score (0-100) to accept an exact-lookup match
+                (exact-match-plus-bonuses score). Defaults to 85.
+            weighted_threshold (float): Minimum score (0-100) to accept a weighted token
+                match (weighted average of per-token rapidfuzz.ratio scores plus the same
+                source/fuel bonuses). Defaults to 65.
+
+        Returns:
+            MatchResult with matched candidate or None if no match found.
         """
-        if name not in self._alternative_names:
-            self._alternative_names[name] = []
+        if is_missing(target_name):
+            return MatchResult(
+                matched=False,
+                candidate=None,
+                score=0.0,
+                variants_tried=[],
+                top_candidates=[],
+            )
 
-        self._alternative_names[name].extend(alt_names)
-        self._matrix_built = False  # invalidate cache since new names were added
+        # --- Preparation: Define and build all required parameters
+        fuel_type = fuel_type if fuel_type is not None else self.fuel_type
 
-    def generate_name_variants(self, name: str) -> list[str]:
-        """Generate all plausible name variants for matching.
+        target_variants = self._generate_target_variants(target_name)
+        candidate_index = self._build_candidate_index()
+
+        all_matches: list[tuple[MatchCandidate, float]] = []  # match collection
+
+        # --- Approach 1: Exact matches via candidate_index lookup (fast path)
+        for variant in target_variants:
+            if variant in candidate_index:
+                for candidate in candidate_index[variant]:
+                    if self._is_valid_candidate(candidate):
+                        score = 100.0
+                        score = self._adjust_score(score, candidate, fuel_type)
+
+                        if score >= threshold:
+                            all_matches.append((candidate, score))
+
+        # --- Approach 2: Weighted-token scoring against all (valid) candidates.
+        # Each target token is matched against its best-fitting candidate token and weighted
+        # by importance, so a true discriminative name match (e.g. "auvere") counts far
+        # more than a match on a generic/unit token shared by unrelated plants (e.g. "g1").
+        if not all_matches:
+            all_candidates = []  # get all candidates for matching
+            for candidates in candidate_index.values():
+                all_candidates.extend(candidates)
+
+            valid_candidates = [
+                c for c in all_candidates if self._is_valid_candidate(c)
+            ]
+            for variant in target_variants:
+                target_wt = self.tok.weighted_tokenize(variant)
+                if not target_wt.tokens:
+                    continue
+
+                for candidate in valid_candidates:
+                    candidate_wt = self.tok.weighted_tokenize(candidate.norm_name)
+
+                    score = get_weighted_token_score(target_wt, candidate_wt)
+                    score = self._adjust_score(score, candidate, fuel_type)
+
+                    if score >= weighted_threshold:
+                        all_matches.append((candidate, score))
+
+        # --- Postprocess: Define all identified matches
+        all_matches.sort(key=lambda x: x[1], reverse=True)  # descending by score
+        top_candidates = [m[0] for m in all_matches[:5]]  # top 5 for debugging
+
+        if all_matches:
+            best_candidate = all_matches[0][0]
+            best_score = all_matches[0][1]
+            best_candidate.match_score = best_score
+
+            return MatchResult(
+                matched=True,
+                candidate=best_candidate,
+                score=best_score,
+                variants_tried=target_variants,
+                top_candidates=top_candidates,
+            )
+
+        return MatchResult(
+            matched=False,
+            candidate=None,
+            score=0.0,
+            variants_tried=target_variants,
+            top_candidates=top_candidates,
+        )
+
+    def add_target_alternatives(self, name: str, alt_names: list[str]) -> None:
+        """Add alternative names for a target EGE's name (e.g., from EIC directory).
+
+        Args:
+            name (str): The original/primary target's name.
+            alt_names (list[str]): List of alternative names to try for this target's name.
+        """
+        if name not in self._target_alternatives:
+            self._target_alternatives[name] = []
+
+        self._target_alternatives[name].extend(alt_names)
+        self._candidate_index_built = False  # invalidate cache as new names were added
+
+    # ---------------------------------------------------------------------------
+    # Helper methods
+    # ---------------------------------------------------------------------------
+    def _generate_target_variants(self, name: str) -> list[str]:
+        """Generate all plausible variants of the target EGE's name for matching.
 
         Generates:
         1. Original name
@@ -229,16 +340,16 @@ class NameMatrixMatcher:
         6. Alternative names (e.g. from EIC enrichment)
 
         Args:
-            name: The base name to generate variants for.
+            name: The base target name to generate variants for.
 
         Returns:
             result (list): List of unique name variants.
         """
-        if name in self._name_variants:
-            return self._name_variants[name]
+        if name in self._target_variants:
+            return self._target_variants[name]
 
         if is_missing(name):
-            self._name_variants[name] = []
+            self._target_variants[name] = []
             return []  # skip empty names
 
         variants: set[str] = set()
@@ -275,8 +386,8 @@ class NameMatrixMatcher:
             if expanded_suffix and expanded_suffix != stripped_suffix:
                 variants.add(expanded_suffix)
 
-        # 6. Alternative names from EIC enrichment
-        for alt_name in self._alternative_names.get(name, []):
+        # 6. Alternative names
+        for alt_name in self._target_alternatives.get(name, []):
             if alt_name and alt_name not in variants:
                 variants.add(alt_name)
                 normalized_alt = normalize_name(alt_name)
@@ -285,23 +396,23 @@ class NameMatrixMatcher:
 
         # Convert to list and cache
         result = list(variants)
-        self._name_variants[name] = result
+        self._target_variants[name] = result
         return result
 
-    def build_matrix(self) -> dict[str, list[MatchCandidate]]:
-        """Build the searchable candidate matrix.
+    def _build_candidate_index(self) -> dict[str, list[MatchCandidate]]:
+        """Build the searchable candidate index/lookup.
 
-        Creates a mapping from normalized names to lists of matching candidates.
-        The matrix is cached and only rebuilt when sources change or new
-        alternative names are added.
+        Creates a mapping of each unique normalized candidate name to the list of candidates
+        that share said name from all coordinate sources, stored as MatchCandidate objects.
+        The index is cached and only rebuilt when new alternative names have been added.
 
         Returns:
-            dict: Dictionary mapping normalized_name -> [MatchCandidate]
+            dict: Dictionary mapping candidate.norm_name -> [MatchCandidate]
         """
-        if self._matrix_built:
-            return self._matrix
+        if self._candidate_index_built:
+            return self._candidate_index
 
-        self._matrix = {}
+        self._candidate_index = {}
 
         # Collect candidates from all available sources via their adapters
         candidates: list[MatchCandidate] = []
@@ -317,182 +428,25 @@ class NameMatrixMatcher:
 
         # Index candidates by normalized name
         for candidate in candidates:
-            if candidate.normalized not in self._matrix:
-                self._matrix[candidate.normalized] = []
-            self._matrix[candidate.normalized].append(candidate)
+            if candidate.norm_name not in self._candidate_index:
+                self._candidate_index[candidate.norm_name] = []
 
-        self._matrix_built = True
-        logger.debug(
-            f"NameMatrixMatcher: built matrix with {len(candidates)} candidates"
+            self._candidate_index[candidate.norm_name].append(candidate)
+
+        self._candidate_index_built = True
+        logger.info(
+            f"NameMatcher: Built candidate lookup for {self.target_country} with "
+            f"{len(candidates)} total candidates, of which {len(self._candidate_index)} "
+            f"are unique."
         )
 
-        return self._matrix
+        return self._candidate_index
 
-    def match(
-        self,
-        target_name: str,
-        fuel_type: str | None = None,
-        threshold: float = 85.0,
-        weighted_threshold: float = 65.0,
-    ) -> MatchResult:
-        """Find the best match for a target name across all data sources.
-
-        Uses a combined approach:
-        1. First tries exact matches via matrix lookup (fast)
-        2. Falls back to weighted-token scoring (s. tokenizer.py) against all valid candidates
-
-        Args:
-            target_name (str): The name to match.
-            fuel_type (str | None): Fuel type for validation (overrides class default).
-                Defaults to None.
-            threshold (float): Minimum score (0-100) to accept an exact-matrix match
-                (exact-match-plus-bonuses score). Defaults to 85.
-            weighted_threshold (float): Minimum score (0-100) to accept a weighted token
-                match (weighted average of per-token rapidfuzz.ratio scores plus the same
-                source/fuel bonuses). Defaults to 65.
-
-        Returns:
-            MatchResult with matched candidate or None if no match found.
-        """
-        if is_missing(target_name):
-            return MatchResult(
-                matched=False,
-                candidate=None,
-                score=0.0,
-                variants_tried=[],
-                top_candidates=[],
-            )
-
-        # --- Define vars in preparation for matching
-        effective_fuel = fuel_type if fuel_type is not None else self.fuel_type
-
-        # Generate all variants for the target name
-        target_name_variants = self.generate_name_variants(target_name)
-
-        # Build matrix (if not already built)
-        matrix = self.build_matrix()
-        if self.country:
-            logger.debug(
-                f"NameMatrixMatcher: matrix built for {self.country} with {len(matrix)} "
-                f"unique normalized names"
-            )
-
-        # Collect all potential matches
-        all_matches: list[tuple[MatchCandidate, float]] = []
-
-        # --- Approach 1: Exact matches via matrix lookup (fast path)
-        for variant in target_name_variants:
-            if variant in matrix:
-                for candidate in matrix[variant]:
-                    if self._is_valid_candidate(candidate):
-                        score = 100.0 + self.SOURCE_BONUS.get(candidate.source, 0.0)
-                        if effective_fuel and candidate.fueltype:
-                            if is_fueltype_compatible(
-                                effective_fuel, candidate.fueltype
-                            ):
-                                score += 5.0
-                            else:
-                                score -= 20.0
-
-                        if score >= threshold:
-                            all_matches.append((candidate, score))
-
-        # --- Approach 2: Weighted-token scoring against all valid candidates.
-        # Each target token is matched against its best-fitting candidate token and weighted
-        # by importance, so a true discriminative name match (e.g. "auvere") counts far
-        # more than a match on a generic/unit token shared by unrelated plants (e.g. "g1").
-        if not all_matches:
-            all_candidates = []  # get all candidates for matching
-            for candidates in matrix.values():
-                all_candidates.extend(candidates)
-
-            valid_candidates = [
-                c for c in all_candidates if self._is_valid_candidate(c)
-            ]
-            for variant in target_name_variants:
-                target_wt = self.tok.weighted_tokenize(variant)
-                if not target_wt.tokens:
-                    continue
-
-                for candidate in valid_candidates:
-                    candidate_wt = self.tok.weighted_tokenize(candidate.normalized)
-
-                    score = get_weighted_token_score(target_wt, candidate_wt)
-                    score += self.SOURCE_BONUS.get(candidate.source, 0.0)
-                    if effective_fuel and candidate.fueltype:
-                        if is_fueltype_compatible(effective_fuel, candidate.fueltype):
-                            score += 5.0
-                        else:
-                            score -= 20.0
-
-                    if score >= weighted_threshold:
-                        all_matches.append((candidate, score))
-
-        # --- Postprocess all identified matches
-        all_matches.sort(key=lambda x: x[1], reverse=True)  # descending by score
-        top_candidates = [m[0] for m in all_matches[:5]]  # top 5 for debugging
-
-        if all_matches:
-            best_candidate = all_matches[0][0]
-            best_score = all_matches[0][1]
-            best_candidate.match_score = best_score
-
-            return MatchResult(
-                matched=True,
-                candidate=best_candidate,
-                score=best_score,
-                variants_tried=target_name_variants,
-                top_candidates=top_candidates,
-            )
-
-        return MatchResult(
-            matched=False,
-            candidate=None,
-            score=0.0,
-            variants_tried=target_name_variants,
-            top_candidates=top_candidates,
-        )
-
-    def _is_valid_candidate(self, candidate: "MatchCandidate") -> bool:
-        """Check if a candidate is valid for matching (has coordinate, passes country filter).
-
-        Args:
-            candidate (MatchCandidate): The candidate to check.
-
-        Returns:
-            bool: True if the candidate is valid, False otherwise.
-        """
-        # Skip candidates without coordinates
-        if candidate.lat is None or candidate.lon is None:
-            return False
-
-        # Hard country filter: candidate must match our country
-        if self.country and candidate.country:
-            # Normalize both country names for comparison (handles zone-specific aliases)
-            normalized_self_country = normalize_country_for_matching(self.country)
-            normalized_candidate_country = normalize_country_for_matching(
-                candidate.country
-            )
-
-            if normalized_self_country and normalized_candidate_country:
-                if (
-                    normalized_self_country.lower()
-                    != normalized_candidate_country.lower()
-                ):
-                    return False
-            elif self.country.lower() != candidate.country.lower():
-                return False
-
-        return True
-
-    # ---------------------------------------------------------------------------
-    # Private Candidate Builder
-    # ---------------------------------------------------------------------------
     def _build_candidates(self, adapter: SourceAdapter) -> list[MatchCandidate]:
-        """Build candidates from a source depending on its `SourceAdapter` config.
+        """Build candidates from a locator source depending on its ``SourceAdapter`` config.
 
         Args:
-            adapter (SourceAdapter): The source adapter to build candidates from.
+            adapter (SourceAdapter): The locator source adapter to build candidates from.
 
         Returns:
             list[MatchCandidate]: A list of matching candidates.
@@ -508,13 +462,12 @@ class NameMatrixMatcher:
 
         # Filter by country if specified and the source has a country column
         # (OSM has none; relies on the matrix-level country filter instead).
-        if self.country and adapter.country_col:
-            normalized_country = normalize_country_for_matching(self.country)
-            source_country_name = get_ppm_country_name(normalized_country)
-            if source_country_name:
+        if self.target_country and adapter.country_col:
+            converted_target_country = get_ppm_country_name(self.norm_target_country)
+            if converted_target_country:
                 df = df[
                     df[adapter.country_col].astype(str).str.lower()
-                    == str(source_country_name).lower()
+                    == str(converted_target_country).lower()
                 ]
 
         # Filter by fuel type if specified
@@ -537,11 +490,14 @@ class NameMatrixMatcher:
             if name is None:
                 continue
 
-            # Normalize and expand plant name tokens for better cross-language
-            # matching, via the shared source-agnostic tokenizer so target and
-            # candidate names are tokenized identically.
-            normalized = normalize_name(name)
-            expanded = " ".join(self.tok.tokenize(name))
+            # tokenize name for better cross-language matching (expands abbreviated terms)
+            tokenized_name = " ".join(self.tok.tokenize(name))
+            lat = (
+                float(row[adapter.lat_col]) if pd.notna(row[adapter.lat_col]) else None
+            )
+            lon = (
+                float(row[adapter.lon_col]) if pd.notna(row[adapter.lon_col]) else None
+            )
 
             other_names = ""
             if adapter.other_names_col:
@@ -550,18 +506,12 @@ class NameMatrixMatcher:
             candidates.append(
                 MatchCandidate(
                     name=name,
-                    normalized=expanded if expanded else normalized,
+                    norm_name=tokenized_name,
                     source=adapter.source,
                     fueltype=strip_str(row[adapter.fueltype_col]),
-                    lat=float(row[adapter.lat_col])
-                    if pd.notna(row[adapter.lat_col])
-                    else None,
-                    lon=float(row[adapter.lon_col])
-                    if pd.notna(row[adapter.lon_col])
-                    else None,
-                    country=strip_str(row.get(adapter.country_col))
-                    if adapter.country_col
-                    else None,
+                    lat=lat,
+                    lon=lon,
+                    country=strip_str(row.get(adapter.country_col)),
                     source_id=strip_str(row.get(adapter.id_col)),
                     confidence=adapter.confidence_fn(row),
                     other_names=other_names,
@@ -569,3 +519,50 @@ class NameMatrixMatcher:
             )
 
         return candidates
+
+    def _is_valid_candidate(self, candidate: "MatchCandidate") -> bool:
+        """Check if a candidate is valid for matching (has coordinate, passes country filter).
+
+        Args:
+            candidate (MatchCandidate): The candidate to check.
+
+        Returns:
+            bool: True if the candidate is valid, False otherwise.
+        """
+        if candidate.lat is None or candidate.lon is None:
+            return False
+
+        # Hard filter: candidate must match our (operator) country
+        if self.target_country and self.norm_target_country and candidate.country:
+            norm_candidate_country = normalize_country_name(candidate.country)
+            if norm_candidate_country:
+                if self.norm_target_country.lower() != norm_candidate_country.lower():
+                    return False
+
+            elif self.target_country.lower() != candidate.country.lower():
+                return False
+
+        return True
+
+    def _adjust_score(
+        self, score: float, candidate: MatchCandidate, fuel: str | None
+    ) -> float:
+        """Apply bonus/penalty to the score for a given candidate depending on the fuel type.
+
+        Args:
+            score (float): The score to adjust.
+            candidate (MatchCandidate): The candidate to adjust the score for.
+            fuel (str): The candidate's fuel type.
+
+        Returns:
+            float: The adjusted score.
+        """
+        score += self.SOURCE_BONUS.get(candidate.source, 0.0)
+
+        if fuel and candidate.fueltype:
+            if is_fueltype_compatible(fuel, candidate.fueltype):
+                score += 5.0  # match bonus
+            else:
+                score -= 20.0  # mismatch penalty
+
+        return score

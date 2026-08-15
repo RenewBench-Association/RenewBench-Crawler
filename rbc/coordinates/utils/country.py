@@ -7,22 +7,28 @@ import re
 
 from rbc.coordinates.utils.values import strip_lower_str, strip_str
 
+ALIAS_MAPPINGS = {
+    "great britain": "united kingdom",
+    "gb": "united kingdom",
+}
 
-def normalize_country_for_matching(country: str | None) -> str | None:
-    """Normalize a country name to match PPM database country names.
 
-    This handles zone-specific country aliases (e.g., 'Germany (TransnetBW)',
-    'Great Britain / National Grid') and maps them to their base country names
-    (e.g., 'Germany', 'United Kingdom') as used in PPM.
+def normalize_country_name(country: str | None) -> str | None:
+    """Normalize a country name to match locator database country names (e.g. from PPM).
+
+    This handles operator country aliases (e.g., 'Germany (TransnetBW)', 'Great Britain /
+    National Grid') and maps them to their base country names (e.g., 'Germany', 'United
+    Kingdom') as used in PPM.
 
     Args:
-        country: Country name that may include zone-specific suffixes.
+        country (str | None): Operator country name that may include extra symbols.
 
     Returns:
-        Normalized country name or provided "country" value if no normalization possible.
+        country (str | None): Normalized country name or provided one if normalization failed,
+            or None if country is None.
     """
     country = strip_str(country)
-    if country is None:
+    if not country:
         return None
 
     # 1. Extract base country name by removing suffixes (e.g. "Germany (tennet)" -> "Germany")
@@ -34,13 +40,9 @@ def normalize_country_for_matching(country: str | None) -> str | None:
         base_country = parts[0] if parts else base_country
 
     # 3. Handle known names with special mapping (e.g. "United Kingdom" vs "Great Britain")
-    alias_mappings = {
-        "great britain": "united kingdom",
-        "gb": "united kingdom",
-    }
     base_country_lower = base_country.lower()
-    if base_country_lower in alias_mappings:
-        return alias_mappings[base_country_lower]
+    if base_country_lower in ALIAS_MAPPINGS:
+        return ALIAS_MAPPINGS[base_country_lower]
 
     # 4. Clean up any remaining artifacts & return
     base_country = base_country.strip()

@@ -25,7 +25,7 @@ from rbc.coordinates.locators.osm_api import query_osm_country_plants
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
-from rbc.coordinates.matcher import NameMatrixMatcher
+from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
@@ -317,7 +317,7 @@ class BasePipeline:
                 live=self.osm_live,
             )
 
-        matcher = NameMatrixMatcher(
+        matcher = NameMatcher(
             country=self.country,
             country_code=self.country_code,
             ppdb_locator=self.ppdb_loc,
@@ -418,7 +418,7 @@ class BasePipeline:
     def _fuzzy_match_core(
         self,
         df: pd.DataFrame,
-        matcher: NameMatrixMatcher,
+        matcher: NameMatcher,
         name_candidates_fn,
     ) -> pd.DataFrame:
         """FUZZY STEP HELPER --- Shared per-row fuzzy-match loop, used by every pipeline.
@@ -427,7 +427,7 @@ class BasePipeline:
 
         Args:
             df (pd.DataFrame): The working dataframe.
-            matcher (NameMatrixMatcher): A matcher object attuned to pipeline-related locator.
+            matcher (NameMatcher): A matcher object attuned to pipeline-related locator.
             name_candidates_fn (Callable(row)): A function to try an ordered list of name
                 strings against the matcher (most authoritative first).
 
@@ -435,7 +435,6 @@ class BasePipeline:
             df (pd.DataFrame): Updated working dataframe (now with ppdb, gem, osm matches).
         """
         self._create_match_method_columns(df)  # defensive; no-op if already done
-        matcher.build_matrix()
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
             sysop_fuel = row.get(self.sysop_fuel_col)
@@ -490,7 +489,7 @@ class BasePipeline:
         gem_final = df["gem.lat"].notna().sum()
         osm_final = df["osm.lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] NameMatrixMatcher: "
+            f"[{self.input_dir.name}] NameMatcher: "
             f"{ppdb_final} via ppdb (PPM/OSMPP) total, {gem_final} via GEM total, "
             f"{osm_final} via OSM."
         )
@@ -584,12 +583,12 @@ class BasePipeline:
         lon = df["ppdb.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
         return lat, lon
 
-    def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatrixMatcher) -> None:
+    def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatcher) -> None:
         """Add alternative names to matcher. Overwritable by child pipeline (i.e. entsoe).
 
         Args:
             df (pd.DataFrame): Dataframe with names for which alternatives will be found.
-            matcher (NameMatrixMatcher): NameMatrixMatcher instance.
+            matcher (NameMatcher): NameMatcher instance.
         """
         return None
 

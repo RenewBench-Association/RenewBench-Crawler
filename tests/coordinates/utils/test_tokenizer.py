@@ -1,5 +1,5 @@
 # tests/coordinates/utils/test_tokenizer.py
-"""Tests for the source-agnostic name tokenizer/weighting used by NameMatrixMatcher."""
+"""Tests for the source-agnostic name tokenizer/weighting used by NameMatcher."""
 
 import pytest
 
@@ -75,7 +75,7 @@ class TestNormalizeName:
 
         Callers routinely hand already-normalized names back in --
         NameTokenizer.weighted_tokenize passes its own `normalized` into
-        tokenize(), and NameMatrixMatcher passes `candidate.normalized` into
+        tokenize(), and NameMatcher passes `candidate.normalized` into
         weighted_tokenize(). All of that is only correct while this holds.
 
         Args:

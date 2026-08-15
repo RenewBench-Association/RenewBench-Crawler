@@ -10,7 +10,7 @@ import rbc.coordinates.locators.eic_registry as eic
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.matcher import NameMatrixMatcher
+from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.tokenizer import normalize_name
 from rbc.coordinates.utils.values import strip_str
@@ -351,12 +351,12 @@ class EntsoePipeline(BasePipeline):
     # ------------------------------------------------------------------
     # HELPERS (overwrite BasePipeline methods for EntsoePipeline use)
     # ------------------------------------------------------------------
-    def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatrixMatcher) -> None:
+    def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatcher) -> None:
         """Add alternative EGE names based on EICRegistry to matcher.
 
         Args:
             df (pd.DataFrame): Df
-            matcher (NameMatrixMatcher): NameMatrixMatcher instance.
+            matcher (NameMatcher): NameMatcher instance.
         """
         for _, row in df[self._still_unmatched(df)].iterrows():
             # keyed on the stripped name, as that is what the matcher looks alt names up by
@@ -371,7 +371,7 @@ class EntsoePipeline(BasePipeline):
                     alt_names.append(n)
 
             if alt_names:
-                matcher.add_alternative_names(raw_name, alt_names)
+                matcher.add_target_alternatives(raw_name, alt_names)
 
     def _name_candidates(self, row: pd.Series) -> list[str | None]:
         """Define EGE candidate names to try against matcher. Overwritable by child pipeline.

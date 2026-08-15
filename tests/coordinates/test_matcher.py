@@ -1,5 +1,5 @@
 # tests/coordinates/test_matcher.py
-"""Tests for NameMatrixMatcher's generic SourceAdapter candidate builder."""
+"""Tests for NameMatcher's generic SourceAdapter candidate builder."""
 
 from types import SimpleNamespace
 from typing import cast
@@ -13,7 +13,7 @@ from rbc.coordinates.matcher import (
     GEM_ADAPTER,
     OSM_ADAPTER,
     PPDB_ADAPTER,
-    NameMatrixMatcher,
+    NameMatcher,
 )
 
 
@@ -112,8 +112,8 @@ def matcher(
     ppdb_df: pd.DataFrame,
     gem_df: pd.DataFrame,
     osm_df: pd.DataFrame,
-) -> NameMatrixMatcher:
-    """Returns a NameMatrixMatcher wired to fake ppdb (PPM)/GEM locators and an OSM df.
+) -> NameMatcher:
+    """Returns a NameMatcher wired to fake ppdb (PPM)/GEM locators and an OSM df.
 
     Args:
         ppdb_df (pd.DataFrame): Synthetic ppdb (PPM) candidate rows.
@@ -121,11 +121,11 @@ def matcher(
         osm_df (pd.DataFrame): Synthetic OSM candidate rows.
 
     Returns:
-        NameMatrixMatcher: Instance scoped to Estonia ("EE"), backed by fake
+        NameMatcher: Instance scoped to Estonia ("EE"), backed by fake
             locator objects (types.SimpleNamespace) so no real ppdb (PPM)/GEM
             downloads are needed.
     """
-    return NameMatrixMatcher(
+    return NameMatcher(
         country="Estonia",
         country_code="EE",
         gem_locator=cast(GEMLocator, SimpleNamespace(df_gem=gem_df)),
@@ -137,11 +137,11 @@ def matcher(
 # ----------------------------------
 # Tests
 # ----------------------------------
-def test_ppdb_adapter_country_filter_and_confidence(matcher: NameMatrixMatcher):
+def test_ppdb_adapter_country_filter_and_confidence(matcher: NameMatcher):
     """Happy path for PPDB_ADAPTER's country filter, coordinate filter, and confidence rule.
 
     Args:
-        matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
+        matcher (NameMatcher): Matcher scoped to Estonia, from the
             `matcher` fixture.
     """
     candidates = matcher._build_candidates(PPDB_ADAPTER)
@@ -161,7 +161,7 @@ def test_ppdb_adapter_medium_confidence_without_eic(ppdb_df: pd.DataFrame):
     Args:
         ppdb_df (pd.DataFrame): Synthetic ppdb (PPM) candidate rows.
     """
-    m = NameMatrixMatcher(
+    m = NameMatcher(
         country="Germany",
         country_code="DE",
         ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
@@ -171,11 +171,11 @@ def test_ppdb_adapter_medium_confidence_without_eic(ppdb_df: pd.DataFrame):
     assert candidates[0].confidence == "medium"  # no EIC
 
 
-def test_gem_adapter_other_names_and_confidence(matcher: NameMatrixMatcher):
+def test_gem_adapter_other_names_and_confidence(matcher: NameMatcher):
     """Happy path for GEM_ADAPTER's other_names_col and constant "high" confidence.
 
     Args:
-        matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
+        matcher (NameMatcher): Matcher scoped to Estonia, from the
             `matcher` fixture.
     """
     candidates = matcher._build_candidates(GEM_ADAPTER)
@@ -187,11 +187,11 @@ def test_gem_adapter_other_names_and_confidence(matcher: NameMatrixMatcher):
     assert c.other_names == "Auvere Elektrijaam, Auvere EJ"
 
 
-def test_osm_adapter_no_country_column(matcher: NameMatrixMatcher):
+def test_osm_adapter_no_country_column(matcher: NameMatcher):
     """Happy path for OSM_ADAPTER when the source has no country column.
 
     Args:
-        matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
+        matcher (NameMatcher): Matcher scoped to Estonia, from the
             `matcher` fixture.
     """
     candidates = matcher._build_candidates(OSM_ADAPTER)
@@ -205,19 +205,19 @@ def test_osm_adapter_no_country_column(matcher: NameMatrixMatcher):
 
 def test_build_candidates_missing_locator_returns_empty():
     """Failure path: a matcher with no locator wired up returns no candidates."""
-    m = NameMatrixMatcher(country="Estonia")
+    m = NameMatcher(country="Estonia")
     assert m._build_candidates(PPDB_ADAPTER) == []
     assert m._build_candidates(GEM_ADAPTER) == []
 
 
-def test_build_matrix_uses_all_three_adapters(matcher: NameMatrixMatcher):
+def test_build_matrix_uses_all_three_adapters(matcher: NameMatcher):
     """Happy path for build_matrix: candidates from all three sources are present.
 
     Args:
-        matcher (NameMatrixMatcher): Matcher scoped to Estonia, from the
+        matcher (NameMatcher): Matcher scoped to Estonia, from the
             `matcher` fixture.
     """
-    matrix = matcher.build_matrix()
+    matrix = matcher._build_candidate_index()
     all_candidates = [c for candidates in matrix.values() for c in candidates]
     sources = {c.source for c in all_candidates}
     assert sources == {"ppdb", "gem", "osm"}

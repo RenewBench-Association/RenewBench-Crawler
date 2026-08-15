@@ -1,11 +1,10 @@
 """Source-agnostic name tokenization and token-weighted scoring.
 
-Splits a power-plant name into weighted tokens so that a discriminative
-place/plant name (e.g. "auvere") counts far more toward a match score than
-a generic unit/plant-type word (e.g. "unit", "g1", "he"). Used by
-NameMatrixMatcher to compare a target name against PPM/GEM/OSM candidate
-names via the same tokenize-and-weight function on both sides, instead of
-each candidate source expanding its own names ad hoc.
+Splits an EGE name into weighted tokens so that a discriminative place/EGE name (e.g.
+"auvere") counts far more toward a match score than a generic EGE-type word (e.g. "unit",
+"g1", "he"). Used by NameMatcher to compare a target name against PPM/GEM/OSM candidate
+names via the same tokenize-and-weight function on both sides, instead of each candidate
+source expanding its own names ad hoc.
 
 Weighting is dictionary-based only (GENERIC_UNIT_TOKENS / PLANT_NAME_EXPANSIONS
 / COUNTRY_PLANT_NAME_EXPANSIONS from mappings.py).
