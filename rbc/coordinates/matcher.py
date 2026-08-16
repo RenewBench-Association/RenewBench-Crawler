@@ -13,6 +13,7 @@ Key Features:
 """
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Callable
 
 import pandas as pd
@@ -43,6 +44,9 @@ from rbc.coordinates.utils.values import is_missing, strip_str
 class MatchCandidate:
     """A single matching candidate from a data source."""
 
+    # todo: Several attributes are never used. Decide whether to keep or remove! They include:
+    #  "match_score", "confidence", "other_names"
+
     name: str
     norm_name: str  # actually tokenized & rejoined name for expanded abbreviations
     source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
@@ -60,6 +64,9 @@ class MatchCandidate:
 class MatchResult:
     """Result of a name matching operation."""
 
+    # todo: Several attributes are never used. Decide whether to keep or remove! They include:
+    #  "variants_tried", "top_candidates"
+
     matched: bool
     candidate: MatchCandidate | None
     score: float
@@ -74,6 +81,9 @@ class SourceAdapter:
     Replaces hardcoded candidate building per locator source with a single generic builder
     (see ``NameMatcher._build_candidates``).
     """
+
+    # todo: Several attributes are not necessary, as the MatchCandidate elements they
+    #  feed are not used anywhere. These are: "other_names_col", "confidence_fn"
 
     source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     get_df: Callable[["NameMatcher"], pd.DataFrame | None]
@@ -142,7 +152,10 @@ class NameMatcher:
     - Caching for repeated matches
 
     Example:
-        >>> matcher = NameMatcher(country="Germany",gem_locator=gem_loc,osm_df=osm_data)
+        >>> matcher = NameMatcher(
+        ...     country="Germany", gem_locator=gem_loc, ppdb_locator=ppm_loc
+        ...     osm_df=osm_df, tok=tok
+        ... )
         >>> result = matcher.match("Enguri Unit 5", fuel_type="hydro")
         >>> if result.matched:
         ...     candidate = result.candidate
@@ -160,7 +173,6 @@ class NameMatcher:
         self,
         country: str | None = None,
         country_code: str | None = None,
-        fuel_type: str | None = None,
         gem_locator: GEMLocator | None = None,
         ppdb_locator: PPMLocator | OSMPPLocator | None = None,
         osm_df: pd.DataFrame | None = None,
@@ -171,9 +183,8 @@ class NameMatcher:
         Args:
             country (str | None): Target country name for hard filtering (prevents
                 cross-country matches). Defaults to None.
-            country_code (str | None): Target country ISO3166-alpha-2 code for backup tok
-                creation. Defaults to None.
-            fuel_type (str | None): Fuel type for pre-filtering candidates. Defaults to None.
+            country_code (str | None): Target country ISO3166-alpha-2 code for backup
+                tokenizer creation. Defaults to None.
             gem_locator (GEMLocator | None): GEM locator instance for GEM candidates.
                 Defaults to None.
             ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
@@ -184,7 +195,6 @@ class NameMatcher:
         """
         self.target_country = country
         self.norm_target_country = normalize_country_name(country)
-        self.fuel_type = fuel_type
 
         # Data sources
         self.gem_locator: GEMLocator | None = gem_locator
@@ -200,13 +210,21 @@ class NameMatcher:
         self._target_variants: dict[str, list[str]] = {}  # name -> [variants]
         self._target_alternatives: dict[str, list[str]] = {}  # name -> [alternatives]
 
-        # Cache for candidate index/lookup: norm_name -> [MatchCandidates]
-        self._candidate_index: dict[str, list[MatchCandidate]] = {}
-        self._candidate_index_built = False
-
     # ---------------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------------
+    def add_target_alternatives(self, name: str, alt_names: list[str]) -> None:
+        """Add alternative names for a target EGE's name (e.g. from EIC directory).
+
+        Args:
+            name (str): The original/primary target's name.
+            alt_names (list[str]): List of alternative names to try for this target's name.
+        """
+        if name not in self._target_alternatives:
+            self._target_alternatives[name] = []
+
+        self._target_alternatives[name].extend(alt_names)
+
     def match(
         self,
         target_name: str,
@@ -243,10 +261,8 @@ class NameMatcher:
             )
 
         # --- Preparation: Define and build all required parameters
-        fuel_type = fuel_type if fuel_type is not None else self.fuel_type
-
+        candidate_index = self._candidate_index
         target_variants = self._generate_target_variants(target_name)
-        candidate_index = self._build_candidate_index()
 
         all_matches: list[tuple[MatchCandidate, float]] = []  # match collection
 
@@ -254,31 +270,26 @@ class NameMatcher:
         for variant in target_variants:
             if variant in candidate_index:
                 for candidate in candidate_index[variant]:
-                    if self._is_valid_candidate(candidate):
-                        score = 100.0
-                        score = self._adjust_score(score, candidate, fuel_type)
+                    score = 100.0
+                    score = self._adjust_score(score, candidate, fuel_type)
 
-                        if score >= threshold:
-                            all_matches.append((candidate, score))
+                    if score >= threshold:
+                        all_matches.append((candidate, score))
 
-        # --- Approach 2: Weighted-token scoring against all (valid) candidates.
-        # Each target token is matched against its best-fitting candidate token and weighted
-        # by importance, so a true discriminative name match (e.g. "auvere") counts far
-        # more than a match on a generic/unit token shared by unrelated plants (e.g. "g1").
+        # --- Approach 2: Weighted-token scoring against all candidates.
+        # Each target token is matched against its best-fitting candidate token and weighted:
+        # A descriptive match (e.g. "auvere") counts far more than a generic one (e.g. "g1").
         if not all_matches:
             all_candidates = []  # get all candidates for matching
             for candidates in candidate_index.values():
                 all_candidates.extend(candidates)
 
-            valid_candidates = [
-                c for c in all_candidates if self._is_valid_candidate(c)
-            ]
             for variant in target_variants:
                 target_wt = self.tok.weighted_tokenize(variant)
                 if not target_wt.tokens:
                     continue
 
-                for candidate in valid_candidates:
+                for candidate in all_candidates:
                     candidate_wt = self.tok.weighted_tokenize(candidate.norm_name)
 
                     score = get_weighted_token_score(target_wt, candidate_wt)
@@ -312,22 +323,114 @@ class NameMatcher:
             top_candidates=top_candidates,
         )
 
-    def add_target_alternatives(self, name: str, alt_names: list[str]) -> None:
-        """Add alternative names for a target EGE's name (e.g., from EIC directory).
+    # ---------------------------------------------------------------------------
+    # Cached properties (calculated once and re-used)
+    # ---------------------------------------------------------------------------
+    @cached_property
+    def _candidate_index(self) -> dict[str, list[MatchCandidate]]:
+        """Build the searchable candidate index/lookup cache (norm_name -> [MatchCandidates]).
 
-        Args:
-            name (str): The original/primary target's name.
-            alt_names (list[str]): List of alternative names to try for this target's name.
+        Creates a mapping of each unique normalized candidate name to the list of candidates
+        that share said name from all coordinate sources, stored as MatchCandidate objects.
+        As a ``@cached_property``, ``_candidate_index`` is built once and reused after.
+
+        Returns:
+            index (dict): Candidate index/lookup dict.
         """
-        if name not in self._target_alternatives:
-            self._target_alternatives[name] = []
+        index: dict[str, list[MatchCandidate]] = {}
 
-        self._target_alternatives[name].extend(alt_names)
-        self._candidate_index_built = False  # invalidate cache as new names were added
+        # Collect candidates from all available sources via their adapters
+        candidates: list[MatchCandidate] = []
+
+        if self.ppdb_locator is not None:
+            candidates.extend(self._build_candidates(PPDB_ADAPTER))
+
+        if self.gem_locator is not None:
+            candidates.extend(self._build_candidates(GEM_ADAPTER))
+
+        if self.osm_df is not None and len(self.osm_df) > 0:
+            candidates.extend(self._build_candidates(OSM_ADAPTER))
+
+        # Add candidates to index by normalized name
+        for candidate in candidates:
+            index.setdefault(candidate.norm_name, []).append(candidate)
+
+        logger.info(
+            f"NameMatcher: Built candidate lookup for '{self.target_country}' with "
+            f"{len(candidates)} total candidates, of which {len(index)} are unique."
+        )
+        return index
 
     # ---------------------------------------------------------------------------
     # Helper methods
     # ---------------------------------------------------------------------------
+    def _build_candidates(self, adapter: SourceAdapter) -> list[MatchCandidate]:
+        """Build candidates from a locator source depending on its ``SourceAdapter`` config.
+
+        Returns valid candidates by including only those that:
+        - pass the country filter (if a country & location source country column are given)
+        - have location coordinates (lat/lon)
+
+        Args:
+            adapter (SourceAdapter): The locator source adapter to build candidates from.
+
+        Returns:
+            list[MatchCandidate]: A list of valid candidates as MatchCandidate objects.
+        """
+        df = adapter.get_df(self)
+        if df is None:
+            return []
+
+        try:
+            df = df.copy()
+        except AttributeError:
+            return []
+
+        # Filter by country if specified and the source has a country column (OSM has none)
+        if self.target_country and adapter.country_col:
+            converted_target_country = get_ppm_country_name(self.norm_target_country)
+            if converted_target_country:
+                df = df[
+                    df[adapter.country_col].astype(str).str.lower()
+                    == str(converted_target_country).lower()
+                ]
+
+        # Filter to only rows with coordinates
+        df = df.dropna(subset=[adapter.lat_col, adapter.lon_col])
+
+        if len(df) == 0:
+            return []
+
+        candidates = []
+        for _, row in df.iterrows():
+            name = strip_str(row[adapter.name_col])
+            if name is None:
+                continue
+
+            # tokenize name for better cross-language matching (expands abbreviated terms)
+            tokenized_name = " ".join(self.tok.tokenize(name))
+
+            other_names = ""
+            if adapter.other_names_col:
+                other_names = strip_str(row.get(adapter.other_names_col)) or ""
+
+            candidates.append(
+                MatchCandidate(
+                    name=name,
+                    norm_name=tokenized_name,
+                    source=adapter.source,
+                    fueltype=strip_str(row[adapter.fueltype_col]),
+                    lat=float(row[adapter.lat_col]),
+                    lon=float(row[adapter.lon_col]),
+                    country=strip_str(row.get(adapter.country_col)),
+                    source_id=strip_str(row.get(adapter.id_col)),
+                    confidence=adapter.confidence_fn(row),
+                    other_names=other_names,
+                )
+            )
+
+        return candidates
+
     def _generate_target_variants(self, name: str) -> list[str]:
         """Generate all plausible variants of the target EGE's name for matching.
 
@@ -398,151 +501,6 @@ class NameMatcher:
         result = list(variants)
         self._target_variants[name] = result
         return result
-
-    def _build_candidate_index(self) -> dict[str, list[MatchCandidate]]:
-        """Build the searchable candidate index/lookup.
-
-        Creates a mapping of each unique normalized candidate name to the list of candidates
-        that share said name from all coordinate sources, stored as MatchCandidate objects.
-        The index is cached and only rebuilt when new alternative names have been added.
-
-        Returns:
-            dict: Dictionary mapping candidate.norm_name -> [MatchCandidate]
-        """
-        if self._candidate_index_built:
-            return self._candidate_index
-
-        self._candidate_index = {}
-
-        # Collect candidates from all available sources via their adapters
-        candidates: list[MatchCandidate] = []
-
-        if self.ppdb_locator is not None:
-            candidates.extend(self._build_candidates(PPDB_ADAPTER))
-
-        if self.gem_locator is not None:
-            candidates.extend(self._build_candidates(GEM_ADAPTER))
-
-        if self.osm_df is not None and len(self.osm_df) > 0:
-            candidates.extend(self._build_candidates(OSM_ADAPTER))
-
-        # Index candidates by normalized name
-        for candidate in candidates:
-            if candidate.norm_name not in self._candidate_index:
-                self._candidate_index[candidate.norm_name] = []
-
-            self._candidate_index[candidate.norm_name].append(candidate)
-
-        self._candidate_index_built = True
-        logger.info(
-            f"NameMatcher: Built candidate lookup for {self.target_country} with "
-            f"{len(candidates)} total candidates, of which {len(self._candidate_index)} "
-            f"are unique."
-        )
-
-        return self._candidate_index
-
-    def _build_candidates(self, adapter: SourceAdapter) -> list[MatchCandidate]:
-        """Build candidates from a locator source depending on its ``SourceAdapter`` config.
-
-        Args:
-            adapter (SourceAdapter): The locator source adapter to build candidates from.
-
-        Returns:
-            list[MatchCandidate]: A list of matching candidates.
-        """
-        df = adapter.get_df(self)
-        if df is None:
-            return []
-
-        try:
-            df = df.copy()
-        except AttributeError:
-            return []
-
-        # Filter by country if specified and the source has a country column
-        # (OSM has none; relies on the matrix-level country filter instead).
-        if self.target_country and adapter.country_col:
-            converted_target_country = get_ppm_country_name(self.norm_target_country)
-            if converted_target_country:
-                df = df[
-                    df[adapter.country_col].astype(str).str.lower()
-                    == str(converted_target_country).lower()
-                ]
-
-        # Filter by fuel type if specified
-        if self.fuel_type:
-            df = df[
-                df[adapter.fueltype_col].apply(
-                    lambda x: is_fueltype_compatible(self.fuel_type, x)
-                )
-            ]
-
-        # Filter to only rows with coordinates
-        df = df.dropna(subset=[adapter.lat_col, adapter.lon_col])
-
-        if len(df) == 0:
-            return []
-
-        candidates = []
-        for _, row in df.iterrows():
-            name = strip_str(row[adapter.name_col])
-            if name is None:
-                continue
-
-            # tokenize name for better cross-language matching (expands abbreviated terms)
-            tokenized_name = " ".join(self.tok.tokenize(name))
-            lat = (
-                float(row[adapter.lat_col]) if pd.notna(row[adapter.lat_col]) else None
-            )
-            lon = (
-                float(row[adapter.lon_col]) if pd.notna(row[adapter.lon_col]) else None
-            )
-
-            other_names = ""
-            if adapter.other_names_col:
-                other_names = strip_str(row.get(adapter.other_names_col)) or ""
-
-            candidates.append(
-                MatchCandidate(
-                    name=name,
-                    norm_name=tokenized_name,
-                    source=adapter.source,
-                    fueltype=strip_str(row[adapter.fueltype_col]),
-                    lat=lat,
-                    lon=lon,
-                    country=strip_str(row.get(adapter.country_col)),
-                    source_id=strip_str(row.get(adapter.id_col)),
-                    confidence=adapter.confidence_fn(row),
-                    other_names=other_names,
-                )
-            )
-
-        return candidates
-
-    def _is_valid_candidate(self, candidate: "MatchCandidate") -> bool:
-        """Check if a candidate is valid for matching (has coordinate, passes country filter).
-
-        Args:
-            candidate (MatchCandidate): The candidate to check.
-
-        Returns:
-            bool: True if the candidate is valid, False otherwise.
-        """
-        if candidate.lat is None or candidate.lon is None:
-            return False
-
-        # Hard filter: candidate must match our (operator) country
-        if self.target_country and self.norm_target_country and candidate.country:
-            norm_candidate_country = normalize_country_name(candidate.country)
-            if norm_candidate_country:
-                if self.norm_target_country.lower() != norm_candidate_country.lower():
-                    return False
-
-            elif self.target_country.lower() != candidate.country.lower():
-                return False
-
-        return True
 
     def _adjust_score(
         self, score: float, candidate: MatchCandidate, fuel: str | None
