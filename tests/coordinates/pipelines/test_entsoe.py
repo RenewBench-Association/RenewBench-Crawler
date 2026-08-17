@@ -77,7 +77,7 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
                 object,
                 SimpleNamespace(
                     match_by_entsoe_id=lambda eic: None,
-                    df_gem=pd.DataFrame(
+                    df=pd.DataFrame(
                         [
                             {
                                 "plant_name": "Riverside Plant",

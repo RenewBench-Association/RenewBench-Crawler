@@ -5,6 +5,7 @@ Data foundation: OSMPP CSV (based on OSM data), other European data sources.
 """
 
 import ast
+from functools import cached_property
 
 import pandas as pd
 from loguru import logger
@@ -47,14 +48,30 @@ class PPMLocator:
         self.df: pd.DataFrame = pd.read_csv(PPM_CSV_URL)
         self.df = normalize_locator_countries(self.df)  # normalize the country values
 
-        self.df["entsoe_id_list"] = self.df["projectID"].apply(
-            self._extract_entsoe_code_list
-        )
-        self._entsoe_id_index = self._build_entsoe_id_index()
         logger.info(f"PPMLocator initialized: {len(self.df)} entries")
 
     # ------------------------------------------------------------------
-    # Internal helpers for initialization
+    # Cached properties (calculated once and re-used)
+    # ------------------------------------------------------------------
+    @cached_property
+    def _entsoe_id_index(self) -> dict[str, int]:
+        """Pre-compute an ENTSO-E EIC code lookup (row-position index) once.
+
+        Avoids full df scan which ``match_by_entsoe_id`` would otherwise need on every call.
+
+        Returns:
+            dict[str, int]: EIC code lookup dict.
+        """
+        index: dict[str, int] = {}
+
+        for pos, project_id in enumerate(self.df["projectID"]):
+            for eic in self._extract_entsoe_code_list(project_id):
+                index.setdefault(eic, pos)
+
+        return index
+
+    # ------------------------------------------------------------------
+    # Helper methods
     # ------------------------------------------------------------------
     @staticmethod
     def _extract_entsoe_code_list(project_id_str: str) -> list[str]:
@@ -89,18 +106,6 @@ class PPMLocator:
 
         return []
 
-    def _build_entsoe_id_index(self) -> dict[str, int]:
-        """Pre-compute an ENTSO-E EIC code lookup (row-position index).
-
-        Returns:
-            dict[str, int]: EIC code lookup dict.
-        """
-        index: dict[str, int] = {}
-        for pos, id_list in enumerate(self.df["entsoe_id_list"]):
-            for eic in id_list:
-                index.setdefault(eic, pos)
-        return index
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -125,11 +130,11 @@ class PPMLocator:
         return self.df[(self.df["Country"] == country)]
 
     def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
-        """Find an EGE by its ENTSOE EIC code and return the full row as a dict.
+        """Find an EGE by its ENTSOE EIC code and return the row as a dict.
 
-        Searches the pre-computed `entsoe_id_list` column (one EIC code per row after
-        exploding the `projectID` dict-string) for an exact match via a pre-built
-        EIC -> row-position index (see ``_build_entsoe_id_index``).
+        Extracts ENTSO-E codes from PPM's parsed "projectID" column (see
+        ``_extract_entsoe_code_list``) via a pre-built EIC -> row-position index
+        (see ``_entsoe_id_index``).
 
         Args:
             entsoe_id (str | None): ENTSOE EIC code to search for (e.g. "11XNUON--------Q").

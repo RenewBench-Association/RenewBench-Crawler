@@ -96,7 +96,7 @@ class SourceAdapter:
 
 GEM_ADAPTER = SourceAdapter(
     source="gem",
-    get_df=lambda m: getattr(m.gem_locator, "df_gem", None),
+    get_df=lambda m: getattr(m.gem_locator, "df", None),
     name_col="plant_name",
     country_col="Country",
     fueltype_col="Fueltype",

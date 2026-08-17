@@ -15,6 +15,7 @@ their "Other IDs" columns, which gives free exact matches without any fuzzy logi
 from __future__ import annotations
 
 import re
+from functools import cached_property
 from pathlib import Path
 
 import pandas as pd
@@ -23,8 +24,8 @@ from loguru import logger
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.values import strip_str
 
-# Per-tracker file glob pattern, main data sheet name, and default fuel type (used
-# when the tracker itself doesn't carry a per-row "Fuel" column).
+# Per-XLSX map: file attributes (file name, sheet name, fuel data location) → specs for file
+# "fuel_default" is EITHER a tracker's constant type OR None for a per-row "fuel" column
 _TRACKER_SPECS: dict[str, dict[str, str | None]] = {
     "coal": {
         "glob": "Global-Coal-Plant-Tracker-*.xlsx",
@@ -68,9 +69,8 @@ _TRACKER_SPECS: dict[str, dict[str, str | None]] = {
     },
 }
 
-# Per-tracker column-name mapping to canonical fields. Only columns that differ
-# from the canonical name need to be listed; canonical names are used as-is when
-# already present (handled by _first_present()).
+# Per-XLSX map: column name → canonical column names.
+# Only columns that differ from canonical are listed, rest as is. Handled by _first_present().
 _COLUMN_ALIASES: dict[str, dict[str, list[str]]] = {
     "coal": {
         "plant_name": ["Plant name"],
@@ -132,12 +132,30 @@ _COLUMN_ALIASES: dict[str, dict[str, list[str]]] = {
     },
 }
 
+# Global map: GEM column name → (dtype, source). If source = None: use per-tracker col alias.
+_GEM_COLUMN_ALTERNATIVES: dict[str, tuple[str, list[str] | None]] = {
+    "plant_name": ("str", None),
+    "unit_name": ("str", None),
+    "gem_unit_id": ("str", None),
+    "other_ids_unit": ("str", None),  # raw "Other IDs", for ENTSO-E code extraction
+    "other_ids_location": ("str", None),
+    "gem_location_id": ("str", ["GEM location ID"]),
+    # hydro uses "Country/Area 1"/"Area 2" → default to 1 to prevent silent row dropping
+    "Country": ("str", ["Country/Area", "Country/Area 1"]),
+    "other_names": ("str", ["Other Name(s)", "Other name(s)"]),  # for better matching
+    "Status": ("str", ["Status"]),
+    "wiki_url": ("str", ["Wiki URL"]),
+    "Capacity": ("num", ["Capacity (MW)", "Unit Capacity (MW)"]),
+    "lat": ("num", ["Latitude"]),
+    "lon": ("num", ["Longitude"]),
+}
+
 # Pattern to extract ENTSO-E EIC codes out of GEM's "Other IDs (...)" multi-value strings
 _ENTSOE_ID_PATTERN = re.compile(r"ENTSO-E:\s*([^\s,]+)")
 
 
 def _first_present(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
-    """Return the first candidate column that exists in `df`, else an all-NaN series.
+    """Return the first candidate column that exists in ``df``, else an all-NaN series.
 
     Args:
         df (pd.DataFrame): DataFrame to be parsed for candidate columns.
@@ -154,18 +172,17 @@ def _first_present(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
 
 
 def _first_present_str(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
-    """Like :func:`_first_present`, but coerces the result to nullable string dtype.
+    """Like ``_first_present`` function, but transforms the result to nullable string dtype.
 
-    Several GEM trackers mix numeric and string values in the same logical column
-    (e.g. unit names like `1`, `2` alongside `"Unit 1"`), which breaks parquet
-    serialization unless normalized to a single dtype up front.
+    Several GEM data mix numeric and string values in the same column (e.g. unit names like
+    `1`, `2` alongside `"Unit 1"`), which breaks parquet serialization if not normalized.
 
     Args:
         df (pd.DataFrame): DataFrame to be parsed for candidate columns.
         candidates (list[str]): List of candidate columns.
 
     Returns:
-        pd.Series: Series of the first candidate column in `df` as strings, if one exists.
+        pd.Series: Series of the first candidate column in ``df`` as strings, if one exists.
     """
     series = _first_present(df, candidates)
     return series.astype("string")
@@ -182,7 +199,7 @@ class GEMLocator:
     Attributes:
         gem_dir (Path): Directory containing the downloaded GEM xlsx tracker files.
         cache_dir (Path | None): Directory used for the combined parquet cache.
-        df_gem (pd.DataFrame): Combined, normalized GEM data across all trackers found.
+        df (pd.DataFrame): Combined, normalized GEM data across all trackers found.
     """
 
     # GEM column headers (without entsoe IDs)
@@ -212,12 +229,10 @@ class GEMLocator:
         """
         self.gem_dir = Path(gem_dir)
         self.cache_dir = Path(cache_dir) if cache_dir else self.gem_dir
-        self.df_gem: pd.DataFrame = pd.DataFrame()
+        self.df: pd.DataFrame = pd.DataFrame()
 
         self._load()
-
-        self._entsoe_id_index: dict[str, int] = {}
-        self._build_entsoe_id_index()
+        logger.info(f"GEMLocator initialized: {len(self.df)} entries")
 
     # ------------------------------------------------------------------
     # Internal helpers for initialization
@@ -236,28 +251,26 @@ class GEMLocator:
         newest_source_mtime = max(p.stat().st_mtime for p in gem_xlsx_files.values())
 
         if cache_path.exists() and cache_path.stat().st_mtime >= newest_source_mtime:
-            logger.info(f"GEMLocator: Loading combined data from cache '{cache_path}'")
-            self.df_gem = pd.read_parquet(cache_path)
+            logger.info(
+                f"GEMLocator: Loading combined data of {len(gem_xlsx_files)} GEM tracker "
+                f"xlsx file(s) from cache '{cache_path}'"
+            )
+            self.df = pd.read_parquet(cache_path)
         else:
             logger.info(
                 f"GEMLocator: Parsing {len(gem_xlsx_files)} GEM tracker xlsx file(s) "
                 f"from '{self.gem_dir}'..."
             )
-            self.df_gem = self._load_and_normalize(gem_xlsx_files)
+            self.df = self._normalize_xlsx_into_df(gem_xlsx_files)
 
-            if not self.df_gem.empty:
+            if not self.df.empty:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
-                self.df_gem.to_parquet(cache_path, index=False)
+                self.df.to_parquet(cache_path, index=False)
                 logger.info(f"GEMLocator: Combined data stored to '{cache_path}'")
             else:
                 logger.warning(
                     "GEMLocator: Nothing extracted from tracker xlsx file(s)!"
                 )
-
-        logger.info(
-            f"GEMLocator initialized: {len(self.df_gem)} entries "
-            f"across {len(gem_xlsx_files)} GEM xlsx tracker file(s)"
-        )
 
     def _resolve_gem_xlsx_files(self) -> dict[str, Path]:
         """Resolve one xlsx file per tracker key, picking the newest match on ties.
@@ -277,7 +290,7 @@ class GEMLocator:
         return resolved
 
     @staticmethod
-    def _load_and_normalize(tracker_files: dict[str, Path]) -> pd.DataFrame:
+    def _normalize_xlsx_into_df(tracker_files: dict[str, Path]) -> pd.DataFrame:
         """Read & normalize every resolved tracker file into one combined DataFrame.
 
         Args:
@@ -298,57 +311,24 @@ class GEMLocator:
                 continue
 
             df_norm = pd.DataFrame(index=df_raw.index)
-            df_norm["plant_name"] = _first_present_str(
-                df_raw, aliases.get("plant_name", [])
-            )
-            df_norm["unit_name"] = _first_present_str(
-                df_raw, aliases.get("unit_name", [])
-            )
-            df_norm["gem_unit_id"] = _first_present_str(
-                df_raw, aliases.get("gem_unit_id", [])
-            )
-            df_norm["gem_location_id"] = _first_present_str(df_raw, ["GEM location ID"])
-            # Most trackers use "Country/Area"; the Hydropower tracker instead uses
-            # "Country/Area 1" / "Country/Area 2" to support binational plants — fall
-            # back to the primary one so country filtering doesn't silently drop
-            # every hydro-tracker row (e.g. GEM's "Enguri hydroelectric plant").
-            df_norm["Country"] = _first_present_str(
-                df_raw, ["Country/Area", "Country/Area 1"]
-            )
-            # Comma-separated alternate/historic/local names (e.g. "Les Awirs,
-            # Centrale des Awirs, Flemalle") — often includes names that better
-            # match ENTSO-E/OSM naming than the official "plant_name".
-            df_norm["other_names"] = _first_present_str(
-                df_raw, ["Other Name(s)", "Other name(s)"]
-            )
-            df_norm["Capacity"] = pd.to_numeric(
-                _first_present(df_raw, ["Capacity (MW)", "Unit Capacity (MW)"]),
-                errors="coerce",
-            )
-            df_norm["Status"] = _first_present_str(df_raw, ["Status"])
-            df_norm["lat"] = pd.to_numeric(
-                _first_present(df_raw, ["Latitude"]), errors="coerce"
-            )
-            df_norm["lon"] = pd.to_numeric(
-                _first_present(df_raw, ["Longitude"]), errors="coerce"
-            )
-            df_norm["wiki_url"] = _first_present_str(df_raw, ["Wiki URL"])
+
+            # Normalize each columns' values (find true column equivalents via mappings)
+            # 1. All except "tracker" and "Fueltype"
+            for col, (dtype, alt) in _GEM_COLUMN_ALTERNATIVES.items():
+                candidates = alt if alt is not None else aliases.get(col, [])
+                if dtype == "num":
+                    df_norm[col] = pd.to_numeric(
+                        _first_present(df_raw, candidates), errors="coerce"
+                    )
+                else:  # dtype == "str"
+                    df_norm[col] = _first_present_str(df_raw, candidates)
+
+            # 2. Specific handling of "tracker" and "Fueltype"
             df_norm["tracker"] = tracker
 
-            # Fuel type: per-row 'Fuel' column when available, else tracker default
-            fuel_cols = aliases.get("fuel", [])
-            if fuel_cols and any(c in df_raw.columns for c in fuel_cols):
-                df_norm["Fueltype"] = _first_present_str(df_raw, fuel_cols)
-            else:
-                df_norm["Fueltype"] = spec["fuel_default"]
-
-            # Keep raw "Other IDs" columns (used downstream to extract ENTSO-E codes)
-            df_norm["_other_ids_unit"] = _first_present_str(
-                df_raw, aliases.get("other_ids_unit", [])
-            )
-            df_norm["_other_ids_location"] = _first_present_str(
-                df_raw, aliases.get("other_ids_location", [])
-            )
+            # Fueltype: per-row 'fuel' column when available, else tracker default
+            fuel = _first_present_str(df_raw, aliases.get("fuel", []))
+            df_norm["Fueltype"] = fuel if fuel.notna().any() else spec["fuel_default"]
 
             normalized_dfs.append(df_norm)
 
@@ -359,26 +339,32 @@ class GEMLocator:
         df = normalize_locator_countries(df)  # normalize the country values
         return df
 
-    def _build_entsoe_id_index(self) -> None:
-        """Pre-compute an ENTSO-E EIC code -> row-position index, once.
+    # ------------------------------------------------------------------
+    # Cached properties (calculated once and re-used)
+    # ------------------------------------------------------------------
+    @cached_property
+    def _entsoe_id_index(self) -> dict[str, int]:
+        """Pre-compute an ENTSO-E EIC code lookup (row-position index) once.
 
-        `match_by_entsoe_id` used to run a full-dataframe `.apply()` (with a
-        regex extraction per row) on *every* call, i.e. an O(n) scan repeated for
-        every unit being matched. Building this index once at load time turns
-        each lookup into an O(1) dict access instead.
+        Avoids full df scan which ``match_by_entsoe_id`` would otherwise need on every call.
+
+        Returns:
+            dict[str, int]: EIC code lookup dict.
         """
-        if len(self.df_gem) == 0:
-            return
-
         index: dict[str, int] = {}
-        unit_ids = self.df_gem.get("_other_ids_unit", pd.Series(dtype=object))
-        location_ids = self.df_gem.get("_other_ids_location", pd.Series(dtype=object))
+
+        if len(self.df) == 0:
+            return index
+
+        unit_ids = self.df.get("other_ids_unit", pd.Series(dtype=object))
+        location_ids = self.df.get("other_ids_location", pd.Series(dtype=object))
         for pos, (unit_val, location_val) in enumerate(zip(unit_ids, location_ids)):
             for val in (unit_val, location_val):
                 if isinstance(val, str):
                     for eic in _ENTSOE_ID_PATTERN.findall(val):
                         index.setdefault(eic, pos)
-        self._entsoe_id_index = index
+
+        return index
 
     # ------------------------------------------------------------------
     # Public API
@@ -387,8 +373,7 @@ class GEMLocator:
         """Find an EGE by its ENTSO-E EIC code and return the row as a dict.
 
         Extracts ENTSO-E codes from GEM's "Other IDs (unit)" / "Other IDs (location)"
-        columns via a pre-built EIC -> row-position index (see ``_build_entsoe_id_index``).
-        so repeated lookups are O(1) instead of re-scanning the whole dataframe.
+        columns via a pre-built EIC -> row-position index (see ``_entsoe_id_index``).
 
         Args:
             entsoe_id (str | None): ENTSO-E EIC code to search for.
@@ -398,14 +383,14 @@ class GEMLocator:
                 row has no coordinates.
         """
         target = strip_str(entsoe_id)
-        if len(self.df_gem) == 0 or target is None:
+        if len(self.df) == 0 or target is None:
             return None
 
         pos = self._entsoe_id_index.get(target)
         if pos is None:
             return None
 
-        row = self.df_gem.iloc[pos]
+        row = self.df.iloc[pos]
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 

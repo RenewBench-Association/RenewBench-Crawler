@@ -128,7 +128,7 @@ def matcher(
     return NameMatcher(
         country="Estonia",
         country_code="EE",
-        gem_locator=cast(GEMLocator, SimpleNamespace(df_gem=gem_df)),
+        gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
         ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
         osm_df=osm_df,
     )

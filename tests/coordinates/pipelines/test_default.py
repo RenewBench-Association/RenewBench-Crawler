@@ -63,7 +63,7 @@ def eia_pipeline(eia_input_dir: Path, tmp_path: Path) -> DefaultPipeline:
         gem_loc=cast(
             GEMLocator,
             SimpleNamespace(
-                df_gem=pd.DataFrame(
+                df=pd.DataFrame(
                     [
                         {
                             "plant_name": "Riverside Plant",
