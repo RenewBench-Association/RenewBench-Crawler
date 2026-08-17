@@ -22,10 +22,7 @@ from loguru import logger
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.utils.country import (
-    get_ppm_country_name,
-    normalize_country_name,
-)
+from rbc.coordinates.utils.country import normalize_operator_country_name
 from rbc.coordinates.utils.fuel import is_fueltype_compatible
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
@@ -134,7 +131,7 @@ OSM_ADAPTER = SourceAdapter(
 # Main Matcher Class
 # ---------------------------------------------------------------------------
 class NameMatcher:
-    """Lookup-based fuzzy name matcher for multiple coordinate/location data sources.
+    """Lookup-based fuzzy name matcher for multiple (coordinate) locator data sources.
 
     This class consolidates all name-based matching logic into a single, reusable component.
     It builds a searchable lookup index that maps normalized names to candidate EGEs, enabling
@@ -142,7 +139,7 @@ class NameMatcher:
 
     Definitions:
     - target(s): sys-op EGE(s) to find coordinates for.
-    - candidate(s): EGE(s) from coordinate/location data sources that may match.
+    - candidate(s): EGE(s) from coordinate/locator data sources that may match.
 
     Features:
     - Generates all plausible name variants for both input and candidates
@@ -194,7 +191,7 @@ class NameMatcher:
                 to None, in which case a new tokenizer is created using the country_code.
         """
         self.target_country = country
-        self.norm_target_country = normalize_country_name(country)
+        self.norm_target_country = normalize_operator_country_name(country)
 
         # Data sources
         self.gem_locator: GEMLocator | None = gem_locator
@@ -388,12 +385,10 @@ class NameMatcher:
 
         # Filter by country if specified and the source has a country column (OSM has none)
         if self.target_country and adapter.country_col:
-            converted_target_country = get_ppm_country_name(self.norm_target_country)
-            if converted_target_country:
-                df = df[
-                    df[adapter.country_col].astype(str).str.lower()
-                    == str(converted_target_country).lower()
-                ]
+            df = df[
+                df[adapter.country_col].astype(str).str.lower()
+                == str(self.norm_target_country).lower()
+            ]
 
         # Filter to only rows with coordinates
         df = df.dropna(subset=[adapter.lat_col, adapter.lon_col])

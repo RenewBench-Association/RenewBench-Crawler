@@ -20,6 +20,7 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.values import strip_str
 
 # Per-tracker file glob pattern, main data sheet name, and default fuel type (used
@@ -214,6 +215,7 @@ class GEMLocator:
         self.df_gem: pd.DataFrame = pd.DataFrame()
 
         self._load()
+
         self._entsoe_id_index: dict[str, int] = {}
         self._build_entsoe_id_index()
 
@@ -353,7 +355,9 @@ class GEMLocator:
         if not normalized_dfs:
             return pd.DataFrame()
 
-        return pd.concat(normalized_dfs, ignore_index=True)
+        df = pd.concat(normalized_dfs, ignore_index=True)  # combine dataframes
+        df = normalize_locator_countries(df)  # normalize the country values
+        return df
 
     def _build_entsoe_id_index(self) -> None:
         """Pre-compute an ENTSO-E EIC code -> row-position index, once.
@@ -383,7 +387,7 @@ class GEMLocator:
         """Find an EGE by its ENTSO-E EIC code and return the row as a dict.
 
         Extracts ENTSO-E codes from GEM's "Other IDs (unit)" / "Other IDs (location)"
-        columns via a pre-computed index (built once in :meth:`_build_entsoe_id_index`)
+        columns via a pre-built EIC -> row-position index (see ``_build_entsoe_id_index``).
         so repeated lookups are O(1) instead of re-scanning the whole dataframe.
 
         Args:

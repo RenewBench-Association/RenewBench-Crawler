@@ -67,7 +67,7 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         needs_coordinates=True,
     ),
     "epias": OperatorInfo(
-        country="Turkey", entity_col="powerPlantName", needs_coordinates=True
+        country="Türkiye", entity_col="powerPlantName", needs_coordinates=True
     ),
     "ieso": OperatorInfo(
         country="Canada",

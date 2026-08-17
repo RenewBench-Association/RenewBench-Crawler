@@ -9,6 +9,7 @@ import ast
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.values import strip_str
 
 PPM_CSV_URL = "https://raw.githubusercontent.com/PyPSA/powerplantmatching/refs/heads/master/powerplants.csv"
@@ -43,12 +44,14 @@ class PPMLocator:
     def __init__(self):
         """Initializes PPMLocator."""
         # All energy entities in Europe that "make the cut" according to ppm
-        self.df = pd.read_csv(PPM_CSV_URL)
+        self.df: pd.DataFrame = pd.read_csv(PPM_CSV_URL)
+        self.df = normalize_locator_countries(self.df)  # normalize the country values
+
         self.df["entsoe_id_list"] = self.df["projectID"].apply(
             self._extract_entsoe_code_list
         )
         self._entsoe_id_index = self._build_entsoe_id_index()
-        logger.info("PPMLocator initialized")
+        logger.info(f"PPMLocator initialized: {len(self.df)} entries")
 
     # ------------------------------------------------------------------
     # Internal helpers for initialization
@@ -126,7 +129,7 @@ class PPMLocator:
 
         Searches the pre-computed `entsoe_id_list` column (one EIC code per row after
         exploding the `projectID` dict-string) for an exact match via a pre-built
-        EIC -> row-position index (see `_build_entsoe_id_index`).
+        EIC -> row-position index (see ``_build_entsoe_id_index``).
 
         Args:
             entsoe_id (str | None): ENTSOE EIC code to search for (e.g. "11XNUON--------Q").

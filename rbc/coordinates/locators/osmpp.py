@@ -7,6 +7,8 @@ Data foundation: OSM data
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.utils.country import normalize_locator_countries
+
 OSMPP_URL = (
     "https://raw.githubusercontent.com/open-energy-transition/osm-powerplants/main/"
 )
@@ -41,10 +43,13 @@ class OSMPPLocator:
     def __init__(self) -> None:
         """Initializes OSMPPLocator."""
         # All energy entities in the world that "make the cut" according to osm-pp.
-        self.df = pd.read_csv(OSMPP_CSV_URL)
+        self.df: pd.DataFrame = pd.read_csv(OSMPP_CSV_URL)
+        self.df = normalize_locator_countries(self.df)  # normalize the country values
+
         # Energy entities that are filtered out by osm-pp due to missing data
-        self.df_rejected = pd.read_csv(OSMPP_REJECTED_CSV_URL)
-        logger.info("OSMPPLocator initialized")
+        # self.df_rejected: pd.DataFrame = pd.read_csv(OSMPP_REJECTED_CSV_URL)
+        # self.df_rejected = normalize_locator_countries(self.df_rejected)
+        logger.info(f"OSMPPLocator initialized: {len(self.df)} entries")
 
     # ------------------------------------------------------------------
     # Public API

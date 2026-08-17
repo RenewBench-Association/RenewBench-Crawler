@@ -5,78 +5,89 @@ Utility functions for handling country-related logic.
 
 import re
 
-from rbc.coordinates.utils.values import strip_lower_str, strip_str
+import country_converter as coco
+import pandas as pd
+from loguru import logger
 
-ALIAS_MAPPINGS = {
-    "great britain": "united kingdom",
-    "gb": "united kingdom",
+from rbc.coordinates.utils.values import strip_str
+
+ALIAS_MAPPINGS: dict[str, str] = {
+    "great britain": "United Kingdom",
+    "northern ireland": "United Kingdom",
+    "czech republic": "Czechia",
 }
 
 
-def normalize_country_name(country: str | None) -> str | None:
-    """Normalize a country name to match locator database country names (e.g. from PPM).
+def normalize_operator_country_name(country: str | None) -> str | None:
+    """Normalize a country name to enable matching (operators <-> locator sources).
 
-    This handles operator country aliases (e.g., 'Germany (TransnetBW)', 'Great Britain /
-    National Grid') and maps them to their base country names (e.g., 'Germany', 'United
-    Kingdom') as used in PPM.
+    This handles any country aliases with special characters (e.g. 'Germany (Tennet)', 'Great
+    Britain / Grid') or different region-to-country definitions (e.g. NI belongs to UK) and
+    maps them to their true country names (e.g. 'Germany', 'United Kingdom').
 
     Args:
         country (str | None): Operator country name that may include extra symbols.
 
     Returns:
-        country (str | None): Normalized country name or provided one if normalization failed,
-            or None if country is None.
+        country (str | None): Titled, normalized country name or provided one if
+            normalization failed or None if country is None.
     """
     country = strip_str(country)
     if not country:
         return None
 
-    # 1. Extract base country name by removing suffixes (e.g. "Germany (tennet)" -> "Germany")
+    # 1. Extract base country name by removing special characters (brackets, backslashes)
     base_country = re.sub(r"\s*\([^)]*\)\s*$", "", country).strip()
+    base_country = base_country.split("/")[0].strip()
 
-    # 2. Handle slash-separated names (e.g. "Great Britain / National Grid" -> "Great Britain"
-    if "/" in base_country:
-        parts = [part.strip() for part in base_country.split("/")]
-        base_country = parts[0] if parts else base_country
+    # 2. Apply special mapping where required (e.g. "Great Britain" -> "United Kingdom")
+    base_country = ALIAS_MAPPINGS.get(base_country.lower(), base_country)
 
-    # 3. Handle known names with special mapping (e.g. "United Kingdom" vs "Great Britain")
-    base_country_lower = base_country.lower()
-    if base_country_lower in ALIAS_MAPPINGS:
-        return ALIAS_MAPPINGS[base_country_lower]
-
-    # 4. Clean up any remaining artifacts & return
-    base_country = base_country.strip()
+    # 3. Clean up any remaining artifacts & return
     if base_country:
-        return base_country
+        return base_country.strip()
 
-    return country
+    return country.strip()
 
 
-def get_ppm_country_name(country: str | None) -> str | None:
-    """Get a country name as it appears in PPM database.
+def normalize_locator_countries(
+    df: pd.DataFrame, country_col: str = "Country"
+) -> pd.DataFrame:
+    """Normalize a dataframe's country values to enable matching.
 
-    This handles when PPM uses slightly different country names than what our metadata has.
+    Convert to coco's titled 'short_name' versions (where possible) and apply the
+    ALIAS_MAPPING to align with operator countries.
 
     Args:
-        country (str | None): Country name that may include zone-specific suffixes.
+        df (pd.DataFrame): Locator dataframe containing country column to normalize.
+        country_col (str, Optional): Name of country column. Defaults to "Country".
 
     Returns:
-        PPM country name or provided "country" if no adaptation necessary/possible.
+        pd.DataFrame: Updated dataframe with normalized country values.
     """
-    if not country:
-        return None
+    if country_col not in df.columns:
+        logger.warning(
+            f"Country column '{country_col}' not found in dataframe. No normalization!"
+        )
+        return df
 
-    # Map known aliases to PPM country names
-    ppm_country_aliases = {
-        "estonia": "Estonia",
-        "ee": "Estonia",
-        "switzerland": "Switzerland",
-        "ch": "Switzerland",
-        "germany": "Germany",
-        "de": "Germany",
-        "france": "France",
-        "fr": "France",
-    }
+    unique_countries = df[country_col].unique()
+    short_countries: list[str] = coco.convert(
+        names=list(unique_countries), to="short_name"
+    )
+    normalized_country_mapping: dict[str, str] = {}
 
-    country_lower = strip_lower_str(country)
-    return ppm_country_aliases.get(country_lower, country)
+    for original, short in zip(unique_countries, short_countries):
+        if short == "not found":
+            logger.warning(
+                f"Country '{original}' could not be interpreted by the Python country "
+                f"converter! Keeping it as is..."
+            )
+            short = original
+
+        normalized_country_mapping[original] = ALIAS_MAPPINGS.get(short.lower(), short)
+
+    # rename values in "country_col"
+    df = df.copy()
+    df[country_col] = df[country_col].map(normalized_country_mapping)
+    return df
