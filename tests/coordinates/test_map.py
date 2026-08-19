@@ -377,7 +377,7 @@ class TestEGEMapMarkers:
         df = pd.DataFrame({"name": ["A"], "lat": [1.0], "lon": [1.0]})
         ege_map = make_ege_map([df])
         row = pd.Series(
-            {"osm_geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 1]]]}}
+            {"osm.geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 1]]]}}
         )
 
         ege_map._add_geometry_overlay(row, color="blue", tooltip="tip")
@@ -478,8 +478,8 @@ class TestHelpers:
     @pytest.mark.parametrize(
         "source, expected",
         [
-            ("osm", "darkblue"),
-            ("OSM", "darkblue"),  # case-insensitive
+            ("osm_fuzzy", "darkblue"),
+            ("OSM_FUZZY", "darkblue"),  # case-insensitive
             ("  gem_direct  ", "purple"),  # stripped
             ("totally_unknown_algorithm", _DEFAULT_COLOR),
             (None, _DEFAULT_COLOR),

@@ -45,14 +45,14 @@ _MATCH_SOURCE_COLORS: dict[str, str] = {
     "ppdb_direct": "green",  # exact EIC hit in ppdb
     "ppdb_parent_direct": "lightgreen",  # parent EIC → direct ppdb hit
     "ppdb_parent_entsoe_id": "darkgreen",  # fuzzy-resolved parent EIC → ppdb hit
-    "ppdb_fuzzy_matrix": "cadetblue",  # fuzzy name/fuel match in ppdb
+    "ppdb_fuzzy": "cadetblue",  # fuzzy name/fuel match in ppdb
     # GEM (Global Energy Monitor) matches, most to least confident
     "gem_direct": "purple",  # exact EIC hit in GEM
     "gem_parent_direct": "darkpurple",  # parent EIC → direct GEM hit
     "gem_parent_entsoe_id": "pink",  # fuzzy-resolved parent EIC → GEM hit
-    "gem_fuzzy_matrix": "beige",  # fuzzy name/fuel match in GEM
-    # OSM (Overpass) fallback — direct or fuzzy, both collapse to "osm"
-    "osm": "darkblue",
+    "gem_fuzzy": "beige",  # fuzzy name/fuel match in GEM
+    # OSM (Overpass) matches
+    "osm_fuzzy": "darkblue",
     # coordinates borrowed from a sibling unit
     "sibling_unit": "orange",
     # no coordinates found (won't normally be plotted)
@@ -111,8 +111,8 @@ def build_map(
     a legend is added to the bottom-right corner. Otherwise, pins are colored by fuel type.
 
     Each matched EGE is rendered as a clickable pin. Clicking a pin opens a popup table
-    that lists every column in the DataFrame — URL-like columns (`osm_url`, `*_url`, …) become
-    clickable hyperlinks. When an `osm_geometry` polygon is present it is also drawn as a
+    that lists every column in the DataFrame — URL-like columns (`OSM_URL`, `*_url`, …) become
+    clickable hyperlinks. When an `osm.geometry` polygon is present it is also drawn as a
     transparent overlay on the map.
 
     Multiple DataFrames are shown as separate toggleable layers via the built-in
@@ -374,7 +374,7 @@ class _EgeMap:
             if col == self.name_col:
                 continue
 
-            if col == "osm_geometry":
+            if col == "osm.geometry":
                 rows_html.append(tpl.popup_row_html(col, _geometry_summary(val)))
                 continue
 
@@ -408,7 +408,7 @@ class _EgeMap:
             color (str): Name of color for polygon/polyline.
             tooltip (str): Text for tooltip (pop-up box).
         """
-        geom = row.get("osm_geometry")
+        geom = row.get("osm.geometry")
         if is_missing(geom):
             return
         if isinstance(geom, str):
@@ -536,13 +536,13 @@ def _fueltype_icon(fueltype: Any) -> str:
 
 
 def _geometry_summary(geom: Any) -> str:
-    """Provide a short, human-readable description of an ``osm_geometry`` value.
+    """Provide a short, human-readable description of an ``osm.geometry`` value.
 
     Args:
         geom (Any): GeoJSON geometry value to be described.
 
     Returns:
-        str: Description of the ``osm_geometry`` value.
+        str: Description of the ``osm.geometry`` value.
     """
     if is_missing(geom):
         return "—"

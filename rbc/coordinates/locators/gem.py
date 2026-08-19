@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.match_schema import GEM_ADAPTER, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.values import strip_str
 
@@ -369,8 +370,8 @@ class GEMLocator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
-        """Find an EGE by its ENTSO-E EIC code and return the row as a dict.
+    def match_by_entsoe_id(self, entsoe_id: str | None) -> MatchCandidate | None:
+        """Find an EGE by its ENTSO-E EIC code and return the row as a MatchCandidate.
 
         Extracts ENTSO-E codes from GEM's "Other IDs (unit)" / "Other IDs (location)"
         columns via a pre-built EIC -> row-position index (see ``_entsoe_id_index``).
@@ -379,8 +380,8 @@ class GEMLocator:
             entsoe_id (str | None): ENTSO-E EIC code to search for.
 
         Returns:
-            dict: matched row values with keys from `GEM_COLS`, or `None` if not found or the
-                row has no coordinates.
+            MatchCandidate | None: Matched row as a MatchCandidate if one was found,
+                has coordinates and a name, else None.
         """
         target = strip_str(entsoe_id)
         if len(self.df) == 0 or target is None:
@@ -394,4 +395,4 @@ class GEMLocator:
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
-        return {col: (row[col] if col in row.index else None) for col in self.GEM_COLS}
+        return MatchCandidate.from_row(row, adapter=GEM_ADAPTER)

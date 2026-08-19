@@ -131,50 +131,40 @@ class EntsoePipeline(BasePipeline):
         """
         assert self.ppdb_loc is not None
 
-        ppdb_cols = list(self.ppdb_loc.PPM_COLS)
-        for col in ppdb_cols:
-            df[f"ppdb.{col}"] = None
-        df["ppdb.match_source"] = None
-
-        gem_cols = list(GEMLocator.GEM_COLS)
-        for col in gem_cols:
-            df[f"gem.{col}"] = None
-        df["gem.match_source"] = None
-
         for idx, row in df[self._still_unmatched(df)].iterrows():
             eic = strip_str(row.get(self.sysop_code_col))
             parent_eic = strip_str(row.get(WCODE_PARENT))
-            hit, source = None, None
+            candidate, source = None, None
 
             # 1. GEM: try the unit (generation) EIC directly
             if self.gem_loc and eic:
-                hit = self.gem_loc.match_by_entsoe_id(eic)
+                candidate = self.gem_loc.match_by_entsoe_id(eic)
                 source = "gem_direct"
 
             # 2. GEM: try the parent (production) EIC from wcode.EicParent
-            if hit is None and self.gem_loc and parent_eic:
-                hit = self.gem_loc.match_by_entsoe_id(parent_eic)
+            if candidate is None and self.gem_loc and parent_eic:
+                candidate = self.gem_loc.match_by_entsoe_id(parent_eic)
                 source = "gem_parent_direct"
 
             # 3. ppdb (PPM) fallback: unit EIC directly
-            if hit is None and eic:
-                hit = self.ppdb_loc.match_by_entsoe_id(eic)
+            if candidate is None and eic:
+                candidate = self.ppdb_loc.match_by_entsoe_id(eic)
                 source = "ppdb_direct"
 
             # 4. ppdb (PPM) fallback: parent EIC from wcode.EicParent
-            if hit is None and parent_eic:
-                hit = self.ppdb_loc.match_by_entsoe_id(parent_eic)
+            if candidate is None and parent_eic:
+                candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
                 source = "ppdb_parent_direct"
 
-            if hit is not None:
-                if source is not None and source.startswith("gem"):
-                    for col in gem_cols:
-                        df.at[idx, f"gem.{col}"] = hit.get(col)
-                    df.at[idx, "gem.match_source"] = source
+            if candidate is not None and source is not None:
+                if source.startswith("gem"):
+                    self._write_candidate_into_df(
+                        df, idx, candidate, match_source=source
+                    )
                 else:
-                    for col in ppdb_cols:
-                        df.at[idx, f"ppdb.{col}"] = hit.get(col)
-                    df.at[idx, "ppdb.match_source"] = source
+                    self._write_candidate_into_df(
+                        df, idx, candidate, match_source=source
+                    )
 
         ppdb_direct_count = df["ppdb.lat"].notna().sum()
         gem_direct_count = df["gem.lat"].notna().sum()
@@ -233,8 +223,6 @@ class EntsoePipeline(BasePipeline):
         """
         assert self.ppdb_loc is not None
 
-        gem_cols = list(GEMLocator.GEM_COLS)
-        ppdb_cols = list(self.ppdb_loc.PPM_COLS)
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent_eic = strip_str(row.get(WCODE_PARENT_EIC))
             if parent_eic is None:
@@ -242,17 +230,19 @@ class EntsoePipeline(BasePipeline):
             if row.get(f"{WCODE_PARENT_PREFIX}.match_confidence") != "high":
                 continue
 
-            hit = self.gem_loc.match_by_entsoe_id(parent_eic) if self.gem_loc else None
-            if hit is not None:
-                for col in gem_cols:
-                    df.at[idx, f"gem.{col}"] = hit.get(col)
-                df.at[idx, "gem.match_source"] = "gem_parent_entsoe_id"
+            candidate = (
+                self.gem_loc.match_by_entsoe_id(parent_eic) if self.gem_loc else None
+            )
+            if candidate is not None:
+                self._write_candidate_into_df(
+                    df, idx, candidate, match_source="gem_parent_entsoe_id"
+                )
             else:
-                hit = self.ppdb_loc.match_by_entsoe_id(parent_eic)
-                if hit is not None:
-                    for col in ppdb_cols:
-                        df.at[idx, f"ppdb.{col}"] = hit.get(col)
-                    df.at[idx, "ppdb.match_source"] = "ppdb_parent_entsoe_id"
+                candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
+                if candidate is not None:
+                    self._write_candidate_into_df(
+                        df, idx, candidate, match_source="ppdb_parent_entsoe_id"
+                    )
 
         ppdb_after_parent = df["ppdb.lat"].notna().sum()
         gem_after_parent = df["gem.lat"].notna().sum()

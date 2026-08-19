@@ -38,7 +38,7 @@ OUT_COLUMNS = [
     "OSM_ID",
     "OSM_Type",
     "OSM_URL",
-    "Geometry",
+    "OSM_Geometry",
     "Status",
     "Capacity",
 ]
@@ -325,7 +325,7 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
             "OSM_ID": osm_id,
             "OSM_Type": osm_type,
             "OSM_URL": osm_url,
-            "Geometry": geometry,
+            "OSM_Geometry": geometry,
             "Status": status,
             "Capacity": capa,
         }

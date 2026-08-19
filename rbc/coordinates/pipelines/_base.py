@@ -25,6 +25,7 @@ from rbc.coordinates.locators.osm_api import query_osm_country_plants
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
+from rbc.coordinates.match_schema import MatchCandidate
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
@@ -211,6 +212,7 @@ class BasePipeline:
             "gem.match_source",
             "osm.lat",
             "osm.lon",
+            "osm.match_source",
         ):
             if col not in df.columns:
                 df[col] = None
@@ -382,18 +384,15 @@ class BasePipeline:
         df["lon"] = interim_lon.combine_first(df["sibling.lon"])
 
         fallback = pd.Series(False, index=df.index)
-        conditions = [
-            df["osm.lat"].notna() if "osm.lat" in df else fallback,
-            df["sibling.lat"].notna() if "sibling.lat" in df else fallback,
-        ]
-        choices = ["osm", "sibling_unit"]
+        conditions = [df["sibling.lat"].notna() if "sibling.lat" in df else fallback]
         derived_source = pd.Series(
-            np.select(conditions, choices, default="unmatched"), index=df.index
+            np.select(conditions, ["sibling_unit"], default="unmatched"), index=df.index
         )
 
         df["match_source"] = (
             df["ppdb.match_source"]
             .combine_first(df["gem.match_source"])
+            .combine_first(df["osm.match_source"])
             .combine_first(derived_source)
         )
 
@@ -453,30 +452,20 @@ class BasePipeline:
                 if result.matched and result.candidate:
                     candidate = result.candidate
 
-                    if candidate.source == "ppdb":
-                        df.at[idx, "ppdb.lat"] = candidate.lat
-                        df.at[idx, "ppdb.lon"] = candidate.lon
-                        df.at[idx, "ppdb.Name"] = candidate.name
-                        df.at[idx, "ppdb.Fueltype"] = candidate.fueltype
-                        df.at[idx, "ppdb.Country"] = candidate.country
-                        df.at[idx, "ppdb.match_source"] = "ppdb_fuzzy_matrix"
+                    if candidate.source == "gem" and self.gem_loc:
+                        self._write_candidate_into_df(
+                            df, idx, candidate, match_source="gem_fuzzy"
+                        )
 
-                    elif candidate.source == "gem" and self.gem_loc:
-                        df.at[idx, "gem.lat"] = candidate.lat
-                        df.at[idx, "gem.lon"] = candidate.lon
-                        df.at[idx, "gem.plant_name"] = candidate.name
-                        df.at[idx, "gem.Fueltype"] = candidate.fueltype
-                        df.at[idx, "gem.Country"] = candidate.country
-                        df.at[idx, "gem.match_source"] = "gem_fuzzy_matrix"
+                    elif candidate.source == "ppdb":
+                        self._write_candidate_into_df(
+                            df, idx, candidate, match_source="ppdb_fuzzy"
+                        )
 
                     elif candidate.source == "osm":
-                        df.at[idx, "osm.lat"] = candidate.lat
-                        df.at[idx, "osm.lon"] = candidate.lon
-                        df.at[idx, "osm.id"] = candidate.source_id
-                        df.at[idx, "osm.type"] = None
-                        df.at[idx, "osm.url"] = None
-                        df.at[idx, "osm.geometry"] = None
-                        df.at[idx, "osm.Fueltype"] = candidate.fueltype
+                        self._write_candidate_into_df(
+                            df, idx, candidate, match_source="osm_fuzzy"
+                        )
 
                     break
 
@@ -568,6 +557,23 @@ class BasePipeline:
         """
         lat_cols = [col for col in df.columns if col.endswith(".lat")]
         return df[lat_cols].isna().all(axis=1)
+
+    @staticmethod
+    def _write_candidate_into_df(
+        df: pd.DataFrame, idx: int, candidate: MatchCandidate, match_source: str
+    ) -> None:
+        """Write a matched candidate into the df with its `<source>.*` columns.
+
+        Args:
+            df (pd.DataFrame): The working dataframe.
+            idx (int): Index of the candidate to write.
+            candidate (MatchCandidate): The candidate to write.
+            match_source (str): The match algorithm that was used to find this candidate.
+        """
+        for field, value in candidate.to_dict().items():
+            df.at[idx, f"{field}"] = value
+
+        df.at[idx, f"{candidate.source}.match_source"] = match_source
 
     @staticmethod
     def _interim_coords(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:

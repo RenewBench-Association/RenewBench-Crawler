@@ -12,9 +12,7 @@ Key Features:
 - Caching for performance
 """
 
-from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable
 
 import pandas as pd
 from loguru import logger
@@ -22,6 +20,14 @@ from loguru import logger
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
+from rbc.coordinates.match_schema import (
+    GEM_ADAPTER,
+    OSM_ADAPTER,
+    PPDB_ADAPTER,
+    MatchCandidate,
+    MatchResult,
+    SourceAdapter,
+)
 from rbc.coordinates.utils.country import normalize_operator_country_name
 from rbc.coordinates.utils.fuel import is_fueltype_compatible
 from rbc.coordinates.utils.tokenizer import (
@@ -31,105 +37,9 @@ from rbc.coordinates.utils.tokenizer import (
     strip_numeric_tokens,
     strip_trailing_unit_suffix,
 )
-from rbc.coordinates.utils.values import is_missing, strip_str
+from rbc.coordinates.utils.values import is_missing
 
 
-# ---------------------------------------------------------------------------
-# Data Classes
-# ---------------------------------------------------------------------------
-@dataclass
-class MatchCandidate:
-    """A single matching candidate from a data source."""
-
-    # todo: Several attributes are never used. Decide whether to keep or remove! They include:
-    #  "match_score", "confidence", "other_names"
-
-    name: str
-    norm_name: str  # actually tokenized & rejoined name for expanded abbreviations
-    source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
-    fueltype: str | None
-    lat: float | None
-    lon: float | None
-    country: str | None
-    source_id: str | None
-    match_score: float = 0.0
-    confidence: str = "high"  # 'high', 'medium', 'low'
-    other_names: str = ""  # GEM-specific: comma-separated alternate names
-
-
-@dataclass
-class MatchResult:
-    """Result of a name matching operation."""
-
-    # todo: Several attributes are never used. Decide whether to keep or remove! They include:
-    #  "variants_tried", "top_candidates"
-
-    matched: bool
-    candidate: MatchCandidate | None
-    score: float
-    variants_tried: list[str]
-    top_candidates: list[MatchCandidate]  # Top 5 for debugging
-
-
-@dataclass(frozen=True)
-class SourceAdapter:
-    """Column-mapping config that lets one candidate builder serve any source.
-
-    Replaces hardcoded candidate building per locator source with a single generic builder
-    (see ``NameMatcher._build_candidates``).
-    """
-
-    # todo: Several attributes are not necessary, as the MatchCandidate elements they
-    #  feed are not used anywhere. These are: "other_names_col", "confidence_fn"
-
-    source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
-    get_df: Callable[["NameMatcher"], pd.DataFrame | None]
-    name_col: str
-    country_col: str | None  # None if the source has no country column (e.g. OSM)
-    fueltype_col: str
-    id_col: str
-    lat_col: str = "lat"
-    lon_col: str = "lon"
-    other_names_col: str | None = None  # GEM only: comma-joined alt names
-    confidence_fn: Callable[[pd.Series], str] = lambda row: "medium"
-
-
-GEM_ADAPTER = SourceAdapter(
-    source="gem",
-    get_df=lambda m: getattr(m.gem_locator, "df", None),
-    name_col="plant_name",
-    country_col="Country",
-    fueltype_col="Fueltype",
-    id_col="gem_unit_id",
-    other_names_col="other_names",  # todo: these seem to be unused?
-    confidence_fn=lambda row: "high",
-)
-
-# todo: confidence def means PPDB all non-entsoe operators have "medium" confidence level
-PPDB_ADAPTER = SourceAdapter(
-    source="ppdb",
-    get_df=lambda m: getattr(m.ppdb_locator, "df", None),
-    name_col="Name",
-    country_col="Country",
-    fueltype_col="Fueltype",
-    id_col="id",
-    confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
-)
-
-OSM_ADAPTER = SourceAdapter(
-    source="osm",
-    get_df=lambda m: m.osm_df,  # duplicated rows for each alt name (s. osm_api.py)
-    name_col="Name",
-    country_col=None,  # no country column; relies on the matrix-level filter
-    fueltype_col="Fueltype",
-    id_col="OSM_ID",
-    confidence_fn=lambda row: "medium",
-)
-
-
-# ---------------------------------------------------------------------------
-# Main Matcher Class
-# ---------------------------------------------------------------------------
 class NameMatcher:
     """Lookup-based fuzzy name matcher for multiple (coordinate) locator data sources.
 
@@ -398,31 +308,9 @@ class NameMatcher:
 
         candidates = []
         for _, row in df.iterrows():
-            name = strip_str(row[adapter.name_col])
-            if name is None:
-                continue
-
-            # tokenize name for better cross-language matching (expands abbreviated terms)
-            tokenized_name = " ".join(self.tok.tokenize(name))
-
-            other_names = ""
-            if adapter.other_names_col:
-                other_names = strip_str(row.get(adapter.other_names_col)) or ""
-
-            candidates.append(
-                MatchCandidate(
-                    name=name,
-                    norm_name=tokenized_name,
-                    source=adapter.source,
-                    fueltype=strip_str(row[adapter.fueltype_col]),
-                    lat=float(row[adapter.lat_col]),
-                    lon=float(row[adapter.lon_col]),
-                    country=strip_str(row.get(adapter.country_col)),
-                    source_id=strip_str(row.get(adapter.id_col)),
-                    confidence=adapter.confidence_fn(row),
-                    other_names=other_names,
-                )
-            )
+            candidate = MatchCandidate.from_row(row, adapter, self.tok)
+            if candidate is not None:
+                candidates.append(candidate)
 
         return candidates
 

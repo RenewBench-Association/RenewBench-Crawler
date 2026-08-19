@@ -1,7 +1,8 @@
 """Coordinate finding for EGEs using the powerplantmatching package.
 
 Source: GitHub package (https://github.com/PyPSA/powerplantmatching/)
-Data foundation: OSMPP CSV (based on OSM data), other European data sources.
+Data foundation: https://github.com/PyPSA/powerplantmatching/blob/master/powerplantmatching/package_data/config.yaml#L61
+(for details s. scripts/coordinates/README.md)
 """
 
 import ast
@@ -10,6 +11,7 @@ from functools import cached_property
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.match_schema import PPDB_ADAPTER, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.values import strip_str
 
@@ -129,8 +131,8 @@ class PPMLocator:
         """
         return self.df[(self.df["Country"] == country)]
 
-    def match_by_entsoe_id(self, entsoe_id: str | None) -> dict | None:
-        """Find an EGE by its ENTSOE EIC code and return the row as a dict.
+    def match_by_entsoe_id(self, entsoe_id: str | None) -> MatchCandidate | None:
+        """Find an EGE by its ENTSOE EIC code and return the row as a MatchCandidate.
 
         Extracts ENTSO-E codes from PPM's parsed "projectID" column (see
         ``_extract_entsoe_code_list``) via a pre-built EIC -> row-position index
@@ -140,8 +142,8 @@ class PPMLocator:
             entsoe_id (str | None): ENTSOE EIC code to search for (e.g. "11XNUON--------Q").
 
         Returns:
-            dict: matched row values with keys from `PPM_COLS`, or `None` if not found or the
-                row has no coordinates.
+            MatchCandidate | None: Matched row as a MatchCandidate if one was found,
+                has coordinates and a name, else None.
         """
         target = strip_str(entsoe_id)
         if target is None:
@@ -155,4 +157,4 @@ class PPMLocator:
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
-        return {col: (row[col] if col in row.index else None) for col in self.PPM_COLS}
+        return MatchCandidate.from_row(row, adapter=PPDB_ADAPTER)

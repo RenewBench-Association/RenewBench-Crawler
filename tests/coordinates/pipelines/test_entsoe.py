@@ -98,7 +98,6 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
             cast(
                 object,
                 SimpleNamespace(
-                    PPM_COLS=PPMLocator.PPM_COLS,
                     match_by_entsoe_id=lambda eic: None,
                     df=pd.DataFrame(
                         columns=[
