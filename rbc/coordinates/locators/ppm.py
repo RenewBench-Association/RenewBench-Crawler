@@ -14,40 +14,29 @@ from loguru import logger
 from rbc.coordinates.match_schema import PPDB_ADAPTER, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.values import strip_str
+from rbc.energy.utils import load_df_from_file
 
 PPM_CSV_URL = "https://raw.githubusercontent.com/PyPSA/powerplantmatching/refs/heads/master/powerplants.csv"
 
 
 class PPMLocator:
-    """Coordinate locator using powerplantsmatching package."""
+    """Coordinate locator using powerplantsmatching package.
 
-    # PPM CSV column headers (without entsoe IDs)
-    PPM_COLS: tuple[str, ...] = (
-        "id",
-        "Name",
-        "Fueltype",
-        "Technology",
-        "Set",
-        "Country",
-        "Capacity",
-        "Efficiency",
-        "DateIn",
-        "DateRetrofit",
-        "DateOut",
-        "lat",
-        "lon",
-        "Duration",
-        "Volume_Mm3",
-        "DamHeight_m",
-        "StorageCapacity_MWh",
-        "EIC",
-        "projectID",
-    )
+    Attributes:
+        df (pd.DataFrame): Dataframe of normalized PPM data from the GitHub's CSV.
+            Has the columns:
+            [
+                'id', 'Name', 'Fueltype', 'Technology', 'Set', 'Country', 'Capacity',
+                'Efficiency', 'DateIn', 'DateRetrofit', 'DateOut', 'lat', 'lon',
+                'Duration', 'Volume_Mm3', 'DamHeight_m', 'StorageCapacity_MWh',
+                'EIC', 'projectID'
+            ]
+    """
 
     def __init__(self):
         """Initializes PPMLocator."""
         # All energy entities in Europe that "make the cut" according to ppm
-        self.df: pd.DataFrame = pd.read_csv(PPM_CSV_URL)
+        self.df: pd.DataFrame = load_df_from_file(PPM_CSV_URL)
         self.df = normalize_locator_countries(self.df)  # normalize the country values
 
         logger.info(f"PPMLocator initialized: {len(self.df)} entries")
@@ -111,23 +100,17 @@ class PPMLocator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def get_pp_df_from_static_csv(self, country: str) -> pd.DataFrame:
-        """Gets a df of all EGE in a given country from static csv.
+    def get_country_df(self, country: str) -> pd.DataFrame:
+        """Gets a df of all EGEs in a given country, sliced from the CSV-based PPM df.
 
         The static CSV is updated on a regular basis (ca. monthly). Combination of all
-        kinds of different sources for Europe, including but not limited to the
-        osm-powerplant package.
+        kinds of different sources for Europe, including but not limited to the OSMPP data.
 
         Args:
             country (str): Country name.
 
         Returns:
             pd.DataFrame: DataFrame containing all OSM energy entities of one country.
-                Had the columns:
-                ['id', 'Name', 'Fueltype', 'Technology', 'Set', 'Country', 'Capacity',
-                 'Efficiency', 'DateIn', 'DateRetrofit', 'DateOut', 'lat', 'lon',
-                 'Duration', 'Volume_Mm3', 'DamHeight_m', 'StorageCapacity_MWh', 'EIC',
-                 'projectID', 'entsoe_id']
         """
         return self.df[(self.df["Country"] == country)]
 

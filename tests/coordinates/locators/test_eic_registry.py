@@ -3,6 +3,8 @@
 
 from pathlib import Path
 from typing import Callable
+from unittest.mock import patch
+from urllib.error import URLError
 
 import pandas as pd
 import pytest
@@ -18,6 +20,7 @@ from rbc.coordinates.locators.eic_registry import (
     EICCodeRegistry,
     extract_prefix,
 )
+from rbc.energy.utils import InvalidError
 
 MOCK_ROWS = [
     {
@@ -90,7 +93,7 @@ def get_mock_registry(tmp_path: Path) -> Callable[..., EICCodeRegistry]:
 # Tests - EICCodeRegistry class
 # ----------------------------------
 class TestEICCodeRegistrySetup:
-    """Tests for loading, column normalization and indexing."""
+    """Tests for loading (including non-cached branch), column normalization and indexing."""
 
     def test_init(self, get_mock_registry: Callable) -> None:
         """Happy path: a CSV is correctly loaded and every non-blank code is indexed.
@@ -99,7 +102,7 @@ class TestEICCodeRegistrySetup:
             get_mock_registry (Callable): Function returning a mock EICCodeRegistry instance.
         """
         reg = get_mock_registry()
-        assert len(reg.df_eic) == 3
+        assert len(reg.df) == 3
         assert set(reg._eic_index) >= {"11W-PU", "11W-G4"}
 
     def test_check_columns(self, get_mock_registry: Callable) -> None:
@@ -111,7 +114,7 @@ class TestEICCodeRegistrySetup:
         reg = get_mock_registry(
             rename={CODE_COL: "eic", DISPLAYNAME_COL: "displayname"}
         )
-        assert CODE_COL in reg.df_eic.columns
+        assert CODE_COL in reg.df.columns
         assert reg.lookup_full_row("11W-PU")[LONGNAME_COL] == "Mingechevir GRES"
 
     def test_check_columns_no_findable_col(self, get_mock_registry: Callable) -> None:
@@ -121,7 +124,7 @@ class TestEICCodeRegistrySetup:
             get_mock_registry (Callable): Function returning a mock EICCodeRegistry instance.
         """
         reg = get_mock_registry(rename={CODE_COL: "unknown_val"})
-        assert reg.df_eic.empty
+        assert reg.df.empty
         assert reg.lookup_full_row("11W-PU") == {}
 
     def test_init_unknown_data(self, get_mock_registry: Callable) -> None:
@@ -131,8 +134,42 @@ class TestEICCodeRegistrySetup:
             get_mock_registry (Callable): Function returning a mock EICCodeRegistry instance.
         """
         reg = get_mock_registry(rows=[{"unknown_col": "unknown_val"}])
-        assert reg.df_eic.empty
+        assert reg.df.empty
         assert reg.lookup_full_row("11W-PU") == {}
+
+    def test_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Happy path: a downloaded registry is written to the cache for reuse.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
+            monkeypatch (pytest.MonkeyPatch): Pytest-provided monkeypatch fixture.
+        """
+        with patch(
+            "rbc.coordinates.locators.eic_registry.load_df_from_file",
+            return_value=pd.DataFrame(MOCK_ROWS),
+        ):
+            reg = EICCodeRegistry(cache_dir=tmp_path)
+            assert len(reg.df) == len(MOCK_ROWS)
+            assert Path(tmp_path, "eic_directory.csv").exists()
+
+    @pytest.mark.parametrize(
+        "error", [URLError("no route"), InvalidError("bad argument")]
+    )
+    def test_load_error_does_not_raise(
+        self, tmp_path: Path, error: URLError | InvalidError
+    ) -> None:
+        """Failure path: An error in loading from the URL creates an empty registry.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
+            error (URLError, InvalidError): Errors raised during load that should be caught.
+        """
+        with patch(
+            "rbc.coordinates.locators.eic_registry.load_df_from_file", side_effect=error
+        ):
+            reg = EICCodeRegistry(cache_dir=tmp_path)  # must not raise
+            assert reg.df.empty
+            assert reg.lookup_full_row("11W-PU") == {}
 
 
 class TestEICCodeRegistryPublicAPI:

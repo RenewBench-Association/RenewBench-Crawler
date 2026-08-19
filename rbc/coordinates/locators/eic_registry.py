@@ -8,27 +8,20 @@ against OSM/OpenInfra.
 
 from __future__ import annotations
 
-import io
 import re
 from functools import cached_property
 from pathlib import Path
 
 import pandas as pd
-import requests
 from loguru import logger
 from rapidfuzz import fuzz, process
 
 from rbc.coordinates.utils.values import strip_str
+from rbc.energy.utils import RETRY_ERRORS, InvalidError, load_df_from_file
 
 EIC_DIRECTORY_URL = (
     "https://eepublicdownloads.blob.core.windows.net/cio-lio/csv/W_eicCodes.csv"
 )
-HEADER = {
-    "User-Agent": (
-        "RenewBench-Crawler/1.0 "
-        "(+https://github.com/RenewBench-Association/RenewBench-Crawler)"
-    )
-}
 
 # Column names in the W-type EIC CSV (semicolon-delimited, stable as of 2026)
 CODE_COL = "EicCode"
@@ -84,7 +77,13 @@ class EICCodeRegistry:
 
     Attributes:
         cache_dir (Path | None): Directory used for caching the downloaded registry.
-        df_eic (pd.DataFrame): Parsed EIC code registry.
+        df (pd.DataFrame): Parsed EIC code registry. Has the columns:
+            [
+                'EicCode', 'EicDisplayName', 'EicLongName', 'EicParent',
+                'EicResponsibleParty', 'EicStatus', 'MarketParticipantPostalCode',
+                'MarketParticipantIsoCountryCode', 'MarketParticipantVatCode',
+                'EicTypeFunctionList', 'type'
+            ]
     """
 
     # Fields returned by lookup_full_row
@@ -113,7 +112,7 @@ class EICCodeRegistry:
                 Defaults to None, in which case no caching occurs.
         """
         self.cache_dir = cache_dir
-        self.df_eic: pd.DataFrame = pd.DataFrame()
+        self.df: pd.DataFrame = pd.DataFrame()
         self._eic_index: dict[str, int] = {}
 
         # setup registry
@@ -130,20 +129,20 @@ class EICCodeRegistry:
         Returns:
             pd.DataFrame: Df of "Production Unit" EGEs or empty one, if no TYPE_COL exists.
         """
-        if TYPE_COL not in self.df_eic.columns:
+        if TYPE_COL not in self.df.columns:
             logger.warning(
                 f"EICCodeRegistry: No {TYPE_COL} column exists, no production df!"
             )
             return pd.DataFrame()
 
         # log EicTypeFunctionList once so exact string can be confirmed in this CSV version
-        distinct = sorted(self.df_eic[TYPE_COL].dropna().unique().tolist())
+        distinct = sorted(self.df[TYPE_COL].dropna().unique().tolist())
         logger.debug(f"EICCodeRegistry: {TYPE_COL} values include:\n{distinct[:30]}")
 
-        mask = self.df_eic[TYPE_COL].str.contains(
+        mask = self.df[TYPE_COL].str.contains(
             r"Production.?Unit|A26", na=False, regex=True, case=False
         )
-        return self.df_eic[mask].copy()
+        return self.df[mask].copy()
 
     @cached_property
     def _production_prefixes(self) -> pd.Series:
@@ -186,24 +185,21 @@ class EICCodeRegistry:
 
         if cache_path and cache_path.exists():
             logger.info(f"EICCodeRegistry: loading from cache '{cache_path}'")
-            self.df_eic = pd.read_csv(cache_path, sep=";", dtype=str)
+            self.df = load_df_from_file(cache_path, sep=";", dtype=str)
             self._check_columns()
             return
 
         try:
             logger.info("EICCodeRegistry: downloading ENTSO-E W-type EIC codes...")
-            resp = requests.get(EIC_DIRECTORY_URL, timeout=60, headers=HEADER)
-            resp.raise_for_status()
-
-            self.df_eic = pd.read_csv(io.StringIO(resp.text), sep=";", dtype=str)
+            self.df = load_df_from_file(EIC_DIRECTORY_URL, sep=";", dtype=str)
             self._check_columns()
 
-            if cache_path and not self.df_eic.empty:
+            if cache_path and not self.df.empty:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self.df_eic.to_csv(cache_path, sep=";", index=False)
+                self.df.to_csv(cache_path, sep=";", index=False)
                 logger.info(f"EICCodeRegistry: cached to '{cache_path}'")
 
-        except requests.RequestException as e:
+        except (*RETRY_ERRORS, InvalidError) as e:
             logger.warning(
                 f"EICCodeRegistry: download failed ({e}). "
                 "Name enrichment via EIC directory will be unavailable."
@@ -211,7 +207,7 @@ class EICCodeRegistry:
 
     def _check_columns(self) -> None:
         """Ensure columns that hold relevant info exist; rename if they're not the default."""
-        cols = self.df_eic.columns
+        cols = self.df.columns
         cols_lower = {c.strip().lower(): c for c in cols}
         renames = {
             cols_lower[alias]: default
@@ -225,24 +221,24 @@ class EICCodeRegistry:
                 f"EICCodeRegistry: Default column names not present; renaming required. "
                 f"\nNormalized columns: {renames}"
             )
-            self.df_eic = self.df_eic.rename(columns=renames)
+            self.df = self.df.rename(columns=renames)
 
-        if CODE_COL not in self.df_eic.columns:
+        if CODE_COL not in self.df.columns:
             logger.warning(
                 f"EICCodeRegistry: Could not identify required columns (EIC code and names)! "
-                f"\nAvailable columns: {list(self.df_eic.columns)}"
+                f"\nAvailable columns: {list(self.df.columns)}"
             )
-            self.df_eic = pd.DataFrame()
+            self.df = pd.DataFrame()
 
-        logger.info(f"EICCodeRegistry initialized: {len(self.df_eic)} entries")
+        logger.info(f"EICCodeRegistry initialized: {len(self.df)} entries")
 
     def _build_eic_index(self) -> None:
         """Pre-compute an index for EIC codes and their row positions once (for 30k+ rows)."""
-        if self.df_eic.empty:
+        if self.df.empty:
             return
 
         index: dict[str, int] = {}
-        for pos, code in enumerate(self.df_eic[CODE_COL]):
+        for pos, code in enumerate(self.df[CODE_COL]):
             if clean_code := strip_str(code):
                 index.setdefault(clean_code, pos)
         self._eic_index = index
@@ -262,14 +258,14 @@ class EICCodeRegistry:
             ``EicStatus``, ``EicTypeFunctionList``. Values are stripped strings or None.
         """
         clean_code = strip_str(eic_code)
-        if self.df_eic.empty or clean_code is None:
+        if self.df.empty or clean_code is None:
             return {}
 
         pos = self._eic_index.get(clean_code)
         if pos is None:
             return {}
 
-        row = self.df_eic.iloc[pos]
+        row = self.df.iloc[pos]
         result: dict[str, str | None] = {}
         for col in self.WCODE_FIELDS:
             if col in row.index:
@@ -317,7 +313,7 @@ class EICCodeRegistry:
             ``match_method`` ("direct_parent" / "display_prefix" / "fuzzy")
             or None if no match was found.
         """
-        if self.df_eic.empty:
+        if self.df.empty:
             return None
 
         # === Strategy 1: direct parent EIC lookup ===
@@ -362,7 +358,7 @@ class EICCodeRegistry:
             return None
 
         return self._build_match_result(
-            row=self.df_eic.iloc[pos], score=100.0, method="direct_parent"
+            row=self.df.iloc[pos], score=100.0, method="direct_parent"
         )
 
     def _match_prefix(

@@ -546,7 +546,10 @@ def load_df_from_file(
             doesn't exist, if invalid arguments (args) were provided for loading with pandas.
         RETRY_ERRORS: If the file is a URL that is inaccessible for some reason.
     """
-    suffix = file_type or Path(file_path).suffix
+    # get suffix as: the defined type OR one of the path suffixes, if it's a valid option
+    suffix: str = file_type or next(
+        (s for s in Path(file_path).suffixes if s in (".csv", ".xlsx")), ""
+    )
 
     try:
         if suffix == ".xlsx":

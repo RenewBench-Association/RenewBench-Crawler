@@ -200,25 +200,15 @@ class GEMLocator:
     Attributes:
         gem_dir (Path): Directory containing the downloaded GEM xlsx tracker files.
         cache_dir (Path | None): Directory used for the combined parquet cache.
-        df (pd.DataFrame): Combined, normalized GEM data across all trackers found.
+        df (pd.DataFrame): Dataframe of combined, normalized GEM data from available trackers.
+            Has the columns:
+            [
+                'plant_name', 'unit_name', 'other_names',
+                'gem_unit_id', 'other_ids_unit', 'gem_location_id', 'other_ids_location',
+                'Fueltype', 'Status', 'Capacity', 'Country', 'lat', 'lon',
+                'wiki_url', 'tracker'
+            ]
     """
-
-    # GEM column headers (without entsoe IDs)
-    GEM_COLS: tuple[str, ...] = (
-        "gem_unit_id",
-        "gem_location_id",
-        "plant_name",
-        "unit_name",
-        "other_names",
-        "Country",
-        "Fueltype",
-        "Capacity",
-        "Status",
-        "lat",
-        "lon",
-        "wiki_url",
-        "tracker",
-    )
 
     def __init__(self, gem_dir: Path, cache_dir: Path | None = None) -> None:
         """Initialize GEMLocator.
