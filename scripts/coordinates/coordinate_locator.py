@@ -4,8 +4,6 @@
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
-from loguru import logger
-
 from rbc.config.loader import CONFIGS_DIR, load_config
 from rbc.coordinates.orchestrator import perform_coordinate_finding
 from rbc.utils import setup_logging
@@ -58,8 +56,8 @@ def parse_arguments() -> Namespace:
         help=(
             "Directory containing manually downloaded Global Energy Monitor (GEM) "
             "tracker xlsx files (https://globalenergymonitor.org/download-data). "
-            "When given, GEM is used as an additional coordinate source. If None is "
-            "provided, GEM matching is disabled."
+            "When given, they are used additional coordinate source. If None is provided, "
+            "the static fallback files from PPM's cloud storage (from 2025) are used."
         ),
     )
     parser.add_argument(
@@ -92,12 +90,6 @@ def main() -> None:
     )
     setup_logging(output_dir=output_dir)
 
-    gem_dir = args.gem_dir if args.gem_dir and args.gem_dir.is_dir() else None
-    if gem_dir is None:
-        logger.warning(
-            f"--gem-dir '{args.gem_dir}' is not a directory — GEM matching disabled."
-        )
-
     input_paths: list[Path | str] = (
         args.input if args.input else [Path(cfg.paths.dst_dir_raw)]
     )
@@ -106,7 +98,7 @@ def main() -> None:
         source=args.source,
         input_dirs=input_paths,
         output_dir=output_dir,
-        gem_dir=gem_dir,
+        gem_dir=args.gem_dir if args.gem_dir and args.gem_dir.is_dir() else None,
         update=args.update,
         live=args.live,
     )

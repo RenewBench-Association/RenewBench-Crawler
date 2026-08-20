@@ -145,8 +145,8 @@ Optional arguments are:
   YAML config will be used
 - `-o`: The output directory for storing extra extracted information (for further metadata
   processing). Per default, a subfolder `coordinates` in the `dst_dir_raw` will be used.
-- `--gem-dir`: The path for the manually downloaded GEM data. Per default, none is used
-  and the step therefore skipped!
+- `--gem-dir`: The path for the manually downloaded GEM data. Per default, none is given,
+  in which case older fallback files from the PPM creator's online cloud storage are used.
 - `--live`: Query the overpass API On every run (without writing / reading the local
   parquet file).
 - `--update`: Re-fetch OSM data from the overpass API (even if it was done for the same data

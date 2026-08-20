@@ -124,8 +124,8 @@ def build_shared_locators(
     Args:
         source (str): Name of the energy source, e.g. "entsoe". Used to resolve
             which pipeline's locators are actually needed.
-        gem_dir (Path | None): Path to the manually downloaded GEM data. GEM stays
-            disabled (None) if not provided.
+        gem_dir (Path | None): Path to the manually downloaded GEM data or, if None,
+            to use the fallback GEM files from the PyPSA team's cloud storage.
         output_dir (Path | None): Output directory, used as the cache dir for
             locators that persist a local file (e.g. the EIC directory).
 
@@ -133,13 +133,14 @@ def build_shared_locators(
         SharedLocators: The locators to reuse across every directory processed
             in this run.
     """
-    gem_loc = GEMLocator(gem_dir=gem_dir) if gem_dir else None
-
-    pipeline_name = OPERATOR_METADATA[source].get("pipeline", "default")
-
+    gem_loc: GEMLocator = GEMLocator(
+        gem_dir=gem_dir, cache_dir=output_dir if gem_dir is None else None
+    )
     ppdb_loc: PPMLocator | OSMPPLocator
     eic_reg: EICCodeRegistry | None
-    if pipeline_name == "entsoe":  # use regional european assets
+
+    pipeline_name = OPERATOR_METADATA[source].get("pipeline", "default")
+    if pipeline_name == "entsoe":  # use regional European assets
         ppdb_loc = PPMLocator()
         eic_reg = EICCodeRegistry(cache_dir=output_dir)
     else:  # assume the default

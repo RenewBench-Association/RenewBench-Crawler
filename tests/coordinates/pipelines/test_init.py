@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from rbc.coordinates.locators.eic_registry import EICCodeRegistry
+from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.pipelines import build_shared_locators, make_pipeline
@@ -80,15 +82,16 @@ class TestBuildSharedLocators:
     """Test the 'build_shared_locators' function."""
 
     def test_default_pipeline(self) -> None:
-        """Happy path: default pipeline builds OSMPP ppdb, no EIC registry, no GEM if none."""
+        """Happy path: default pipeline builds a OSMPP ppdb, a GEM loc but no EIC registry."""
         shared = build_shared_locators(source="eia", gem_dir=None, output_dir=None)
         assert isinstance(shared.ppdb_loc, OSMPPLocator)
+        assert isinstance(shared.gem_loc, GEMLocator)
         assert shared.eic_reg is None
-        assert shared.gem_loc is None
 
     def test_entsoe_pipeline(self) -> None:
-        """Happy path: entsoe pipeline builds PPM ppdb, a EIC registry, no GEM if none."""
+        """Happy path: entsoe pipeline builds a PPM ppdb, a GEM loc and an EIC registry."""
         shared = build_shared_locators(source="entsoe", gem_dir=None, output_dir=None)
         assert isinstance(shared.ppdb_loc, PPMLocator)
+        assert isinstance(shared.gem_loc, GEMLocator)
         assert shared.eic_reg is not None
-        assert shared.gem_loc is None
+        assert isinstance(shared.eic_reg, EICCodeRegistry)

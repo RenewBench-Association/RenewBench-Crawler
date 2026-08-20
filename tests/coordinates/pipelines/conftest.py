@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
+from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 
@@ -25,8 +26,10 @@ def mock_expensive_network_io(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch (pytest.MonkeyPatch): Pytest-provided monkeypatch fixture.
     """
     for module in ("rbc.coordinates.pipelines", "rbc.coordinates.pipelines.default"):
+        monkeypatch.setattr(f"{module}.GEMLocator", create_autospec(GEMLocator))
         monkeypatch.setattr(f"{module}.OSMPPLocator", create_autospec(OSMPPLocator))
     for module in ("rbc.coordinates.pipelines", "rbc.coordinates.pipelines.entsoe"):
+        monkeypatch.setattr(f"{module}.GEMLocator", create_autospec(GEMLocator))
         monkeypatch.setattr(f"{module}.PPMLocator", create_autospec(PPMLocator))
         monkeypatch.setattr(
             f"{module}.EICCodeRegistry", create_autospec(EICCodeRegistry)
