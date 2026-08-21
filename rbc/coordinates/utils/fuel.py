@@ -3,66 +3,101 @@
 Utility functions for handling fuel type-related logic.
 """
 
-import pandas as pd
+import re
+from functools import lru_cache
 
-from rbc.coordinates.utils.values import is_missing, strip_lower_str
-from rbc.energy.entsoe.mappings import FUELTYPE_MAPPINGS
+from rbc.coordinates.utils.tokenizer import normalize_name
+
+FUEL_UNKNOWN: frozenset[str] = frozenset({"unknown", "none", "missing"})
+
+# todo: are these synonym definitions all appropriate or are some (waste/storage) too much?
+FUEL_TOKEN_SYNONYMS: dict[str, str] = {
+    "diesel": "oil",
+    "lignite": "coal",
+    "lng": "gas",
+    "product": "waste",
+    "landfill": "waste",
+    "battery": "storage",
+    "photovoltaic": "solar",
+    "hydroelectric": "hydro",
+}
+FUEL_STOPWORDS: frozenset[str] = frozenset(["fuel"])
 
 
-def normalize_fueltype(value: str | None) -> str:
-    """Normalize fuel type strings/codes to comparable lowercase labels.
+def classify_fueltype_match(sysop_type: str | None, loc_type: str | None) -> str:
+    """Classify fueltype compatibility of an operator's EGE and its matched locator EGE.
+
+    tokenize_fuel transforms the provided types into normalized lists of lowercase tokens,
+    where empty values are handled gracefully (`None` -> `''`). These are compared to one
+    another as sets to define their relationship (compatibility).
 
     Args:
-        value (str | None): Fuel type string/code to normalize.
-    """
-    if is_missing(value):
-        return ""
-
-    raw = str(value).strip()  # case-sensitive lookup
-    mapped = FUELTYPE_MAPPINGS.get(raw, raw)
-    return strip_lower_str(mapped)
-
-
-def is_fueltype_compatible(eg_type: str | None, pp_type: str | None) -> bool:
-    """Validate if the EGE fuel type matches the pp database fuel type.
-
-    Handles basic string cleaning and empty values gracefully.
-
-    Args:
-        eg_type: Fuel type from energy generation data.
-        pp_type: Fuel type from power plant database.
+        sysop_type: Canonical fuel type from the operator's EGE (e.g. ``"wind"``).
+        loc_type: Fuel type string from the matched locator's EGE (e.g. ``"Wind"``).
 
     Returns:
-        True if types are compatible, False otherwise.
+        str: Compatibility of the two EGS's fuel types.
+            ``"unknown"``    — one or both are missing or defined as unknown.
+            ``"exact"``      — both normalize to an identical token sets.
+            ``"compatible"`` — at least one token in both sets is identical.
+            ``"mismatch"``   — clearly different fuel types.
     """
-    if pd.isna(eg_type) or pd.isna(pp_type):
-        return True  # If one dataset lacks a type, we pass it but remain cautious
+    # build tokens to compare
+    sysop_fuel_toks = set(_tokenize_fuel(sysop_type))
+    loc_fuel_toks = set(_tokenize_fuel(loc_type))
 
-    eg_clean = normalize_fueltype(eg_type)
-    pp_clean = normalize_fueltype(pp_type)
+    if (
+        not sysop_fuel_toks
+        or not loc_fuel_toks
+        or sysop_fuel_toks <= FUEL_UNKNOWN
+        or loc_fuel_toks <= FUEL_UNKNOWN
+    ):  # e.g. either is missing ({}) or consists of only unknown toks ({'missing', 'none'})
+        return "unknown"
 
-    # Check if one contains the other
-    return eg_clean in pp_clean or pp_clean in eg_clean
-
-
-def classify_fueltype_match(eg_type: str | None, pp_type: str | None) -> str:
-    """Classify the fuel-type agreement between an eg plant and the pp information.
-
-    Args:
-        eg_type: Canonical fuel type from the energy production data (e.g. ``"wind"``).
-        pp_type: Fuel type string from PPM / OSMPP (e.g. ``"Wind"``).
-
-    Returns:
-        ``"exact"``      — both normalize to the same label.
-        ``"compatible"`` — one contains the other, or one side is missing.
-        ``"mismatch"``   — clearly different fuel types.
-    """
-    eg = normalize_fueltype(eg_type)
-    pp = normalize_fueltype(pp_type)
-    if not eg or not pp:
-        return "compatible"
-    if eg == pp:
+    if sysop_fuel_toks == loc_fuel_toks:  # e.g. {'wind'} vs {'wind'}
         return "exact"
-    if eg in pp or pp in eg:
+
+    if sysop_fuel_toks & loc_fuel_toks:  # e.g. {'fossil', 'gas'} vs {'natural', 'gas'}
         return "compatible"
-    return "mismatch"
+
+    if sysop_fuel_toks & FUEL_UNKNOWN or loc_fuel_toks & FUEL_UNKNOWN:
+        return "unknown"  # e.g. {'none'} vs {'gas'}
+
+    return "mismatch"  # e.g. {'fossil', 'oil'} vs {'offshore', 'wind'}
+
+
+def is_fueltype_compatible(sysop_type: str | None, loc_type: str | None) -> bool:
+    """Validate if the operator EGE's fuel type matches the locator EGE's fuel type.
+
+    Args:
+        sysop_type: Fuel type of EGE from system operator data.
+        loc_type: Fuel type of EGE from locator database.
+
+    Returns:
+        bool: True if types are compatible, False otherwise.
+    """
+    compatibility = classify_fueltype_match(sysop_type, loc_type)
+    if compatibility == "mismatch":
+        return False
+    else:
+        return True
+
+
+@lru_cache(maxsize=1024)
+def _tokenize_fuel(value: str | None) -> tuple[str, ...]:
+    """Normalize a fuel label, then split it into individual, comparable words (tokens).
+
+    The re search pattern finds individual string words; normalizing implements .lower().
+    Words are unified through the synonym dict (``FUEL_TOKEN_SYNONYMS``) and some removed
+    if they have no meaning and might cause a false match (e.g. "fuel").
+
+    Args:
+        value (str | None): Fuel label to split.
+
+    Returns:
+        tuple[str]: Tuple of individual words (tokens) in fuel label, in correct order.
+    """
+    tokens: list[str] = re.findall(r"[a-z]+", normalize_name(value))
+    return tuple(
+        [FUEL_TOKEN_SYNONYMS.get(t, t) for t in tokens if t not in FUEL_STOPWORDS]
+    )
