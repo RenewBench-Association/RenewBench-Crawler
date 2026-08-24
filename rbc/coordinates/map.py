@@ -22,6 +22,7 @@ import html as _html
 import json
 import tempfile
 import webbrowser
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,6 @@ from rbc.coordinates.utils import map_html as tpl
 from rbc.coordinates.utils.values import is_missing, strip_lower_str, strip_str
 
 BROWSERS = ["safari", "google-chrome", "chrome"]  # browsers that display without error
-_LINK_COL_PATTERNS = {"_url", "_link", "website", "contact:website"}  # cols with links
 
 # ---------------------------------------------------------------------------
 # Marker plotting schemas (color & icon types)
@@ -386,7 +386,7 @@ class _EgeMap:
             col_str = col.lower()
             col_is_link = any(
                 col_str.endswith(p) or col_str == p.lstrip("_")
-                for p in _LINK_COL_PATTERNS
+                for p in {".url", "_url"}
             )
             if col_is_link and val_str.startswith("http"):
                 display = (
@@ -438,24 +438,41 @@ class _EgeMap:
     # ---------------------------------------------------
     def _add_legend(self) -> None:
         """Add the color (`self.match_source_col`) and icon (`self.fuel_col`) legends."""
-        used_ms_algorithms: dict[str, str] = {}
-        used_fueltypes: dict[str, str] = {}
+        algo_colors: dict[str, str] = {}
+        fuel_icons: dict[str, str] = {}
         fallback = pd.Series("unknown", dtype=object)
 
-        for df in self.dfs:
-            for val in df.get(self.match_source_col, fallback).dropna().unique():
-                used_ms_algorithms.setdefault(
-                    strip_lower_str(val), _match_source_color(val)
-                )
+        algo_counts: Counter[str] = Counter()
+        fuel_counts: Counter[str] = Counter()
 
+        for df in self.dfs:
+            # tally match source algorithms
+            for val in df.get(self.match_source_col, fallback).dropna().unique():
+                algo_colors.setdefault(strip_lower_str(val), _match_source_color(val))
+
+            algo_counts.update(
+                df.get(self.match_source_col, fallback).dropna().map(strip_lower_str)
+            )
+
+            # tally fueltypes
             for val in df.get(self.fuel_col, fallback).dropna().unique():
-                used_fueltypes.setdefault(strip_lower_str(val), _fueltype_icon(val))
+                fuel_icons.setdefault(strip_lower_str(val), _fueltype_icon(val))
+
+            fuel_counts.update(
+                df.get(self.fuel_col, fallback).dropna().map(strip_lower_str)
+            )
+
+        # Format "key"/"k" as "label (count)"
+        used_algos = {
+            f"{k} ({algo_counts[k]})": color for k, color in algo_colors.items()
+        }
+        used_fuels = {f"{k} ({fuel_counts[k]})": icon for k, icon in fuel_icons.items()}
 
         panels = []
-        if used_ms_algorithms:
-            panels.append(tpl.color_legend_panel(used_ms_algorithms))
-        if used_fueltypes:
-            panels.append(tpl.icon_legend_panel(used_fueltypes))
+        if used_algos:
+            panels.append(tpl.color_legend_panel(used_algos))
+        if used_fuels:
+            panels.append(tpl.icon_legend_panel(used_fuels))
 
         if panels:
             legend_html = tpl.legend_html(panels)
