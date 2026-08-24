@@ -33,11 +33,10 @@ from rbc.coordinates.utils.fuel import is_fueltype_compatible
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
-    normalize_name,
     strip_numeric_tokens,
     strip_trailing_unit_suffix,
 )
-from rbc.coordinates.utils.values import is_missing
+from rbc.coordinates.utils.values import is_missing, normalize_name
 
 
 class NameMatcher:
@@ -59,8 +58,7 @@ class NameMatcher:
     - Caching for repeated matches
 
     Example:
-        >>> matcher = NameMatcher(
-        ...     country="Germany", gem_locator=gem_loc, ppdb_locator=ppm_loc
+        >>> matcher = NameMatcher(country="Germany",gem_locator=gem_loc,ppdb_locator=ppm_loc)
         ...     osm_df=osm_df, tok=tok
         ... )
         >>> result = matcher.match("Enguri Unit 5", fuel_type="hydro")
@@ -79,7 +77,6 @@ class NameMatcher:
     def __init__(
         self,
         country: str | None = None,
-        country_code: str | None = None,
         gem_locator: GEMLocator | None = None,
         ppdb_locator: PPMLocator | OSMPPLocator | None = None,
         osm_df: pd.DataFrame | None = None,
@@ -90,15 +87,14 @@ class NameMatcher:
         Args:
             country (str | None): Target country name for hard filtering (prevents
                 cross-country matches). Defaults to None.
-            country_code (str | None): Target country ISO3166-alpha-2 code for backup
-                tokenizer creation. Defaults to None.
             gem_locator (GEMLocator | None): GEM locator instance for GEM candidates.
                 Defaults to None.
             ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
                 locator for power plant database candidates. Defaults to None.
             osm_df (df | None): DataFrame with OSM power plant data.
             tok (NameTokenizer | None): NameTokenizer instance for tokenization. Defaults
-                to None, in which case a new tokenizer is created using the country_code.
+                to None, in which case a vocabulary-less tokenizer is created (generic
+                tokens only, no operator/country name translations).
         """
         self.target_country = country
         self.norm_target_country = normalize_operator_country_name(country)
@@ -109,9 +105,7 @@ class NameMatcher:
         self.osm_df: pd.DataFrame | None = osm_df
 
         # Tokenizer
-        self.tok: NameTokenizer = (
-            tok if tok is not None else NameTokenizer(country_code)
-        )
+        self.tok: NameTokenizer = tok if tok is not None else NameTokenizer()
 
         # Cache for target name variants and alternatives (e.g. from EIC enrichment)
         self._target_variants: dict[str, list[str]] = {}  # name -> [variants]

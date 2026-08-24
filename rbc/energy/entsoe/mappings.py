@@ -79,6 +79,11 @@ COLS_MAPPING = {
     "time_series.period.resolution": "Temporal_Resolution",
 }
 
+
+# ---------------------------------------------------------------------------
+# Coordinate Finding Definitions (additions/overrides for OPERATOR_METADATA)
+# ---------------------------------------------------------------------------
+# ======= FUEL TYPES =======
 FUELTYPE_CODE_MAPPINGS = {
     "B01": "biomass",
     "B02": "coal",  # brown
@@ -146,3 +151,321 @@ FUELTYPE_DEFINITION_MAPPINGS = {
 
 # combine code and definition mappings into a single master dictionary
 FUELTYPE_MAPPINGS = {**FUELTYPE_CODE_MAPPINGS, **FUELTYPE_DEFINITION_MAPPINGS}
+
+
+# ======= ENTITY NAMES =======
+ALBANIAN_NAME_TRANSLATIONS = {
+    "centrali": "power plant",
+    "central": "power plant",
+    "hidrocentrali": "hydroelectric",
+    "hidrocentral": "hydroelectric",
+    "termocentrali": "thermal",
+    "termocentral": "thermal",
+    "solare": "solar",
+    "fotovoltaik": "solar",
+}
+
+CZECH_SLOVAK_NAME_TRANSLATIONS = {
+    "elektrárna": "power plant",
+    "elektráreň": "power plant",
+    "vodní": "hydroelectric",
+    "vodná": "hydroelectric",
+    "tepelná": "thermal",
+    "větrná": "wind",
+    "veterná": "wind",
+    "solární": "solar",
+    "solárna": "solar",
+    "fotovoltaická": "solar",
+    "fotovoltická": "solar",
+    "jaderná": "nuclear",
+    "jadrová": "nuclear",
+    # "ve": "hydroelectric",
+    # "te": "thermal",
+    # "fve": "solar",
+    # "vte": "wind",
+    # "je": "nuclear",
+}
+
+DUTCH_NAME_TRANSLATIONS = {
+    "centrale": "power plant",
+    "elektriciteitscentrale": "power plant",
+    "windpark": "wind park",
+    "zonnepark": "solar park",
+    "waterkrachtcentrale": "hydroelectric",
+    "kerncentrale": "nuclear",
+    "warmtekrachtcentrale": "thermal power",
+}
+
+FRENCH_NAME_TRANSLATIONS = {
+    "centrale": "power plant",
+    "central": "power plant",
+    "électrique": "electric power",
+    "thermique": "thermal power",
+    "nucléaire": "nuclear power",
+    "hydroélectrique": "hydroelectric hydro",
+    "éolien": "wind power",
+    "solaire": "solar power",
+    "photovoltaïque": "solar power",
+    "photovoltaique": "solar power",
+    "parc": "park",
+}
+
+GERMAN_NAME_TRANSLATIONS = {
+    "kraftwerk": "power plant",
+    "heizkraftwerk": "power plant heating",
+    "gaskraftwerk": "power plant gas",
+    "kohlekraftwerk": "power plant coal",
+    "wasserkraftwerk": "power plant hydro hydroelectric",
+    "windkraftwerk": "power plant wind",
+    "windpark": "wind park",
+    "biomassekraftwerk": "power plant biomass",
+    "photovoltaik": "power plant solar",
+    "solarpark": "solar park",
+    "kernkraftwerk": "power plant nuclear",
+    "atomkraftwerk": "power plant nuclear",
+    "pumpspeicherkraftwerk": "pumped hydro",
+}
+
+ITALIAN_NAME_TRANSLATIONS = {
+    "centrale": "power plant",
+    "elettrica": "electric power",
+    "termica": "thermal power",
+    "idroelettrica": "hydroelectric hydro",
+    "eolica": "wind power",
+    "solare": "solar power",
+    "fotovoltaico": "solar power",
+    "nucleare": "nuclear",
+}
+
+SOUTH_SLAVIC_NAME_TRANSLATIONS = {  # Bosnian / Croatian / Serbian
+    "elektrana": "power plant",
+    "elektrane": "power plant",
+    "hidroelektrana": "hydroelectric",
+    "hidroelektrane": "hydroelectric",
+    "termoelektrana": "thermal",
+    "termoelektrane": "thermal",
+    "vjetroelektrana": "wind",
+    "vjetroelektrane": "wind",
+    "fotonaponska": "solar",
+    "solarna": "solar",
+    "sunčana": "solar",
+    "nuklearna": "nuclear",
+    "reverzibilna": "pumped hydro",
+    # Abbreviations frequently found in names (e.g. "HE Trebinje")
+    "he": "hydroelectric",
+    "te": "thermal",
+    "ve": "wind",
+    "fe": "solar",
+    "ne": "nuclear",
+    "re": "pumped hydro",
+    "bess": "bess battery",
+}
+
+ROMANIAN_NAME_TRANSLATIONS = {
+    "centrală": "power plant",
+    "electrică": "electric power",
+    "termocentrală": "thermal",
+    "hidrocentrală": "hydroelectric",
+    "eoliană": "wind",
+    "fotovoltaică": "solar",
+    "solară": "solar",
+    "nucleară": "nuclear",
+    # "cte": "thermal",
+    # "che": "hydroelectric",
+    # "ce": "wind",
+    # "cne": "nuclear",
+}
+
+
+# Map: Per country codes - country-specific EGE terms → english translations
+# Apply before fuzzy matching to properly resolve to the correct tokens.
+# E.g. to be able to match:
+#   ENTSOE's "HE_CAPLJINA_G1" & OSM's "Hidroelektrana Čapljina" → same "hydro" token
+EGE_NAME_TRANSLATIONS: dict[str, dict[str, str]] = {
+    "AL": ALBANIAN_NAME_TRANSLATIONS,
+    "AT": GERMAN_NAME_TRANSLATIONS,  # Austrian
+    "BA": SOUTH_SLAVIC_NAME_TRANSLATIONS,  # Bosnian
+    "BE": {  # Belgian (Dutch / French / German)
+        **DUTCH_NAME_TRANSLATIONS,
+        **FRENCH_NAME_TRANSLATIONS,
+        **GERMAN_NAME_TRANSLATIONS,
+    },
+    "BG": {  # Bulgarian (Cyrillic + Latin)
+        "централа": "power plant",
+        "централи": "power plant",
+        "centrala": "power plant",
+        # "аец": "nuclear",
+        # "aec": "nuclear",
+        # "тец": "thermal",
+        # "tec": "thermal",
+        # "вец": "hydroelectric",
+        # "vec": "hydroelectric",
+        # "фец": "solar",
+        # "fec": "solar",
+        # "вяц": "wind",
+        # "vyac": "wind",
+    },
+    "CH": {  # Swiss German / French / Italian
+        **GERMAN_NAME_TRANSLATIONS,
+        **FRENCH_NAME_TRANSLATIONS,
+        **ITALIAN_NAME_TRANSLATIONS,
+    },
+    "CZ": CZECH_SLOVAK_NAME_TRANSLATIONS,
+    "DE": GERMAN_NAME_TRANSLATIONS,
+    "DK": {  # Danish
+        "kraftværk": "power plant",
+        "vindmøllepark": "wind park",
+        "solcelleanlæg": "solar power",
+        "vandkraftværk": "hydroelectric",
+        "varmeværk": "thermal power",
+    },
+    "EE": {  # Estonian
+        "elektrijaam": "power plant",
+        "elektrijaama": "power plant",
+        "elektrijaamad": "power plant",
+        "soojuselektrijaam": "thermal power plant",
+        "soojus": "thermal",
+        "ej": "power plant elektrijaam",
+        # "balti": "balti",
+        # "eesti": "eesti",
+    },
+    "ES": {  # Spanish
+        "central": "power plant",
+        "eléctrica": "electric power",
+        "térmica": "thermal power",
+        "hidroeléctrica": "hydroelectric hydro",
+        "eólica": "wind power",
+        "fotovoltaica": "solar power",
+    },
+    "FI": {  # Finnish
+        "voimalaitos": "power plant",
+        "voimala": "power plant",
+        "vesivoimala": "hydroelectric",
+        "tuulivoimala": "wind",
+        "lämpövoimala": "thermal",
+        "ydinvoimala": "nuclear",
+        "aurinkovoimala": "solar",
+    },
+    "FR": FRENCH_NAME_TRANSLATIONS,
+    "GE": {  # Georgian (Georgian script + Latin transliterations)
+        "ჰესი": "hydroelectric",
+        "hesi": "hydroelectric",
+        "თბოსადგური": "thermal",
+        "tbes": "thermal",
+        "tbosadguri": "thermal",
+        "ელექტროსადგური": "power plant",
+        "elektrosadguri": "power plant",
+    },
+    "GR": {  # Greek (Greek script + Latin transliterations)
+        "σταθμός": "power plant",
+        "stathmos": "power plant",
+        "υδροηλεκτρικός": "hydroelectric",
+        "yhs": "hydroelectric",
+        "θερμοηλεκτρικός": "thermal",
+        "αιολικό": "wind",
+        "φωτοβολταϊκό": "solar",
+    },
+    "HR": SOUTH_SLAVIC_NAME_TRANSLATIONS,
+    "HU": {  # Hungarian
+        "erőmű": "power plant",
+        "vízerőmű": "hydroelectric",
+        "hőerőmű": "thermal",
+        "atomerőmű": "nuclear",
+        "szélerőmű": "wind",
+        "napelemes": "solar",
+    },
+    "IT": ITALIAN_NAME_TRANSLATIONS,
+    "LT": {  # Lithuanian
+        "elektrinė": "power plant",
+        "šiluminė": "thermal",
+        "hidroelektrinė": "hydroelectric",
+        "vėjo": "wind",
+        "saulės": "solar",
+        "atominė": "nuclear",
+    },
+    "LV": {  # Latvian
+        "elektrostacija": "power plant",
+        "stacija": "power plant",
+        # "hes": "hydroelectric",
+        # "tes": "thermal",
+        "vēja": "wind",
+        "saules": "solar",
+        "atomelektrostacija": "nuclear",
+    },
+    "MD": ROMANIAN_NAME_TRANSLATIONS,
+    "ME": SOUTH_SLAVIC_NAME_TRANSLATIONS,
+    "MK": {  # Macedonian (Cyrillic + South Slavic Latin)
+        **SOUTH_SLAVIC_NAME_TRANSLATIONS,
+        "електрана": "power plant",
+        "тек": "thermal",
+        "хек": "hydroelectric",
+        "век": "wind",
+        "фек": "solar",
+    },
+    "NL": DUTCH_NAME_TRANSLATIONS,
+    "NO": {  # Norwegian
+        "kraftverk": "power plant",
+        "vannkraftverk": "hydroelectric",
+        "vindkraftverk": "wind",
+        "varmekraftverk": "thermal",
+        "kjernekraftverk": "nuclear",
+        "solkraftverk": "solar",
+    },
+    "PL": {
+        "elektrownia": "power plant",
+        "wodna": "hydroelectric",
+        "cieplna": "thermal",
+        "wiatrowa": "wind",
+        "słoneczna": "solar",
+        "sloneczna": "solar",
+        "fotowoltaiczna": "solar",
+        "jądrowa": "nuclear",
+        # "ew": "hydroelectric",
+        # "ec": "thermal",
+        # "ej": "nuclear",
+        # "fw": "wind",
+        # "pv": "solar",
+    },
+    "PT": {  # Portuguese
+        "central": "power plant",
+        "elétrica": "electric power",
+        "térmica": "thermal power",
+        "hidrelétrica": "hydroelectric hydro",
+        "hidroelétrica": "hydroelectric hydro",
+        "eólica": "wind power",
+        "solar": "solar power",
+        "fotovoltaica": "solar power",
+    },
+    "RO": ROMANIAN_NAME_TRANSLATIONS,
+    "RS": {  # Serbian
+        **SOUTH_SLAVIC_NAME_TRANSLATIONS,
+        "vjetroelektrana": "wind",  # Ijekavian (cross-border)
+        "vjetroelektrane": "wind",
+    },
+    "SE": {  # Swedish
+        "kraftverk": "power plant",
+        "vattenkraftverk": "hydroelectric",
+        "vindkraftverk": "wind",
+        "varmekraftverk": "thermal",
+        "kärnkraftverk": "nuclear",
+        "solkraftverk": "solar",
+    },
+    "SI": {  # Slovenian
+        "elektrarna": "power plant",
+        "hidroelektrarna": "hydroelectric",
+        "termoelektrarna": "thermal",
+        "vetrna": "wind",
+        "sončna": "solar",
+        "jedrska": "nuclear",
+        # "he": "hydroelectric",
+        # "te": "thermal",
+        # "ve": "wind",
+        # "je": "nuclear",
+        # "fe": "solar",
+    },
+    "SK": CZECH_SLOVAK_NAME_TRANSLATIONS,
+    "XK": {  # Kosovo (Albanian primary + South Slavic)
+        **ALBANIAN_NAME_TRANSLATIONS,
+        **SOUTH_SLAVIC_NAME_TRANSLATIONS,
+    },
+}

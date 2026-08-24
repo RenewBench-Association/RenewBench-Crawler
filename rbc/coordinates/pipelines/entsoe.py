@@ -12,8 +12,7 @@ from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.pipelines._base import BasePipeline
-from rbc.coordinates.utils.tokenizer import normalize_name
-from rbc.coordinates.utils.values import strip_str
+from rbc.coordinates.utils.values import normalize_name, strip_str
 
 # Constants for WCODE-related column headers
 WCODE_PREFIX = "wcode"

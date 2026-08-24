@@ -6,7 +6,7 @@ Utility functions for handling fuel type-related logic.
 import re
 from functools import lru_cache
 
-from rbc.coordinates.utils.tokenizer import normalize_name
+from rbc.coordinates.utils.values import normalize_name
 
 FUEL_UNKNOWN: frozenset[str] = frozenset({"unknown", "none", "missing"})
 

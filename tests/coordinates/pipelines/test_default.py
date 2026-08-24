@@ -231,7 +231,7 @@ class TestDefaultPipelineHelpers:
     ) -> None:
         """Failure path: a name with no discriminative tokens has no base key.
 
-        Every weighting rule that can classify a token LOW_WEIGHT (vocabulary
+        Every weighting rule that can classify a token DEMOTE_WEIGHT (vocabulary
         membership, or the bare-1-2-letter/1-3-digit designator pattern)
         guarantees any surviving DEFAULT_WEIGHT token is already >=3 chars, so
         an explicit length guard on the joined key would be unreachable -- this

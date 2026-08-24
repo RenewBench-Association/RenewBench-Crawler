@@ -14,6 +14,7 @@ This class shouldn't be instantiated directly -- its __init__ raises TypeError i
 
 from pathlib import Path
 from pprint import pformat
+from typing import cast
 
 import country_converter as coco
 import numpy as np
@@ -111,9 +112,16 @@ class BasePipeline:
             ]
             self.country = OPERATOR_METADATA[self.operator]["country"]
             self.name_col = OPERATOR_METADATA[self.operator]["entity_col"]
+            entity_mapping: dict[str, str] | dict[str, dict[str, str]] = (
+                OPERATOR_METADATA[self.operator].get("entity_mapping", {})
+            )
+            self.name_mapping: dict[str, str] | dict[str, dict[str, str]] = (
+                OPERATOR_METADATA[self.operator].get("entity_mapping", {})
+            )
             self.code_col = OPERATOR_METADATA[self.operator].get("code_col")
             self.fuel_col = OPERATOR_METADATA[self.operator].get("fuel_col")
             self.fuel_mapping = OPERATOR_METADATA[self.operator].get("fuel_mapping", {})
+
             if self.name_col == "":
                 raise MissingDataError(
                     f"No 'entity_col' name defined in OPERATOR_METADATA for "
@@ -125,8 +133,11 @@ class BasePipeline:
                 bz = self.input_dir.stem
                 self.country = str(ACTIVE_ZONES_METADATA[bz]["country"])
                 self.country_code = str(ACTIVE_ZONES_METADATA[bz]["alpha2"])
+                nested_mapping = cast(dict[str, dict[str, str]], entity_mapping)
+                self.name_mapping = nested_mapping.get(self.country_code, {})
             else:
                 self.country_code = coco.convert(names=self.country, to="ISO2")
+                self.name_mapping = cast(dict[str, str], entity_mapping)
 
             if self.country_code == "not found":
                 self.country_code = None
@@ -146,7 +157,12 @@ class BasePipeline:
             raise e
 
         # Pre-build tokenizer for later use
-        self.tok: NameTokenizer = NameTokenizer(country_code=self.country_code)
+        self.tok: NameTokenizer = NameTokenizer(
+            name_mapping={
+                **self.fuel_mapping,
+                **self.name_mapping,  # takes precedence (overrides same fuel_mapping keys)
+            }
+        )
 
         # Pre-build expensive-to-construct items: locators, dfs
         self.gem_loc: GEMLocator | None = gem_loc
@@ -321,9 +337,8 @@ class BasePipeline:
 
         matcher = NameMatcher(
             country=self.country,
-            country_code=self.country_code,
-            ppdb_locator=self.ppdb_loc,
             gem_locator=self.gem_loc,
+            ppdb_locator=self.ppdb_loc,
             osm_df=self.osm_df if len(self.osm_df) > 0 else None,
             tok=self.tok,
         )
@@ -350,11 +365,11 @@ class BasePipeline:
         for idx, row in df[matched_mask].iterrows():
             matched_fueltype = None
             if pd.notna(row.get("ppdb.lat")):
-                matched_fueltype = row.get("ppdb.Fueltype")
+                matched_fueltype = row.get("ppdb.fueltype")
             elif pd.notna(row.get("gem.lat")):
-                matched_fueltype = row.get("gem.Fueltype")
+                matched_fueltype = row.get("gem.fueltype")
             elif pd.notna(row.get("osm.lat")):
-                matched_fueltype = row.get("osm.Fueltype")
+                matched_fueltype = row.get("osm.fueltype")
 
             level = classify_fueltype_match(
                 row.get(self.sysop_fuel_col), matched_fueltype

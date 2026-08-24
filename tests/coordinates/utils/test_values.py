@@ -5,7 +5,82 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rbc.coordinates.utils.values import is_missing, strip_lower_str, strip_str
+from rbc.coordinates.utils.values import (
+    is_missing,
+    normalize_name,
+    strip_lower_str,
+    strip_str,
+)
+
+
+class TestNormalizeName:
+    """Tests for normalize_name."""
+
+    def test_normalize_name(self) -> None:
+        """Happy path: Lowercases, strips diacritics, collapses non-alphanumeric runs."""
+        assert normalize_name("  Čapljina HPP-Unit 5!  ") == "capljina hpp unit 5"
+
+    @pytest.mark.parametrize("value", [None, "", "   ", "\t\n"])
+    def test_normalize_name_missing(self, value: str | None) -> None:
+        """Failure path: Missing/blank values normalize to an empty string, not an error.
+
+        Args:
+            value (str | None): Missing value to provide as input.
+        """
+        assert normalize_name(value) == ""
+
+    @pytest.mark.parametrize(
+        "value, expected_output",
+        [
+            ("kraftværk", "kraftvaerk"),
+            ("Skærbækværket", "skaerbaekvaerket"),
+            ("vindmøllepark", "vindmollepark"),
+            ("słoneczna", "sloneczna"),
+            ("Straße", "strasse"),
+            ("Đerdap", "derdap"),
+            ("Þjórsá", "thjorsa"),
+            ("Måløy", "maloy"),  # "å" decomposes, "ø" does not
+        ],
+    )
+    def test_normalize_name_transliterates_atomic_letters(
+        self, value: str, expected_output: str
+    ) -> None:
+        """Happy path: Single-codepoint letters become ASCII instead of word separators.
+
+        NFKD only decomposes base+diacritic pairs, so letters like "æ"/"ø"/"ł"/"ß" survive
+        it and would otherwise be swallowed by the `[^a-z0-9]` pass -- shattering a Danish
+        name into fragments ("skaerbaekvaerket" vs "sk rb kv rket") on both sides of a match.
+
+        Args:
+            value (str): Name containing an atomic non-ASCII letter.
+            expected_output (str): Expected normalized string.
+        """
+        assert normalize_name(value) == expected_output
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "Auvere EJ",
+            "  Balti G09 ",
+            "Ünïcodé Näme",
+            "ENGURIUNIT_5",
+            "KW Boxberg Block Q",
+            "Skærbækværket",
+        ],
+    )
+    def test_normalize_name_is_idempotent(self, value: str) -> None:
+        """Regression pin: Normalizing an already-normalized name is a no-op.
+
+        Callers routinely hand already-normalized names back in --
+        NameTokenizer.weighted_tokenize passes its own `normalized` into tokenize(), and
+        NameMatcher passes `candidate.norm_name` into weighted_tokenize(). All of that is
+        only correct while this holds.
+
+        Args:
+            value (str): Raw name to normalize twice.
+        """
+        once = normalize_name(value)
+        assert normalize_name(once) == once
 
 
 class TestIsMissing:

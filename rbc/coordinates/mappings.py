@@ -7,15 +7,26 @@ modules and utility helpers.
 
 from typing import NotRequired, TypedDict
 
-from rbc.energy.entsoe.mappings import FUELTYPE_CODE_MAPPINGS
+from rbc.energy.entsoe.mappings import EGE_NAME_TRANSLATIONS as ENTSOE_NAME_TRANSLATIONS
+from rbc.energy.entsoe.mappings import FUELTYPE_CODE_MAPPINGS as ENTSOE_FUEL_MAPPINGS
+from rbc.energy.ons.mappings import (
+    EGE_NAME_TRANSLATIONS as ONS_NAME_TRANSLATIONS,
+)
+from rbc.energy.ons.mappings import (
+    FUELTYPE_MAPPING as ONS_FUEL_MAPPINGS,
+)
 
 
+# ---------------------------------------------------------------------------
+# Systems Operator Definitions (energy sources)
+# ---------------------------------------------------------------------------
 class OperatorInfo(TypedDict):
     """Define parameters describing operator info, with typesetting and which are required."""
 
+    needs_coordinates: bool
     country: str
     entity_col: str
-    needs_coordinates: bool
+    entity_mapping: NotRequired[dict[str, str] | dict[str, dict[str, str]]]
     code_col: NotRequired[str]
     fuel_col: NotRequired[str]
     fuel_mapping: NotRequired[dict[str, str]]
@@ -60,9 +71,10 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
     "entsoe": OperatorInfo(
         country="Europe",
         entity_col="time_series.mkt_psrtype.power_system_resources.name",
+        entity_mapping=ENTSOE_NAME_TRANSLATIONS,
         code_col="time_series.mkt_psrtype.power_system_resources.m_rid.value",
         fuel_col="time_series.mkt_psrtype.psr_type",
-        fuel_mapping=FUELTYPE_CODE_MAPPINGS,
+        fuel_mapping=ENTSOE_FUEL_MAPPINGS,
         pipeline="entsoe",
         needs_coordinates=True,
     ),
@@ -78,8 +90,10 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
     "ons": OperatorInfo(
         country="Brazil",
         entity_col="nom_usina",
+        entity_mapping=ONS_NAME_TRANSLATIONS,
         code_col="id_ons",
         fuel_col="nom_tipousina",
+        fuel_mapping=ONS_FUEL_MAPPINGS,
         needs_coordinates=True,
     ),
     "rei": OperatorInfo(country="Japan", entity_col="", needs_coordinates=False),
@@ -88,6 +102,9 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Country Definitions
+# ---------------------------------------------------------------------------
 # Map: Country codes (ISO3166-1:alpha-2) → OSM relation IDs (from update_osm_relation_ids.py)
 COUNTRY_OSM_RELATION_ID_MAP: dict[str, int] = {
     "AL": 53292,
@@ -136,14 +153,21 @@ COUNTRY_OSM_RELATION_ID_MAP: dict[str, int] = {
     "XK": 2088990,
 }
 
-# Set: Tokens that indicate a generic name/suffix rather than a matchable EGE name.
-# Use to strip away unhelpful content for proper name matching (e.g. "Sloe unit 20" → "Sloe").
+# ---------------------------------------------------------------------------
+# Matching Definitions (name, fueltype)
+# ---------------------------------------------------------------------------
+# Set: Tokens that indicate a generic EGE-related term to be removed in name matching. Uses:
+# - remove unhelpful content from "normal" names (e.g. 'Sloe unit 20' → ['Sloe']).
+# - safely remove from "glued" names (e.g. 'ENGURIUNIT_5' → ['enguri', '5'])
 GENERIC_UNIT_TOKENS: frozenset[str] = frozenset(
     {
         "unit",
         "units",
         "block",
+        "blocko",
         "blok",
+        "conj.",
+        "conjuncto",
         "group",
         "groep",
         "generator",
@@ -152,92 +176,28 @@ GENERIC_UNIT_TOKENS: frozenset[str] = frozenset(
     }
 )
 
-
-# Map: EGE fuel type abbreviations / non-english terms → English equivalents.
-# Apply before fuzzy matching to properly resolve to the correct tokens.
-# E.g. ENTSOE's "HE_CAPLJINA_G1" & OSM's "Hidroelektrana Čapljina" → same "hydro" token
-PLANT_NAME_EXPANSIONS: dict[str, str] = {
-    # --- Abbreviations that appear as first token - used in ENTSO-E EGE codes/names ---
-    "he": "hydroelectric",
-    "te": "thermal",
-    "ve": "wind",
-    "fe": "solar",
-    "ne": "nuclear",
-    "re": "pumped hydro",
-    "bess": "bess battery",  # add "battery" since OSM/GEM/PPM often have that label
-    # --- Full non-english names (Bosnian / Croatian / Serbian) - used in OSM ---
-    "hidroelektrana": "hydroelectric",
-    "hidroelektrane": "hydroelectric",
-    "termoelektrana": "thermal",
-    "termoelektrane": "thermal",
-    "vjetroelektrana": "wind",
-    "vjetroelektrane": "wind",
-    "fotonaponska": "solar",
-    "nuklearna": "nuclear",
-    "reverzibilna": "pumped hydro",
-    "elektrana": "power plant",
-    "elektrane": "power plant",
-}
-
-
-# Map: Country codes → country-specific additions/overrides for PLANT_NAME_EXPANSIONS
-# Add on top to refine ambiguous/incorrect per-country tokens affecting others.
-COUNTRY_PLANT_NAME_EXPANSIONS: dict[str, dict[str, str]] = {
-    "EE": {
-        # Estonian power plant terms (ENTSO-E uses these generic terms)
-        "elektrijaam": "power plant",
-        "elektrijaama": "power plant",
-        "elektrijaamad": "power plant",
-        # Additional translations for cross-database matching (OSM specifies type)
-        "soojuselektrijaam": "thermal power plant",
-        "soojus": "thermal",
-        "balti": "balti",
-        "eesti": "eesti",
-        "ej": "power plant elektrijaam",  # abbreviation
-    },
-    "CH": {
-        # Swiss German/French/Italian power plant terms
-        "kraftwerk": "power plant",
-        "centrale": "power plant",
-        "central": "power plant",
-        "elettrica": "electric power",
-        "électrique": "electric power",
-        "hydro": "hydroelectric hydro",
-        "thermique": "thermal power",
-    },
-    "DE": {
-        # German power plant terms
-        "kraftwerk": "power plant",
-        "heizkraftwerk": "power plant heating",
-        "gaskraftwerk": "power plant gas",
-        "kohlekraftwerk": "power plant coal",
-        "wasserkraftwerk": "power plant hydro hydroelectric",
-        "windkraftwerk": "power plant wind",
-        "biomassekraftwerk": "power plant biomass",
-    },
-    "FR": {
-        # French power plant terms
-        "centrale": "power plant",
-        "central": "power plant",
-        "électrique": "electric power",
-        "thermique": "thermal power",
-        "nucléaire": "nuclear power",
-        "hydroélectrique": "hydroelectric hydro",
-    },
-    "ES": {
-        # Spanish power plant terms
-        "central": "power plant",
-        "eléctrica": "electric power",
-        "térmica": "thermal power",
-        "hidroeléctrica": "hydroelectric hydro",
-        "eólica": "wind power",
-    },
-    "IT": {
-        # Italian power plant terms
-        "centrale": "power plant",
-        "elettrica": "electric power",
-        "termica": "thermal power",
-        "idroelettrica": "hydroelectric hydro",
-        "eolica": "wind power",
-    },
-}
+# Set: Tokens that indicate a generic energy-related term instead of a matchable name. Uses:
+# - reduce weight of generic terms (e.g. 'Sloe station' → {'sloe': 1.0, 'station': 0.x}).
+GENERIC_ENERGY_TOKENS: frozenset[str] = frozenset(
+    {
+        "power",
+        "plant",
+        "park",
+        "station",
+        "energy",
+        "electric",
+        "house",
+        # fueltypes
+        "wind",
+        "solar",
+        "nuclear",
+        "hydro",
+        "hydroelectric",
+        "biomass",
+        "thermal",
+        "coal",
+        "oil",
+        "gas",
+        "waste",
+    }
+)

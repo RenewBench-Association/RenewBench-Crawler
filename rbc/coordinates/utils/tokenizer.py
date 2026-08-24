@@ -6,23 +6,19 @@ Splits an EGE name into weighted tokens so that a discriminative place/EGE name 
 names via the same tokenize-and-weight function on both sides, instead of each candidate
 source expanding its own names ad hoc.
 
-Weighting is dictionary-based only (GENERIC_UNIT_TOKENS / PLANT_NAME_EXPANSIONS
-/ COUNTRY_PLANT_NAME_EXPANSIONS from mappings.py).
+Weighting is dictionary-based only (GENERIC_UNIT_TOKENS / GENERIC_ENERGY_TOKENS from
+mappings.py & per-operator/country name_mapping translations).
 """
 
 import re
-import unicodedata
 from dataclasses import dataclass
-from functools import lru_cache
+from pprint import pformat
 
+from loguru import logger
 from rapidfuzz import fuzz
 
-from rbc.coordinates.mappings import (
-    COUNTRY_PLANT_NAME_EXPANSIONS,
-    GENERIC_UNIT_TOKENS,
-    PLANT_NAME_EXPANSIONS,
-)
-from rbc.coordinates.utils.values import strip_lower_str
+from rbc.coordinates.mappings import GENERIC_ENERGY_TOKENS, GENERIC_UNIT_TOKENS
+from rbc.coordinates.utils.values import normalize_name
 
 
 @dataclass(frozen=True)
@@ -36,21 +32,8 @@ class WeightedTokens:
 # ---------------------------------------------------------------------------
 # Independent functions (pure string operators - no vocab, no country)
 # ---------------------------------------------------------------------------
-def normalize_name(value: str | None) -> str:
-    """Normalize a power plant name for robust cross-source matching.
-
-    Lowercase, strip diacritics, replace non-alphanumeric runs with a single
-    space, collapse whitespace.
-    """
-    text = strip_lower_str(value)
-    if not text:
-        return ""
-
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+NORM_GENERIC_UNIT_TOKENS = [normalize_name(t) for t in GENERIC_UNIT_TOKENS]
+NORM_GENERIC_ENERGY_TOKENS = [normalize_name(t) for t in GENERIC_ENERGY_TOKENS]
 
 
 def strip_numeric_tokens(value: str) -> str:
@@ -74,7 +57,7 @@ def strip_numeric_tokens(value: str) -> str:
     tokens = [
         token
         for token in normalized.split()
-        if not token.isdigit() and token not in GENERIC_UNIT_TOKENS
+        if not token.isdigit() and token not in NORM_GENERIC_UNIT_TOKENS
     ]
     return " ".join(tokens).strip()
 
@@ -99,7 +82,7 @@ def strip_trailing_unit_suffix(value: str) -> str:
         return ""
 
     # Build regex pattern from multi-character unit tokens
-    unit_words = "|".join(token for token in GENERIC_UNIT_TOKENS if len(token) > 1)
+    unit_words = "|".join(token for token in NORM_GENERIC_UNIT_TOKENS if len(token) > 1)
     if not unit_words:
         return normalized
 
@@ -122,7 +105,7 @@ def get_weighted_token_score(
         candidate (WeightedTokens): WeightedTokens to score.
 
     Returns:
-        float: Weighted-average best token match score.
+        float: Best weighted-average token match score.
     """
     if not target.tokens or not candidate.tokens:
         return 0.0
@@ -141,7 +124,8 @@ def get_weighted_token_score(
 # ---------------------------------------------------------------------------
 # Country-/vocabulary-based class functionality
 # ---------------------------------------------------------------------------
-LOW_WEIGHT = 0.1
+EXCLUDE_WEIGHT = 0.0
+DEMOTE_WEIGHT = 0.1
 DEFAULT_WEIGHT = 1.0
 
 # Short alphanumeric patterns for designating units that are not caught by the vocabulary:
@@ -153,48 +137,53 @@ _SHORT_EGE_DESCRIPTOR_PATTERNS = re.compile(
 )
 
 
-@lru_cache(maxsize=None)
-def build_vocabulary(country_code: str | None) -> dict[str, str]:
-    """Merge GENERIC_UNIT_TOKENS + PLANT_NAME_EXPANSIONS + country overrides into vocabulary.
-
-    Keys are the vocabulary words/abbreviations; values are their meanings/def expansions
-    (generic words map to themselves). Independent of NameTokenizer instance state.
-
-    Args:
-        country_code (str | None): The country code to check for overrides. Defaults to None.
-
-    Returns:
-        vocabulary (dict): Vocabulary words and their expansions.
-    """
-    vocabulary: dict[str, str] = {tok: tok for tok in GENERIC_UNIT_TOKENS}
-    vocabulary.update(PLANT_NAME_EXPANSIONS)
-    if country_code:
-        vocabulary.update(COUNTRY_PLANT_NAME_EXPANSIONS.get(country_code, {}))
-    return vocabulary
-
-
 class NameTokenizer:
     """Vocabulary-driven tokenization and weighting for one country."""
 
-    def __init__(self, country_code: str | None = None) -> None:
+    def __init__(self, name_mapping: dict[str, str] | None = None) -> None:
         """Initialize the name-tokenizer class.
 
         Args:
-            country_code (str | None): The country code (ISO3166-1:alpha-2 code) to use for
-                tokenization. Defaults to None.
+            name_mapping (dict | None): The mapping dict of operator/country-specific non-
+                english names and their meanings to use for building the vocabulary.
+                Defaults to None.
         """
-        self.country_code = country_code
-        self._vocabulary = build_vocabulary(country_code)
+        # build vocabulary lookups
+        self._exclude_vocabulary: list[str] = NORM_GENERIC_UNIT_TOKENS
+        self._demote_vocabulary: dict[str, str] = {
+            t: t for t in NORM_GENERIC_ENERGY_TOKENS
+        }
+        if name_mapping:
+            self._demote_vocabulary.update(
+                {normalize_name(k): normalize_name(v) for k, v in name_mapping.items()}
+            )
 
-        # list of whole vocabulary words = more than 3 characters (excludes 2-letter codes!)
-        self._vocabulary_words = sorted(
-            (w for w in self._vocabulary if len(w) >= 3),
+        # build lists of vocabulary words for specific comparisons
+        # 2. exclusion words: those that have more than 3 characters (no 2-letter codes!)
+        self._exclude_words: list[str] = sorted(
+            (w for w in self._exclude_vocabulary if len(w) >= 3),
             key=len,
             reverse=True,
+        )
+        # 1. demotion words: the individual values of the key-value pair dict
+        self._demote_words: frozenset[str] = frozenset(
+            w for v in self._demote_vocabulary.values() for w in v.split()
         )
 
         # Cache to store name's tokens and their weights: normalized_name -> WeightedTokens
         self._weighted_cache: dict[str, WeightedTokens] = {}
+
+        logger.info(
+            f"NameTokenizer initialized with:\n"
+            f"-\texcluded vocabulary: list of {len(self._exclude_vocabulary)} with "
+            f"{len(self._exclude_words)} words (for strip-glue removal)\n"
+            f"-\tdemoted vocabulary: dict of {len(self._demote_vocabulary)} with "
+            f"{len(self._demote_words)} words (for adding & weighting tokens)"
+        )
+        logger.debug(
+            f"NameTokenizer initialized with:\n"
+            f"{pformat(vars(self), indent=4, sort_dicts=False)}"
+        )
 
     # ---------------------------------------------------------------------------
     # Public API
@@ -203,7 +192,7 @@ class NameTokenizer:
         """Normalize name, split into tokens and expand/strip each token using the vocabulary.
 
         Exact vocabulary-keys (e.g. "he", "unit") expand to their mapped vocab value and are
-        split into separate if multi-word (e.g. "ej" -> "power plant elektrijaam" -> 3 tok).
+        split into separate if multi-word (e.g. "ej" -> "power plant" -> 2 tok).
         Non-vocabulary tokens go to the bidirectional glued-name stripper as a fallback.
 
         Args:
@@ -218,8 +207,10 @@ class NameTokenizer:
 
         out: list[str] = []
         for tok in normalized.split():  # split into tokens
-            if tok in self._vocabulary:
-                out.extend(self._vocabulary[tok].split())
+            if tok in self._exclude_vocabulary:
+                out.append(tok)
+            elif tok in self._demote_vocabulary:
+                out.extend(self._demote_vocabulary[tok].split())
             else:
                 stripped = self._strip_glued(tok)
                 out.append(stripped if stripped else tok)
@@ -252,9 +243,10 @@ class NameTokenizer:
     def _get_weight(self, token: str) -> float:
         """Dictionary-based token importance weight (no corpus-frequency stats).
 
-        - Exact vocabulary key (generic unit/plant-type word) -> LOW_WEIGHT
-        - Short alphanumeric unit-designator pattern (g1, u2, bare digits) -> LOW_WEIGHT
-        - Everything else (presumed discriminative place/plant name) -> DEFAULT_WEIGHT
+        - Exact exclude_vocabulary value (generic unit/plant-type word) -> EXCLUDE_WEIGHT
+        - Exact demote_words value (generic energy word & fuel types) -> DEMOTE_WEIGHT
+        - Short alphanumeric unit-designator pattern (g1, u2, bare digits) -> DEMOTE_WEIGHT
+        - Everything else (presumed discriminative place/EGE name) -> DEFAULT_WEIGHT
 
         Args:
             token (str): The token to calculate weight for.
@@ -262,10 +254,12 @@ class NameTokenizer:
         Returns:
             float: The weight of the token.
         """
-        if token in self._vocabulary:
-            return LOW_WEIGHT
+        if token in self._exclude_vocabulary:
+            return EXCLUDE_WEIGHT
+        if token in self._demote_words:
+            return DEMOTE_WEIGHT
         if _SHORT_EGE_DESCRIPTOR_PATTERNS.match(token):
-            return LOW_WEIGHT
+            return DEMOTE_WEIGHT
         return DEFAULT_WEIGHT
 
     def _strip_glued(self, token: str) -> str:
@@ -285,7 +279,7 @@ class NameTokenizer:
         changed = True
         while changed and current:
             changed = False
-            for word in self._vocabulary_words:
+            for word in self._exclude_words:
                 if len(word) >= len(current):
                     continue
                 if current.startswith(word):

@@ -2,10 +2,52 @@
 """Value utilities.
 
 Utility functions for handling string-conversion related logics shared by modules,
-especially normalizers (tokenizer.normalize_name, fuel.normalize_fueltype, country.*, map.*).
+especially normalizers (tokenizer.*, country.*, map.*).
 """
 
+import re
+import unicodedata
+
 import pandas as pd
+
+# Map for normalize_name(): Atomic letters → ASCII equivalents.
+# NFKD only decomposes base+diacritic pairs, so this helps interpret e.g.: "Skærbækværket"
+_TRANSLITERATIONS = str.maketrans(
+    {
+        "æ": "ae",
+        "œ": "oe",
+        "ø": "o",
+        "ł": "l",
+        "ß": "ss",
+        "đ": "d",
+        "ð": "d",
+        "þ": "th",
+    }
+)
+
+
+def normalize_name(value: str | None) -> str:
+    """Normalize the provided value for robust cross-source matching.
+
+    Lowercase, transliterate atomic non-ASCII letters, strip diacritics, replace
+    non-alphanumeric runs with a single space, collapse whitespace.
+
+    Args:
+        value (str): The value to normalize.
+
+    Returns:
+        Normalized string value.
+    """
+    text = strip_lower_str(value)
+    if not text:
+        return ""
+
+    text = text.translate(_TRANSLITERATIONS)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def is_missing(value: object) -> bool:

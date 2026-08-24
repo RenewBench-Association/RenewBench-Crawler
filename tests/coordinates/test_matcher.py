@@ -127,7 +127,6 @@ def matcher(
     """
     return NameMatcher(
         country="Estonia",
-        country_code="EE",
         gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
         ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
         osm_df=osm_df,
@@ -164,7 +163,6 @@ class TestAdapters:
         """
         m = NameMatcher(
             country="Germany",
-            country_code="DE",
             ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
         )
         candidates = m._build_candidates(PPDB_ADAPTER)
