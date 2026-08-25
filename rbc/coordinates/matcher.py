@@ -29,7 +29,7 @@ from rbc.coordinates.match_schema import (
     MatchResult,
 )
 from rbc.coordinates.utils.country import normalize_operator_country_name
-from rbc.coordinates.utils.fuel import is_fueltype_compatible
+from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
@@ -405,7 +405,10 @@ class NameMatcher:
     def _adjust_score(
         self, score: float, candidate: MatchCandidate, fuel: str | None
     ) -> float:
-        """Apply bonus/penalty to the score for a given candidate depending on the fuel type.
+        """Adjust score for a given candidate depending on whether the fuel types match.
+
+        Get fuel type match level with the classify_fueltype_match helper, define handling
+        based on the classification str.
 
         Args:
             score (float): The score to adjust.
@@ -417,10 +420,12 @@ class NameMatcher:
         """
         score += self.SOURCE_BONUS.get(candidate.source, 0.0)
 
-        if fuel and candidate.fueltype:
-            if is_fueltype_compatible(fuel, candidate.fueltype):
-                score += 5.0  # match bonus
-            else:
-                score -= 20.0  # mismatch penalty
+        level = classify_fueltype_match(fuel, candidate.fueltype)
+        if level == "mismatch":  # redefine to 0
+            return 0.0
+        elif level == "unknown":  # leave score unchanged
+            return score
 
+        # bonus for correct match ("exact" or "compatible")
+        score += 5.0
         return score

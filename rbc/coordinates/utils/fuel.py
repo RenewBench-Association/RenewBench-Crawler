@@ -66,23 +66,6 @@ def classify_fueltype_match(sysop_type: str | None, loc_type: str | None) -> str
     return "mismatch"  # e.g. {'fossil', 'oil'} vs {'offshore', 'wind'}
 
 
-def is_fueltype_compatible(sysop_type: str | None, loc_type: str | None) -> bool:
-    """Validate if the operator EGE's fuel type matches the locator EGE's fuel type.
-
-    Args:
-        sysop_type: Fuel type of EGE from system operator data.
-        loc_type: Fuel type of EGE from locator database.
-
-    Returns:
-        bool: True if types are compatible, False otherwise.
-    """
-    compatibility = classify_fueltype_match(sysop_type, loc_type)
-    if compatibility == "mismatch":
-        return False
-    else:
-        return True
-
-
 @lru_cache(maxsize=1024)
 def _tokenize_fuel(value: str | None) -> tuple[str, ...]:
     """Normalize a fuel label, then split it into individual, comparable words (tokens).

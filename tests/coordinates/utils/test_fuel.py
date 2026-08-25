@@ -13,7 +13,6 @@ from rbc.coordinates.utils.fuel import (
     FUEL_UNKNOWN,
     _tokenize_fuel,
     classify_fueltype_match,
-    is_fueltype_compatible,
 )
 
 
@@ -154,43 +153,6 @@ class TestClassifyFueltypeMatch:
             expected_output (str): Expected compatibility level.
         """
         assert classify_fueltype_match(sysop_type, loc_type) == expected_output
-
-
-class TestIsFueltypeCompatible:
-    """Tests for the utility function is_fueltype_compatible."""
-
-    @pytest.mark.parametrize(
-        "sysop_type, loc_type",
-        [
-            ("wind", "Wind"),  # exact
-            ("fossil gas", "natural gas"),  # compatible
-            ("wind", "unknown"),  # unknown
-            (None, "Wind"),  # unknown
-        ],
-    )
-    def test(self, sysop_type: str | None, loc_type: str | None) -> None:
-        """Happy path: Every level except "mismatch" is treated as compatible.
-
-        Missing/unknown information passes deliberately - a candidate is only rejected
-        on positive disagreement, not on absent data.
-
-        Args:
-            sysop_type (str | None): Fuel type of the operator's EGE.
-            loc_type (str | None): Fuel type of the locator's EGE.
-        """
-        assert is_fueltype_compatible(sysop_type, loc_type) is True
-
-    @pytest.mark.parametrize(
-        "sysop_type, loc_type", [("wind", "solar"), ("nuclear", "coal")]
-    )
-    def test_mismatch_fails(self, sysop_type: str, loc_type: str) -> None:
-        """Failure path: clearly different fuel types are rejected.
-
-        Args:
-            sysop_type (str): Fuel type of the operator's EGE.
-            loc_type (str): Fuel type of the locator's EGE.
-        """
-        assert is_fueltype_compatible(sysop_type, loc_type) is False
 
 
 # ----------------------------------
