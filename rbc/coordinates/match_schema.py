@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class SourceAdapter:
+class LocatorAdapter:
     """Column-mapping config that lets one candidate builder serve any source.
 
     Replaces hardcoded candidate building per locator source with a single generic builder
@@ -23,7 +23,7 @@ class SourceAdapter:
     # todo: Several attributes are not necessary, as the MatchCandidate elements they
     #  feed are not used anywhere. These are: "other_names_col", "confidence_fn"
 
-    source: str  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
+    source: str  # locator name 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     get_df: Callable[["NameMatcher"], pd.DataFrame | None]
     name_col: str
     other_names_col: str | None  # comma-separated alternative names (only GEM)
@@ -32,14 +32,13 @@ class SourceAdapter:
     status_col: str | None
     url_col: str | None
     extra_cols: tuple[str, ...]  # extra columns of data to propagate (only OSM)
-    confidence_fn: Callable[[pd.Series], str]
     fueltype_col: str = "Fueltype"
     capacity_col: str = "Capacity"
     lat_col: str = "lat"
     lon_col: str = "lon"
 
 
-GEM_ADAPTER = SourceAdapter(
+GEM_ADAPTER = LocatorAdapter(
     source="gem",
     get_df=lambda m: getattr(m.gem_locator, "df", None),
     name_col="plant_name",
@@ -49,11 +48,10 @@ GEM_ADAPTER = SourceAdapter(
     status_col="Status",
     url_col="wiki_url",
     extra_cols=(),
-    confidence_fn=lambda row: "high",
 )
 
 # todo: confidence def means PPDB all non-entsoe operators have "medium" confidence level
-PPDB_ADAPTER = SourceAdapter(
+PPDB_ADAPTER = LocatorAdapter(
     source="ppdb",
     get_df=lambda m: getattr(m.ppdb_locator, "df", None),
     name_col="Name",
@@ -63,10 +61,9 @@ PPDB_ADAPTER = SourceAdapter(
     status_col=None,
     url_col=None,
     extra_cols=(),
-    confidence_fn=lambda row: "high" if pd.notna(row.get("EIC")) else "medium",
 )
 
-OSM_ADAPTER = SourceAdapter(
+OSM_ADAPTER = LocatorAdapter(
     source="osm",
     get_df=lambda m: m.osm_df,  # duplicated rows for each alt name (s. osm_api.py)
     name_col="Name",
@@ -76,7 +73,6 @@ OSM_ADAPTER = SourceAdapter(
     status_col="Status",
     url_col="OSM_URL",
     extra_cols=("OSM_Type", "OSM_Geometry"),
-    confidence_fn=lambda row: "medium",
 )
 
 
@@ -85,13 +81,11 @@ class MatchCandidate:
     """A single matching candidate from a data source."""
 
     # todo: Several attributes are never used. Decide whether to keep or remove! They include:
-    #  "match_score", "confidence", "other_names"
+    #  "other_names"
 
     name: str
     norm_name: str = field(metadata={"internal": True})  # actually tokenized & rejoined
-    source: str = field(
-        metadata={"internal": True}
-    )  # 'ppdb' (= ppm/osmpp), 'gem', 'osm'
+    source: str = field(metadata={"internal": True})  # 'ppdb' (= ppm/osmpp)/'gem'/'osm'
     source_id: str | None
     fueltype: str | None
     capacity: str | None
@@ -100,24 +94,19 @@ class MatchCandidate:
     lat: float | None
     lon: float | None
     country: str | None
-    other_names: str = field(
-        default="", metadata={"internal": True}
-    )  # alt names (,-sep)
-    extras: dict = field(
-        default_factory=dict, metadata={"internal": True}
-    )  # extra data
-    match_score: float = field(default=0.0, metadata={"internal": True})
-    confidence: str = field(default="high", metadata={"internal": True})  # 3 levels
+    other_names: str = field(default="", metadata={"internal": True})  # ,-sep alt names
+    extras: dict = field(default_factory=dict, metadata={"internal": True})  # more data
+    match_score: float | None = field(default=0.0)
 
     @classmethod
     def from_row(
-        cls, row: pd.Series, adapter: SourceAdapter, tok: NameTokenizer | None = None
+        cls, row: pd.Series, adapter: LocatorAdapter, tok: NameTokenizer | None = None
     ) -> "MatchCandidate | None":
         """Build a matching candidate from a locator row, using the adapter's column mapping.
 
         Args:
             row (pd.Series): Row of a dataframe.
-            adapter (SourceAdapter): Adapter of the locator.
+            adapter (LocatorAdapter): Adapter of the locator.
             tok (NameTokenizer): NameTokenizer for name normalization, if required.
 
         Returns:
@@ -148,9 +137,9 @@ class MatchCandidate:
             lat=float(row[adapter.lat_col]),
             lon=float(row[adapter.lon_col]),
             country=strip_str(row.get(adapter.country_col)),
-            confidence=adapter.confidence_fn(row),
             other_names=other_names,
             extras=extras,
+            match_score=None,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -180,11 +169,53 @@ class MatchCandidate:
 class MatchResult:
     """Result of a name matching operation."""
 
-    # todo: Several attributes are never used. Decide whether to keep or remove! They include:
-    #  "variants_tried", "top_candidates"
-
     matched: bool
     candidate: MatchCandidate | None
     score: float
-    variants_tried: list[str]
-    top_candidates: list[MatchCandidate]  # Top 5 for debugging
+    all_target_variants: list[str]
+    top_matches: list[tuple[MatchCandidate, float]]  # best 10 (score > 5 below thresh)
+
+    def to_dicts(
+        self, target_idx: int | None = None, target_fueltype: str | None = None
+    ) -> list[dict[str, object]]:
+        """Maps match results into a list of dicts, creating one row per entry in top_matches.
+
+        Args:
+            target_idx (int | None): Index of the target EGE to include in the dict.
+                Defaults to None.
+            target_fueltype (str | None): Fuel type of the target EGE to include in the dict.
+                Defaults to None.
+
+        Returns:
+            list[dict[str, object]]: List of row dictionaries suitable for DataFrame creation.
+        """
+        base = {
+            "target.idx": target_idx if target_idx is not None else "-",
+            "matched": self.matched,
+            "target.variants": ", ".join(self.all_target_variants),
+            "target.fueltype": target_fueltype if target_fueltype is not None else "-",
+        }
+
+        # If there are matched candidates, generate one dict row per match
+        list_of_dicts = []
+        if self.top_matches:
+            self.top_matches.sort(key=lambda x: x[1], reverse=True)
+            for cand, score in self.top_matches:
+                locator = cand.source
+                cand_dict = {
+                    "candidate." + k.split(f"{locator}.")[-1]: v
+                    for k, v in cand.to_dict().items()
+                    if k.startswith(f"{locator}.") and not any(map(str.isupper, k))
+                }
+                list_of_dicts.append(
+                    {
+                        **base,
+                        "locator": locator,
+                        "candidate.score": round(score, 2),
+                        **cand_dict,
+                    }
+                )
+            return list_of_dicts
+
+        # Fallback for when all_matches is empty
+        return [{**base, "locator": None, "candidate.score": None, **{}}]

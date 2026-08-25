@@ -448,8 +448,11 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): Updated working dataframe (now with ppdb, gem, osm matches).
         """
-        self._create_match_method_columns(df)  # defensive; no-op if already done
+        # 1. Dataframe setup
+        self._create_match_method_columns(df)  # main df column check (no-op if already)
+        fuzzy_results_list = []  # list for storing fuzzy matches as a background lookup
 
+        # 2. Fuzzy matching candidate search
         for idx, row in df[self._still_unmatched(df)].iterrows():
             sysop_fuel = row.get(self.sysop_fuel_col)
 
@@ -462,6 +465,9 @@ class BasePipeline:
                     target_name=clean_candidate,
                     fuel_type=sysop_fuel,
                     threshold=75,  # lower to get more matches with enhanced fuzzy matching
+                )
+                fuzzy_results_list.extend(
+                    result.to_dicts(target_idx=idx, target_fueltype=sysop_fuel)
                 )
 
                 if result.matched and result.candidate:
@@ -484,7 +490,10 @@ class BasePipeline:
 
                     break
 
-        # Initialize specific OSM columns if they don't exist
+        # 3. Postprocessing
+        df_fuzzy_results = pd.DataFrame(fuzzy_results_list)
+
+        # initialize specific OSM columns if they don't exist
         for col in ["id", "type", "url", "geometry"]:
             if f"osm.{col}" not in df.columns:
                 df[f"osm.{col}"] = None
@@ -497,6 +506,16 @@ class BasePipeline:
             f"{ppdb_final} via ppdb (PPM/OSMPP) total, {gem_final} via GEM total, "
             f"{osm_final} via OSM."
         )
+
+        # 4. Storing the fuzzy matching df
+        if self.output_dir and not df_fuzzy_results.empty:
+            out_path = Path(self.output_dir, f"fuzzy_matches_{self.input_dir.name}.csv")
+            df_fuzzy_results.to_csv(out_path, index=False)
+            logger.info(
+                f"[{self.input_dir.name}] Dataframe with all fuzzy matching candidates "
+                f"saved to '{out_path}'."
+            )
+
         return df
 
     def _sibling_fallback_core(
@@ -600,8 +619,8 @@ class BasePipeline:
         Returns:
             tuple[pd.Series, pd.Series]: Best-so-far lat and lon coordinates.
         """
-        lat = df["ppdb.lat"].combine_first(df["gem.lat"]).combine_first(df["osm.lat"])
-        lon = df["ppdb.lon"].combine_first(df["gem.lon"]).combine_first(df["osm.lon"])
+        lat = df["gem.lat"].combine_first(df["ppdb.lat"]).combine_first(df["osm.lat"])
+        lon = df["gem.lon"].combine_first(df["ppdb.lon"]).combine_first(df["osm.lon"])
         return lat, lon
 
     def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatcher) -> None:
