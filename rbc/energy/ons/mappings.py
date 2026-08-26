@@ -32,9 +32,9 @@ for key, value in FUELTYPE_BASE_MAPPING.items():
 
 # ======= ENTITY NAMES =======
 # GENERIC_UNIT_TOKENS = {
-#     "blocko",
+#     "bloco",
 #     "conj.",
-#     "conjuncto"
+#     "conjunto"
 # }
 
 # Map: ONS-specific EGE terms → english translations
