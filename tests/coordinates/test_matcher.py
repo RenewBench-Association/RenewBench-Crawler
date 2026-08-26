@@ -9,12 +9,8 @@ import pytest
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.matcher import (
-    GEM_ADAPTER,
-    OSM_ADAPTER,
-    PPDB_ADAPTER,
-    NameMatcher,
-)
+from rbc.coordinates.match_schema import GEM_ADAPTER, OSM_ADAPTER, PPDB_ADAPTER
+from rbc.coordinates.matcher import NameMatcher
 
 
 # ----------------------------------

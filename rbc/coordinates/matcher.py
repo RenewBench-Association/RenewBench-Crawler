@@ -21,9 +21,8 @@ from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.match_schema import (
-    GEM_ADAPTER,
-    OSM_ADAPTER,
-    PPDB_ADAPTER,
+    LOCATOR_ADAPTERS,
+    LOCATOR_RELIABILITY,
     LocatorAdapter,
     MatchCandidate,
     MatchResult,
@@ -61,18 +60,11 @@ class NameMatcher:
         >>> matcher = NameMatcher(country="Germany",gem_locator=gem_loc,ppdb_locator=ppm_loc)
         ...     osm_df=osm_df, tok=tok
         ... )
-        >>> result = matcher.match("Enguri Unit 5", fuel_type="hydro")
+        >>> result = matcher.match("Enguri Unit 5",fueltype="hydro")
         >>> if result.matched:
         ...     candidate = result.candidate
         ...     print(f"Found: {candidate.name} at ({candidate.lat}, {candidate.lon})")
     """
-
-    # Source priority bonuses (added to fuzzy match scores)
-    SOURCE_BONUS: dict[str, float] = {
-        "gem": 3.0,
-        "ppdb": 2.0,
-        "osm": 1.0,
-    }  # todo: redefine with "reliability" info!
 
     def __init__(
         self,
@@ -129,7 +121,7 @@ class NameMatcher:
     def match(
         self,
         target_name: str,
-        fuel_type: str | None = None,
+        fueltype: str | None = None,
         threshold: float = 75.0,
         weighted_threshold: float = 65.0,
     ) -> MatchResult:
@@ -141,7 +133,7 @@ class NameMatcher:
 
         Args:
             target_name (str): The name to match.
-            fuel_type (str | None): Fuel type for validation (overrides class default).
+            fueltype (str | None): Fuel type for validation (overrides class default).
                 Defaults to None.
             threshold (float): Minimum score (0-100) to accept an exact-lookup match
                 (exact-match-plus-bonuses score). Defaults to 75.
@@ -157,23 +149,27 @@ class NameMatcher:
                 matched=False,
                 candidate=None,
                 score=0.0,
-                all_target_variants=[],
+                target_variants=[],
+                target_wt_strings=[],
                 top_matches=[],
             )
 
         # --- Preparation: Define and build all required parameters
         candidate_index = self._candidate_index
         target_variants = self._generate_target_variants(target_name)
+        target_wts = [self.tok.weighted_tokenize(v) for v in target_variants]
 
+        # full match collection: MatchCandidate, score, target tok&weights, candidate
+        # WeightedTokens
+        all_matches: list[tuple[MatchCandidate, float]] = []
         winning_matches: list[tuple[MatchCandidate, float]] = []  # winner collection
-        all_matches: list[tuple[MatchCandidate, float]] = []  # full match collection
 
         # --- Approach 1: Exact matches via candidate_index lookup (fast path)
         for variant in target_variants:
             if variant in candidate_index:
                 for candidate in candidate_index[variant]:
                     score = 100.0
-                    score = self._adjust_score(score, candidate, fuel_type)
+                    score = self._adjust_score(score, fueltype, candidate.fueltype)
 
                     all_matches.append((candidate, score))
                     if score >= threshold:
@@ -187,8 +183,7 @@ class NameMatcher:
             for candidates in candidate_index.values():
                 all_candidates.extend(candidates)
 
-            for variant in target_variants:
-                target_wt = self.tok.weighted_tokenize(variant)
+            for target_wt in target_wts:
                 if not target_wt.tokens:
                     continue
 
@@ -196,54 +191,53 @@ class NameMatcher:
                     candidate_wt = self.tok.weighted_tokenize(candidate.norm_name)
 
                     score = get_weighted_token_score(target_wt, candidate_wt)
-                    score = self._adjust_score(score, candidate, fuel_type)
+                    score = self._adjust_score(score, fueltype, candidate.fueltype)
 
                     all_matches.append((candidate, score))
                     if score >= weighted_threshold:
                         winning_matches.append((candidate, score))
 
         # --- Postprocess: Define all identified matches
-        relevant_threshold = min(threshold, weighted_threshold) - 5.0
+        # 1. Sort matches:
+        # winners: first by score (highest first), then by adapter (most reliable first)
+        winning_matches.sort(
+            key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].source, 0)),
+            reverse=True,
+        )
+        # all: only by score (highest first)
+        all_matches.sort(key=lambda x: x[1], reverse=True)
 
-        winning_matches.sort(key=lambda x: x[1], reverse=True)  # descending by score
-        all_matches.sort(key=lambda x: x[1], reverse=True)  # descending by score
-
-        # keep best score per candidate (variants that normalize alike, score alike)
+        # 2. keep best score per candidate variants (if same normalized name, same score)
         best_per_candidate: dict[int, tuple[MatchCandidate, float]] = {}
         for cand, score in all_matches:
             prev = best_per_candidate.get(id(cand))
             if prev is None or score > prev[1]:
                 best_per_candidate[id(cand)] = (cand, score)
 
+        # 3. Get top matches as top-10 of all that score above the relevant threshold
         all_matches = sorted(
             best_per_candidate.values(), key=lambda x: x[1], reverse=True
         )
         top_matches = [
             (cand, score)
             for cand, score in all_matches[:10]
-            if score >= relevant_threshold
+            if score >= min(threshold, weighted_threshold) - 5.0
         ]
 
-        # get matched candidate with the best score
-        best_candidate = top_matches[0][0] if top_matches else None
-        best_score = top_matches[0][1] if top_matches else 0.0
-        if best_candidate:
-            best_candidate.match_score = best_score
-
-        if top_matches:
-            return MatchResult(
-                matched=True if winning_matches else False,
-                candidate=best_candidate,
-                score=best_score,
-                all_target_variants=target_variants,
-                top_matches=top_matches,
-            )
+        # 4. Get matched candidate with the best score
+        if winning_matches:
+            best_candidate, best_score = winning_matches[0]
+        elif top_matches:
+            best_candidate, best_score = top_matches[0]
+        else:
+            best_candidate, best_score = None, 0.0
 
         return MatchResult(
-            matched=False,
-            candidate=None,
-            score=0.0,
-            all_target_variants=target_variants,
+            matched=True if winning_matches else False,
+            candidate=best_candidate,
+            score=best_score,
+            target_variants=target_variants,
+            target_wt_strings=[wt.as_str() for wt in target_wts],
             top_matches=top_matches,
         )
 
@@ -263,17 +257,11 @@ class NameMatcher:
         """
         index: dict[str, list[MatchCandidate]] = {}
 
-        # Collect candidates from all available sources via their adapters
+        # Collect candidates from all available locators via their adapters
         candidates: list[MatchCandidate] = []
 
-        if self.ppdb_locator is not None:
-            candidates.extend(self._build_candidates(PPDB_ADAPTER))
-
-        if self.gem_locator is not None:
-            candidates.extend(self._build_candidates(GEM_ADAPTER))
-
-        if self.osm_df is not None and len(self.osm_df) > 0:
-            candidates.extend(self._build_candidates(OSM_ADAPTER))
+        for adapter in LOCATOR_ADAPTERS:  # in order of locator reliability!
+            candidates.extend(self._build_candidates(adapter))
 
         # Add candidates to index by normalized name
         for candidate in candidates:
@@ -302,7 +290,7 @@ class NameMatcher:
             list[MatchCandidate]: A list of valid candidates as MatchCandidate objects.
         """
         df = adapter.get_df(self)
-        if df is None:
+        if df is None or len(df) == 0:
             return []
 
         try:
@@ -402,8 +390,9 @@ class NameMatcher:
         self._target_variants[name] = result
         return result
 
+    @staticmethod
     def _adjust_score(
-        self, score: float, candidate: MatchCandidate, fuel: str | None
+        score: float, target_fuel: str | None, candidate_fuel: str | None
     ) -> float:
         """Adjust score for a given candidate depending on whether the fuel types match.
 
@@ -412,15 +401,13 @@ class NameMatcher:
 
         Args:
             score (float): The score to adjust.
-            candidate (MatchCandidate): The candidate to adjust the score for.
-            fuel (str): The candidate's fuel type.
+            target_fuel (str | None): The target's fuel type. Defaults to None.
+            candidate_fuel (str | None): The candidate's fuel type. Defaults to None.
 
         Returns:
             float: The adjusted score.
         """
-        score += self.SOURCE_BONUS.get(candidate.source, 0.0)
-
-        level = classify_fueltype_match(fuel, candidate.fueltype)
+        level = classify_fueltype_match(target_fuel, candidate_fuel)
         if level == "mismatch":  # redefine to 0
             return 0.0
         elif level == "unknown":  # leave score unchanged

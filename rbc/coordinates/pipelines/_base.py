@@ -26,7 +26,7 @@ from rbc.coordinates.locators.osm_api import query_osm_country_plants
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
-from rbc.coordinates.match_schema import MatchCandidate
+from rbc.coordinates.match_schema import LOCATOR_RELIABILITY, MatchCandidate
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
@@ -463,7 +463,7 @@ class BasePipeline:
 
                 result = matcher.match(
                     target_name=clean_candidate,
-                    fuel_type=sysop_fuel,
+                    fueltype=sysop_fuel,
                     threshold=75,  # lower to get more matches with enhanced fuzzy matching
                 )
                 fuzzy_results_list.extend(
@@ -472,20 +472,15 @@ class BasePipeline:
 
                 if result.matched and result.candidate:
                     candidate = result.candidate
+                    locator = candidate.source
 
-                    if candidate.source == "gem" and self.gem_loc:
+                    if locator in LOCATOR_RELIABILITY:
                         self._write_candidate_into_df(
-                            df, idx, candidate, match_source="gem_fuzzy"
-                        )
-
-                    elif candidate.source == "ppdb":
-                        self._write_candidate_into_df(
-                            df, idx, candidate, match_source="ppdb_fuzzy"
-                        )
-
-                    elif candidate.source == "osm":
-                        self._write_candidate_into_df(
-                            df, idx, candidate, match_source="osm_fuzzy"
+                            df,
+                            idx,
+                            candidate,
+                            match_score=result.score,
+                            match_source=f"{locator}_fuzzy",
                         )
 
                     break
@@ -594,7 +589,11 @@ class BasePipeline:
 
     @staticmethod
     def _write_candidate_into_df(
-        df: pd.DataFrame, idx: int, candidate: MatchCandidate, match_source: str
+        df: pd.DataFrame,
+        idx: int,
+        candidate: MatchCandidate,
+        match_source: str,
+        match_score: float | None = None,
     ) -> None:
         """Write a matched candidate into the df with its `<source>.*` columns.
 
@@ -603,10 +602,13 @@ class BasePipeline:
             idx (int): Index of the candidate to write.
             candidate (MatchCandidate): The candidate to write.
             match_source (str): The match algorithm that was used to find this candidate.
+            match_score (float | None): The match score of the target and candidate,
+                if one exists (e.g. for fuzzy matching).
         """
         for field, value in candidate.to_dict().items():
             df.at[idx, f"{field}"] = value
 
+        df.at[idx, f"{candidate.source}.match_score"] = match_score
         df.at[idx, f"{candidate.source}.match_source"] = match_source
 
     @staticmethod

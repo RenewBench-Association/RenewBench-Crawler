@@ -28,6 +28,14 @@ class WeightedTokens:
     tokens: tuple[str, ...]
     weights: tuple[float, ...]
 
+    def as_str(self) -> str:
+        """Returns class instances as string in the format "'t1':w1, 't2':w2, ...".
+
+        Returns:
+            str: formatted class instance as string.
+        """
+        return ", ".join(f"'{t}':{w:g}" for t, w in zip(self.tokens, self.weights))
+
 
 # ---------------------------------------------------------------------------
 # Independent functions (pure string operators - no vocab, no country)
