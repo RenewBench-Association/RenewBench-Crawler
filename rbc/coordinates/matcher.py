@@ -32,8 +32,8 @@ from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
-    strip_numeric_tokens,
-    strip_trailing_unit_suffix,
+    strip_glued_generic_tokens,
+    strip_separate_generic_tokens,
 )
 from rbc.coordinates.utils.values import is_missing, normalize_name
 
@@ -175,6 +175,10 @@ class NameMatcher:
                     if score >= threshold:
                         winning_matches.append((candidate, score))
 
+            # if a variant has been matched, stop 'descending' down the list
+            if winning_matches:
+                break
+
         # --- Approach 2: Weighted-token scoring against all candidates.
         # Each target token is matched against its best-fitting candidate token and weighted:
         # A descriptive match (e.g. "auvere") counts far more than a generic one (e.g. "g1").
@@ -196,6 +200,10 @@ class NameMatcher:
                     all_matches.append((candidate, score))
                     if score >= weighted_threshold:
                         winning_matches.append((candidate, score))
+
+                # if a variant has been matched, stop descending
+                if winning_matches:
+                    break
 
         # --- Postprocess: Define all identified matches
         # 1. Sort matches:
@@ -320,15 +328,22 @@ class NameMatcher:
         return candidates
 
     def _generate_target_variants(self, name: str) -> list[str]:
-        """Generate all plausible variants of the target EGE's name for matching.
+        """Generate all plausible variants of a target EGE's name for matching.
 
-        Generates:
-        1. Original name
-        2. Normalized (lowercase, no diacritics, no special chars)
-        3. Token-expanded (abbreviations -> full names)
-        4. Unit-stripped (remove "Unit 5", "Block 2", etc.)
-        5. Suffix-stripped (handle "ENGURIUNIT_5" -> "enguri")
-        6. Alternative names (e.g. from EIC enrichment)
+        Generates ordered list, with most specific variants first. ``match()`` iterates
+        through this list and stops as soon as a winner is found, so the order is important.
+        Steps 4. and 5. deliberately remove the unit number, so if they're compared before
+        the full name, unit-precise matches may be missed (e.g. "Mauá Bloco 6" -> "maua",
+        which matches "Mauá 3" exactly as well as "Mauá 6").
+
+        1. Alternative names (e.g. from EIC enrichment) --- authoritative variant(s)
+        2. Raw name
+        3. Normalized --- lowercase, no diacritics/special char ("ENGURUNIT_5" -> "engurunit)
+        4. Word-stripped --- removes separate, generic tokens ("Enguri Unit 5" -> "Enguri")
+        5. Glue-stripped --- removes glued, generic tokens ("ENGURIUNIT_5" -> "enguri")
+
+        Methods 3.-5. also include token-expanded variants, where abbreviations are turned
+        into full names.
 
         Args:
             name: The base target name to generate variants for.
@@ -343,52 +358,43 @@ class NameMatcher:
             self._target_variants[name] = []
             return []  # skip empty names
 
-        variants: set[str] = set()
+        # Define variants as ordered list, with most specific first
+        variants: list[str] = []
 
-        # 1. Original name
-        variants.add(name)
+        def add(v: str | None) -> None:
+            """Add a variant to the target EGE's variant list if it isn't already present.
 
-        # 2. Normalized name
-        normalized = normalize_name(name)
-        if normalized:
-            variants.add(normalized)
+            Args:
+                v (str | None): The variant to add to the list.
+            """
+            if v and v not in variants:
+                variants.append(v)
 
-        # 3. Token-expanded name
-        if normalized:
-            expanded = " ".join(self.tok.tokenize(normalized))
-            if expanded:
-                variants.add(expanded)
-
-        # 4. Unit-stripped name & country-expanded unit-stripped
-        stripped_numeric = strip_numeric_tokens(name)
-        if stripped_numeric:
-            variants.add(stripped_numeric)
-
-            expanded_stripped = " ".join(self.tok.tokenize(stripped_numeric))
-            if expanded_stripped and expanded_stripped != stripped_numeric:
-                variants.add(expanded_stripped)
-
-        # 5. Suffix-stripped name & country-expanded suff-stripped
-        stripped_suffix = strip_trailing_unit_suffix(name)
-        if stripped_suffix and stripped_suffix != name:
-            variants.add(stripped_suffix)
-
-            expanded_suffix = " ".join(self.tok.tokenize(stripped_suffix))
-            if expanded_suffix and expanded_suffix != stripped_suffix:
-                variants.add(expanded_suffix)
-
-        # 6. Alternative names
+        # 1. Alternative names
         for alt_name in self._target_alternatives.get(name, []):
-            if alt_name and alt_name not in variants:
-                variants.add(alt_name)
-                normalized_alt = normalize_name(alt_name)
-                if normalized_alt:
-                    variants.add(normalized_alt)
+            add(alt_name)
+            add(normalize_name(alt_name))
 
-        # Convert to list and cache
-        result = list(variants)
-        self._target_variants[name] = result
-        return result
+        # 2. Raw name & 3. Normalized name --- baseline
+        add(name)
+        normalized = normalize_name(name)
+        add(normalized)
+        add(" ".join(self.tok.tokenize(normalized)))  # tokenized variant
+
+        # 4. Name stripped of trailing space-separated generic tokens
+        stripped_separate = strip_separate_generic_tokens(normalized=normalized)
+        add(stripped_separate)
+        add(" ".join(self.tok.tokenize(stripped_separate)))  # tokenized variant
+
+        # 5. Name stripped of trailing glued generic tokens
+        stripped_glued = strip_glued_generic_tokens(normalized=normalized)
+        add(stripped_glued)
+        add(" ".join(self.tok.tokenize(stripped_glued)))  # tokenized variant
+
+        # Store to cache and return
+        logger.info(f"Target variants for {name}:\t{' | '.join(variants)}.")
+        self._target_variants[name] = variants
+        return variants
 
     @staticmethod
     def _adjust_score(

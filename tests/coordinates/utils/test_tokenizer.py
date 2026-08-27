@@ -9,8 +9,9 @@ from rbc.coordinates.utils.tokenizer import (
     EXCLUDE_WEIGHT,
     NameTokenizer,
     get_weighted_token_score,
-    strip_numeric_tokens,
-    strip_trailing_unit_suffix,
+    normalize_name,
+    strip_glued_generic_tokens,
+    strip_separate_generic_tokens,
 )
 
 # Synthetic vocabulary, deliberately NOT imported from rbc.energy.<operator>.mappings:
@@ -51,40 +52,57 @@ def tok_vocab() -> NameTokenizer:
 # Tests - module-level string helpers
 # ----------------------------------
 class TestStripHelpers:
-    """Tests for strip_numeric_tokens and strip_trailing_unit_suffix."""
+    """Tests for strip_trailing_generic and strip_trailing_glued_generic.
 
-    def test_strip_numeric_tokens_drops_unit_markers(self) -> None:
+    Both expect an already-normalized name, so every case feeds them through
+    normalize_name first -- exactly as _generate_target_variants does.
+    """
+
+    def test_strip_trailing_generic_drops_unit_markers(self) -> None:
         """Happy path: Digits and generic unit tokens are dropped, place name survives.
 
         Used as a station-level fallback where the sysop name carries a unit
         number but OSM only stores the plant (e.g. just "Sloecentrale").
         """
-        assert strip_numeric_tokens("Sloecentrale unit 20") == "sloecentrale"
+        assert (
+            strip_separate_generic_tokens(normalize_name("Sloecentrale unit 20"))
+            == "sloecentrale"
+        )
 
-    @pytest.mark.parametrize("value", ["Unit 1", ""])
-    def test_strip_numeric_tokens_all_generic_returns_empty(self, value: str) -> None:
+    @pytest.mark.parametrize("value", ["Unit 1", "Block III", ""])
+    def test_strip_trailing_generic_all_generic_returns_empty(self, value: str) -> None:
         """Failure path: A fully generic name reduces to an empty string.
 
         Args:
-            value (str): Name consisting only of generic/numeric tokens.
+            value (str): Name consisting only of generic/numeric/roman-numeral tokens.
         """
-        assert strip_numeric_tokens(value) == ""
+        assert strip_separate_generic_tokens(normalize_name(value)) == ""
 
-    def test_strip_trailing_unit_suffix_splits_glued_suffix(self) -> None:
+    def test_strip_trailing_generic_raw_input_is_not_stripped(self) -> None:
+        """Failure path: Un-normalized input silently survives, since matching is lowercase.
+
+        Pins the caller's obligation: NORM_GENERIC_UNIT_TOKENS holds lowercase tokens, so
+        "Unit" never matches and a raw name comes back only half-stripped.
+        """
+        assert (
+            strip_separate_generic_tokens("Sloecentrale Unit 20") == "Sloecentrale Unit"
+        )
+
+    def test_strip_trailing_glued_generic_splits_glued_suffix(self) -> None:
         """Happy path: A unit suffix glued onto the name with no separator is stripped.
 
-        "ENGURIUNIT_5" tokenizes as one glued token, so strip_numeric_tokens
-        cannot catch it -- this regex-based pass can.
+        "ENGURIUNIT_5" normalizes to one glued token "enguriunit 5", which
+        strip_trailing_generic cannot split -- this regex-based pass can.
         """
-        assert strip_trailing_unit_suffix("ENGURIUNIT_5") == "enguri"
+        assert strip_glued_generic_tokens(normalize_name("ENGURIUNIT_5")) == "enguri"
 
-    def test_strip_trailing_unit_suffix_no_suffix_returns_empty(self) -> None:
-        """Failure path: A name with no recognized unit suffix yields an empty string.
+    def test_strip_trailing_glued_generic_no_suffix_returns_input(self) -> None:
+        """Failure path: A name with no recognized unit suffix comes back unchanged.
 
-        Empty (not the input) signals "no alternative variant to try", so the
-        caller does not add a duplicate of the original name.
+        Harmless because _generate_target_variants de-duplicates variants, so an
+        unchanged name is simply not added a second time.
         """
-        assert strip_trailing_unit_suffix("Riverside") == ""
+        assert strip_glued_generic_tokens(normalize_name("Riverside")) == "riverside"
 
 
 class TestGetWeightedTokenScore:

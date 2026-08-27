@@ -41,61 +41,61 @@ class WeightedTokens:
 # Independent functions (pure string operators - no vocab, no country)
 # ---------------------------------------------------------------------------
 NORM_GENERIC_UNIT_TOKENS = [normalize_name(t) for t in GENERIC_UNIT_TOKENS]
+JOINED_GENERIC_UNIT_TOKENS = "|".join(t for t in NORM_GENERIC_UNIT_TOKENS if len(t) > 1)
 NORM_GENERIC_ENERGY_TOKENS = [normalize_name(t) for t in GENERIC_ENERGY_TOKENS]
 
+ROMAN_UNIT_NUMERALS: frozenset[str] = frozenset(
+    "i ii iii iv v vi vii viii ix x xi xii xiii xiv xv xvi xvii xviii xix xx".split()
+)
 
-def strip_numeric_tokens(value: str) -> str:
-    """Return a simplified normalized name for station-level fallback matching.
 
-    This is a last-resort fallback for cases where ENTSO-E names include unit
-    numbers and generic unit markers (e.g. "Unit 20", "Sloecentrale unit 20")
-    but OSM only stores the station-level feature without a per-unit suffix
-    (e.g. just "Sloecentrale").
+def strip_separate_generic_tokens(normalized: str | None) -> str:
+    """Strip trailing generic tokens/digits from the normalized EGE name.
+
+    This is a last-resort fallback for cases where names include unit numbers and / or generic
+    unit markers (e.g. "Ensuri Unit 20", "Sloecentrale Block II") but locators only store the
+    station-level name without a per-unit suffix (e.g. just "Ensuri" or "Sloecentrale").
 
     Args:
-        value: The name to process.
+        normalized (str | None): The previously normalized name to process.
 
     Returns:
-        Name with numeric tokens and generic unit tokens removed.
+        str: Name with numeric tokens and generic unit tokens removed, or the input
+            unchanged if it carries none of them.
     """
-    normalized = normalize_name(value)
     if not normalized:
         return ""
 
     tokens = [
         token
         for token in normalized.split()
-        if not token.isdigit() and token not in NORM_GENERIC_UNIT_TOKENS
+        if not token.isdigit()
+        and token not in NORM_GENERIC_UNIT_TOKENS
+        and token not in ROMAN_UNIT_NUMERALS
     ]
     return " ".join(tokens).strip()
 
 
-def strip_trailing_unit_suffix(value: str) -> str:
-    """Strip a trailing unit-suffix glued directly onto the plant name.
+def strip_glued_generic_tokens(normalized: str | None) -> str:
+    """Strip trailing generic tokens (units) glued to the normalized EGE name.
 
-    Some ENTSO-E naming conventions concatenate the unit suffix directly onto
-    the plant name with no separating space/underscore (e.g. "ENGURIUNIT_5" -> "enguri"),
-    which the space-tokenized strip_numeric_tokens cannot catch since
-    "enguriunit" and "5" would otherwise remain a single glued token.
+    This is another last-resort fallback. Some naming conventions add the unit suffix
+    directly onto the EGE name with no separating space/underscore (e.g. "ENGURIUNIT_5").
+    The space-tokenized strip_generic_tokens won't catch these since "enguriunit" and "5"
+    remain a single glued token. This is done here (e.g. "ENGURIUNIT_5" -> "enguri").
 
     Args:
-        value: The name to process.
+        normalized (str | None): The previously normalized name to process.
 
     Returns:
-        The name with the trailing unit-suffix removed, or empty string if
-            the name doesn't end in a recognized unit-suffix.
+        str: The name with the trailing unit-suffix removed, or the input unchanged
+            if it doesn't end in a recognized unit-suffix.
     """
-    normalized = normalize_name(value)
     if not normalized:
         return ""
 
-    # Build regex pattern from multi-character unit tokens
-    unit_words = "|".join(token for token in NORM_GENERIC_UNIT_TOKENS if len(token) > 1)
-    if not unit_words:
-        return normalized
-
-    stripped = re.sub(rf"(?:{unit_words})\s*\d*$", "", normalized).strip()
-    return stripped if stripped and stripped != normalized else ""
+    # use regex pattern based on |-joined generic unit tokens
+    return re.sub(rf"(?:{JOINED_GENERIC_UNIT_TOKENS})\s*\d*$", "", normalized).strip()
 
 
 def get_weighted_token_score(

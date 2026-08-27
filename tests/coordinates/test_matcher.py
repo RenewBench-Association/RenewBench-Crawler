@@ -224,6 +224,77 @@ class TestNameMatcherCachedProperties:
         assert "_candidate_index" in m.__dict__
 
 
+class TestNameMatcherTargetVariants:
+    """Tests for ordered target_variants (built: _generate_target_variants, used: match)."""
+
+    @pytest.fixture
+    def unit_matcher(self) -> NameMatcher:
+        """Returns a matcher over two units of one plant, differing only by unit number.
+
+        Returns:
+            NameMatcher: Matcher scoped to Brazil with "Mauá 3" and "Mauá 6" candidates.
+        """
+        gem_df = pd.DataFrame(
+            [
+                {
+                    "plant_name": name,
+                    "gem_unit_id": unit_id,
+                    "Country": "Brazil",
+                    "Fueltype": "hydro",
+                    "lat": lat,
+                    "lon": -59.4,
+                    "Status": "operating",
+                    "wiki_url": "",
+                    "other_names": "",
+                }
+                for unit_id, name, lat in [
+                    ("gem-maua-3", "Mauá 3 power plant", -1.9),
+                    ("gem-maua-6", "Mauá 6 power plant", -2.9),
+                ]
+            ]
+        )
+        return NameMatcher(
+            country="Brazil",
+            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+        )
+
+    def test_match_stops_at_first_fitting_target(
+        self, unit_matcher: NameMatcher
+    ) -> None:
+        """Happy path: The unit number decides between two units of the same plant.
+
+        _generate_target_variants also returns a unit-stripped variant ("maua"), which scores
+        100 against every Mauá unit. The variant check in match must stop at the
+        first variant that wins -- here the full name.
+
+        Args:
+            unit_matcher (NameMatcher): Matcher over "Mauá 3" and "Mauá 6".
+        """
+        result = unit_matcher.match("Mauá Bloco 6", fueltype="hydro")
+
+        assert result.matched
+        assert result.candidate is not None
+        assert result.candidate.source_id == "gem-maua-6"
+
+        # the wrong unit is still a candidate, just a strictly worse-scoring one
+        scores = {cand.source_id: score for cand, score in result.top_matches}
+        assert scores["gem-maua-6"] > scores["gem-maua-3"]
+
+    def test_match_checks_against_all_candidates(
+        self, unit_matcher: NameMatcher
+    ) -> None:
+        """Happy path: Target variant matching never stops mid-candidate-loop.
+
+        Loop is broken ONLY when the full _candidate_index has been checked to find the
+        best match for a target variant.
+
+        Args:
+            unit_matcher (NameMatcher): Matcher over "Mauá 3" and "Mauá 6".
+        """
+        result = unit_matcher.match("Mauá Bloco 6", fueltype="hydro")
+        assert len(result.top_matches) == 2
+
+
 class TestNameMatcherHelpers:
     """Tests for NameMatcher helpers."""
 
