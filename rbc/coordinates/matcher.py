@@ -32,6 +32,7 @@ from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
+    split_camelcase,
     strip_glued_generic_tokens,
     strip_separate_generic_tokens,
 )
@@ -337,13 +338,14 @@ class NameMatcher:
         which matches "Mauá 3" exactly as well as "Mauá 6").
 
         1. Alternative names (e.g. from EIC enrichment) --- authoritative variant(s)
-        2. Raw name
-        3. Normalized --- lowercase, no diacritics/special char ("ENGURUNIT_5" -> "engurunit)
-        4. Word-stripped --- removes separate, generic tokens ("Enguri Unit 5" -> "Enguri")
-        5. Glue-stripped --- removes glued, generic tokens ("ENGURIUNIT_5" -> "enguri")
+        2. CamelCase-split --- adds structure, more specific than raw name
+        3. Raw name
+        4. Normalized --- lowercase, no diacritics/special char ("ENGURUNIT_5" -> "engurunit)
+        5. Word-stripped --- removes separate, generic tokens ("Enguri Unit 5" -> "Enguri")
+        6. Glue-stripped --- removes glued, generic tokens ("ENGURIUNIT_5" -> "enguri")
 
-        Methods 3.-5. also include token-expanded variants, where abbreviations are turned
-        into full names.
+        Methods 4.-6. also include token-expanded variants, where abbreviations are turned
+        into full names. Methods 5.-6. are also applied to the normalized camelcase variant.
 
         Args:
             name: The base target name to generate variants for.
@@ -375,24 +377,38 @@ class NameMatcher:
             add(alt_name)
             add(normalize_name(alt_name))
 
-        # 2. Raw name & 3. Normalized name --- baseline
+        # 2. camelCase-split
+        camelcase = split_camelcase(raw=name)
+        add(camelcase)
+        normalized_cc = normalize_name(camelcase)
+        add(normalized_cc)
+
+        # 3. Raw name & 4. Normalized name --- baseline
         add(name)
         normalized = normalize_name(name)
         add(normalized)
         add(" ".join(self.tok.tokenize(normalized)))  # tokenized variant
 
-        # 4. Name stripped of trailing space-separated generic tokens
+        # 5. Name stripped of trailing space-separated generic tokens
         stripped_separate = strip_separate_generic_tokens(normalized=normalized)
         add(stripped_separate)
         add(" ".join(self.tok.tokenize(stripped_separate)))  # tokenized variant
 
-        # 5. Name stripped of trailing glued generic tokens
+        stripped_sep_cc = strip_separate_generic_tokens(normalized=normalized_cc)
+        add(stripped_sep_cc)
+        add(" ".join(self.tok.tokenize(stripped_sep_cc)))
+
+        # 6. Name stripped of trailing glued generic tokens
         stripped_glued = strip_glued_generic_tokens(normalized=normalized)
         add(stripped_glued)
         add(" ".join(self.tok.tokenize(stripped_glued)))  # tokenized variant
 
+        stripped_glued_cc = strip_glued_generic_tokens(normalized=normalized_cc)
+        add(stripped_glued_cc)
+        add(" ".join(self.tok.tokenize(stripped_glued_cc)))
+
         # Store to cache and return
-        logger.info(f"Target variants for {name}:\t{' | '.join(variants)}.")
+        logger.debug(f"Target variants for {name}:\t{' | '.join(variants)}.")
         self._target_variants[name] = variants
         return variants
 

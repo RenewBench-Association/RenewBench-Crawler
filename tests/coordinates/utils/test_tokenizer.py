@@ -10,6 +10,7 @@ from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
     normalize_name,
+    split_camelcase,
     strip_glued_generic_tokens,
     strip_separate_generic_tokens,
 )
@@ -51,14 +52,63 @@ def tok_vocab() -> NameTokenizer:
 # ----------------------------------
 # Tests - module-level string helpers
 # ----------------------------------
-class TestStripHelpers:
-    """Tests for strip_trailing_generic and strip_trailing_glued_generic.
+class TestSplitRawHelpers:
+    """Tests for split_camelcase.
+
+    Unlike the strip helpers, this one requires the raw name.
+    """
+
+    @pytest.mark.parametrize(
+        "raw, expected_output",
+        [
+            ("ChePortileDeFier", "Che Portile De Fier"),
+            ("CetCraiova2_CRAI2_CA", "Cet Craiova2_CRAI2_CA"),
+            ("CteTurceni_TURC3_CA", "Cte Turceni_TURC3_CA"),
+            ("McDonald", "Mc Donald"),
+        ],
+    )
+    def test_splits(self, raw: str, expected_output: str) -> None:
+        """Happy path: camelCase words are separated at each lower -> upper transition.
+
+        Args:
+            raw (str): Raw operator name to split.
+            expected_output (str): Expected split name.
+        """
+        assert split_camelcase(raw) == expected_output
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["CET_MINT5_CA", "ROVI6", "usina hidreletrica balbina", "", None],
+        ids=["all_upper", "all_upper_digit", "all_lower", "empty", "none"],
+    )
+    def test_no_mixed_case_returns_empty(self, raw: str | None) -> None:
+        """Failure path: A name without mixed case yields '', i.e. no variant to add.
+
+        Args:
+            raw (str | None): Raw name with no lower/upper mix.
+        """
+        assert split_camelcase(raw) == ""
+
+    @pytest.mark.parametrize(
+        "raw", ["Isalnita_ISAL8_CA", "Usina Hidrelétrica Balbina", "Auvere EJ"]
+    )
+    def test_mixed_case_without_transition_returns_empty(self, raw: str) -> None:
+        """Failure path: Mixed case but no lower->upper transition also yields ''.
+
+        Args:
+            raw (str): Raw name whose case never transitions lower->upper.
+        """
+        assert split_camelcase(raw) == ""
+
+
+class TestStripNormalizedHelpers:
+    """Tests for strip_separate_generic_tokens and strip_glued_generic_tokens.
 
     Both expect an already-normalized name, so every case feeds them through
     normalize_name first -- exactly as _generate_target_variants does.
     """
 
-    def test_strip_trailing_generic_drops_unit_markers(self) -> None:
+    def test_strip_separate(self) -> None:
         """Happy path: Digits and generic unit tokens are dropped, place name survives.
 
         Used as a station-level fallback where the sysop name carries a unit
@@ -70,7 +120,7 @@ class TestStripHelpers:
         )
 
     @pytest.mark.parametrize("value", ["Unit 1", "Block III", ""])
-    def test_strip_trailing_generic_all_generic_returns_empty(self, value: str) -> None:
+    def test_strip_separate_all_generic_returns_empty(self, value: str) -> None:
         """Failure path: A fully generic name reduces to an empty string.
 
         Args:
@@ -78,7 +128,7 @@ class TestStripHelpers:
         """
         assert strip_separate_generic_tokens(normalize_name(value)) == ""
 
-    def test_strip_trailing_generic_raw_input_is_not_stripped(self) -> None:
+    def test_strip_separate_raw_input_is_not_stripped(self) -> None:
         """Failure path: Un-normalized input silently survives, since matching is lowercase.
 
         Pins the caller's obligation: NORM_GENERIC_UNIT_TOKENS holds lowercase tokens, so
@@ -88,7 +138,7 @@ class TestStripHelpers:
             strip_separate_generic_tokens("Sloecentrale Unit 20") == "Sloecentrale Unit"
         )
 
-    def test_strip_trailing_glued_generic_splits_glued_suffix(self) -> None:
+    def test_strip_glued(self) -> None:
         """Happy path: A unit suffix glued onto the name with no separator is stripped.
 
         "ENGURIUNIT_5" normalizes to one glued token "enguriunit 5", which
@@ -96,7 +146,7 @@ class TestStripHelpers:
         """
         assert strip_glued_generic_tokens(normalize_name("ENGURIUNIT_5")) == "enguri"
 
-    def test_strip_trailing_glued_generic_no_suffix_returns_input(self) -> None:
+    def test_strip_glued_no_suffix_returns_input(self) -> None:
         """Failure path: A name with no recognized unit suffix comes back unchanged.
 
         Harmless because _generate_target_variants de-duplicates variants, so an

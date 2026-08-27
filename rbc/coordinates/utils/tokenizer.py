@@ -49,6 +49,34 @@ ROMAN_UNIT_NUMERALS: frozenset[str] = frozenset(
 )
 
 
+def split_camelcase(raw: str | None) -> str:
+    """Split a CamelCase name into its true separate words as a EGE and rejoined with space.
+
+    Some operators glue separate words together to build names ("ChePortileDeFier" -> "Che
+    Portile De Fier"). These would become as one long meaningless token, so are split here.
+
+    Args:
+        raw (str | None): The raw (un-normalized) name to split.
+
+    Returns:
+        str: The name now split by spaces between camelCase words or '' if no changes.
+    """
+    if not raw or not (any(c.islower() for c in raw) and any(c.isupper() for c in raw)):
+        return ""
+
+    prev_lower = False  # whether the previous char was lowercase or not
+    split_idxs = [0]  # index to use for splitting
+
+    for idx, char in enumerate(raw):
+        if prev_lower and char.isupper():
+            split_idxs.append(idx)
+        prev_lower = char.islower()
+
+    tokens = [raw[i:j] for i, j in zip(split_idxs, split_idxs[1:] + [None])]
+    new = " ".join(tokens).strip()
+    return new if new != raw else ""
+
+
 def strip_separate_generic_tokens(normalized: str | None) -> str:
     """Strip trailing generic tokens/digits from the normalized EGE name.
 
@@ -60,8 +88,7 @@ def strip_separate_generic_tokens(normalized: str | None) -> str:
         normalized (str | None): The previously normalized name to process.
 
     Returns:
-        str: Name with numeric tokens and generic unit tokens removed, or the input
-            unchanged if it carries none of them.
+        str: Name with numeric tokens and generic unit tokens removed or '' if no changes.
     """
     if not normalized:
         return ""
@@ -73,7 +100,8 @@ def strip_separate_generic_tokens(normalized: str | None) -> str:
         and token not in NORM_GENERIC_UNIT_TOKENS
         and token not in ROMAN_UNIT_NUMERALS
     ]
-    return " ".join(tokens).strip()
+    new = " ".join(tokens).strip()
+    return new if new != normalized else ""
 
 
 def strip_glued_generic_tokens(normalized: str | None) -> str:
@@ -88,8 +116,7 @@ def strip_glued_generic_tokens(normalized: str | None) -> str:
         normalized (str | None): The previously normalized name to process.
 
     Returns:
-        str: The name with the trailing unit-suffix removed, or the input unchanged
-            if it doesn't end in a recognized unit-suffix.
+        str: The name with the trailing unit-suffix removed or '' if no changes.
     """
     if not normalized:
         return ""
