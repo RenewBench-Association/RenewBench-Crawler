@@ -13,6 +13,7 @@ mappings.py & per-operator/country name_mapping translations).
 import re
 from dataclasses import dataclass
 from pprint import pformat
+from typing import Literal
 
 from loguru import logger
 from rapidfuzz import fuzz
@@ -20,26 +21,6 @@ from rapidfuzz import fuzz
 from rbc.coordinates.mappings import GENERIC_ENERGY_TOKENS, GENERIC_UNIT_TOKENS
 from rbc.coordinates.utils.values import normalize_name
 
-
-@dataclass(frozen=True)
-class WeightedTokens:
-    """A name decomposed into its tokens and their importance weights."""
-
-    tokens: tuple[str, ...]
-    weights: tuple[float, ...]
-
-    def as_str(self) -> str:
-        """Returns class instances as string in the format "'t1':w1, 't2':w2, ...".
-
-        Returns:
-            str: formatted class instance as string.
-        """
-        return ", ".join(f"'{t}':{w:g}" for t, w in zip(self.tokens, self.weights))
-
-
-# ---------------------------------------------------------------------------
-# Independent functions (pure string operators - no vocab, no country)
-# ---------------------------------------------------------------------------
 NORM_GENERIC_UNIT_TOKENS = [normalize_name(t) for t in GENERIC_UNIT_TOKENS]
 JOINED_GENERIC_UNIT_TOKENS = "|".join(t for t in NORM_GENERIC_UNIT_TOKENS if len(t) > 1)
 NORM_GENERIC_ENERGY_TOKENS = [normalize_name(t) for t in GENERIC_ENERGY_TOKENS]
@@ -48,7 +29,18 @@ ROMAN_UNIT_NUMERALS: frozenset[str] = frozenset(
     "i ii iii iv v vi vii viii ix x xi xii xiii xiv xv xvi xvii xviii xix xx".split()
 )
 
+EXCLUDE_WEIGHT = 0.0
+DEMOTE_WEIGHT = 0.1
+DESIGNATOR_WEIGHT = 0.15  # tokens that are unit designators (e.g. '6', 'III', 'G1')
+FULL_WEIGHT = 1.0  # discriminative tokens - true names we need to match!
 
+if not FULL_WEIGHT > DESIGNATOR_WEIGHT > DEMOTE_WEIGHT > EXCLUDE_WEIGHT:
+    raise ValueError("Error in defining global weight parameters!")
+
+
+# ---------------------------------------------------------------------------
+# Independent functions (no vocab, no country) - pure string operators
+# ---------------------------------------------------------------------------
 def split_camelcase(raw: str | None) -> str:
     """Split a CamelCase name into its true separate words as a EGE and rejoined with space.
 
@@ -125,9 +117,29 @@ def strip_glued_generic_tokens(normalized: str | None) -> str:
     return re.sub(rf"(?:{JOINED_GENERIC_UNIT_TOKENS})\s*\d*$", "", normalized).strip()
 
 
+# ---------------------------------------------------------------------------
+# Independent functions (no vocab, no country) - weight calculation
+# --------------------------------------------------------------------------
+@dataclass(frozen=True)
+class WeightedTokens:
+    """A name decomposed into its tokens and their importance weights."""
+
+    tokens: tuple[str, ...]
+    weights: tuple[float, ...]
+    types: tuple[Literal["generic", "designator", "discriminator"], ...]  # tok type
+
+    def as_str(self) -> str:
+        """Returns instances as a string in the format "'tok1':w1, 'tok2':w2".
+
+        Returns:
+            str: formatted class instance as string.
+        """
+        return ", ".join(f"'{t}':{w:g}" for t, w in zip(self.tokens, self.weights))
+
+
 def get_weighted_token_score(
-    target: WeightedTokens, candidate: WeightedTokens
-) -> float:
+    target: WeightedTokens, candidate: WeightedTokens, fuzz_ratio_floor: float = 50.0
+) -> tuple[float, float]:
     """Get the weighted-average best-token-match score between two WeightedTokens (0-100).
 
     Each token in the target is matched against its best-fitting candidate token via
@@ -135,45 +147,95 @@ def get_weighted_token_score(
     True distinctive name matches are rewarded far more than incidental matches on generic
     (low-weight) tokens (e.g. two different EGEs both having "g1" are not weighted highly).
 
+    For reference, some examples for rapidfuzz.ratio results for different combinations.
+    Ratio retruns a float strictly in [0, 100]:
+        - no same letter:       fuzz.ratio("flores", "maua") = 0
+        - one same letter:      fuzz.ratio("flores", "jaraqui") = ~15
+        - few same letters:     fuzz.ratio("turceni", "isalnita") = ~25
+        - same letters mixed:   fuzz.ratio("flores", "sofler") = 50
+        - same ending:          fuzz.ratio("tambaqui", "jaraqui") = ~65
+        - one vowel diff:       fuzz.ratio("flores", "floras") = ~80
+        - one extra letter:     fuzz.ratio("auvere", "auverre") = ~90
+        - identical:            fuzz.ratio("turceni", "turceni") = 100
+
     Args:
         target (WeightedTokens): WeightedTokens to score.
         candidate (WeightedTokens): WeightedTokens to score.
+        fuzz_ratio_floor (float, optional): The minimum rapidfuzz ratio for a token pair
+            to count. If below it, the score is 0 (no partial credit). 100.0 is an exact
+            match; 0.0 disables the rule (meaning completely different tokens match).
+            Defaults to 50.0.
 
     Returns:
-        float: Best weighted-average token match score.
+        tuple[float, float]: True best weighted token match score,
+            and the debugging score (what the score would have been without the vetoes)
     """
-    if not target.tokens or not candidate.tokens:
-        return 0.0
+    if not target.tokens or not candidate.tokens or sum(target.weights) <= 0:
+        return 0.0, 0.0
 
-    total_weight = sum(target.weights)
-    if total_weight <= 0:
-        return 0.0
+    if not 0.0 <= fuzz_ratio_floor <= 100.0:
+        logger.error(
+            f"fuzz_ratio_floor is set as '{fuzz_ratio_floor}', which is outside the range "
+            f"of (0, 100). Using the argument default '50.0' instead..."
+        )
+        fuzz_ratio_floor = 50.0
 
-    weighted_sum = sum(
-        weight * max(fuzz.ratio(tok, c) for c in candidate.tokens)
-        for tok, weight in zip(target.tokens, target.weights)
-    )
-    return weighted_sum / total_weight
+    # if a target doesn't have any discriminative (full weight) tokens, it can't be matched!
+    target_has_discriminator = any(t == "discriminator" for t in target.types)
+    if not target_has_discriminator:
+        return 0.0, 0.0
+
+    candidate_has_designator = any(t == "designator" for t in candidate.types)
+    target_discriminator_matched = False
+    weighted_sum = 0.0  # score numerator
+    counted_weight = 0.0  # score denominator
+
+    for tok, weight, ttype in zip(target.tokens, target.weights, target.types):
+        max_ratio = max((fuzz.ratio(tok, c) for c in candidate.tokens), default=0.0)
+
+        # if ratio is below the limit, the two tokens are too dissimilar to be a match!
+        if max_ratio < fuzz_ratio_floor:
+            max_ratio = 0.0
+        elif ttype == "discriminator":
+            target_discriminator_matched = True
+
+        weighted_sum += weight * max_ratio
+
+        # add the token's weight to denominator IF it's discriminative / a unit designator
+        # OR if it was matched -> prevents unmatched generic target tokens diluting the score
+        if (
+            ttype == "discriminator"
+            or (ttype == "designator" and candidate_has_designator)
+            or max_ratio > 0
+        ):
+            counted_weight += weight
+
+    score = weighted_sum / counted_weight if counted_weight > 0.0 else 0.0
+
+    # ensure that at least one discriminative (full weight) token was matched
+    if not target_discriminator_matched:
+        return 0.0, score
+
+    return score, score
 
 
 # ---------------------------------------------------------------------------
 # Country-/vocabulary-based class functionality
 # ---------------------------------------------------------------------------
-EXCLUDE_WEIGHT = 0.0
-DEMOTE_WEIGHT = 0.1
-DEFAULT_WEIGHT = 1.0
-
-# Short alphanumeric patterns for designating units that are not caught by the vocabulary:
-# - letters+digits (e.g. "g1"/"u2"),
-# - bare digits (e.g. "3"),
-# - bare 1-2 letter blocks (e.g. "q"/"aa"  in "KW Boxberg Block Q"/"Neurath AA")
-_SHORT_EGE_DESCRIPTOR_PATTERNS = re.compile(
-    r"^(?:[a-z]{1,4}\d{1,3}|\d{1,3}|[a-z]{1,2})$"
-)
-
-
 class NameTokenizer:
     """Vocabulary-driven tokenization and weighting for one country."""
+
+    # Pattern: split a glued unit number off the end of a token >= 3 chars (e.g. "turc4")
+    _GLUED_UNIT_NUMBER_PATTERN = re.compile(r"([a-z]{3,})(\d{1,3})")
+
+    # Pattern: short alphanumeric combinations to identify unit designations:
+    # - letter(s)+digit(s) (e.g. "g1", "u2", "uni2"),
+    # - digit(s)+letter (e.g. "5a")
+    # - bare digits (e.g. "3"),
+    # - bare 1-2 letter blocks (e.g. "q"/"aa"  in "KW Boxberg Block Q"/"Neurath AA")
+    _UNIT_DESIGNATOR_PATTERNS = re.compile(
+        r"^(?:[a-z]{1,3}\d{1,3}|\d{1,3}[a-z]|\d{1,3}|[a-z]{1,2})$"
+    )
 
     def __init__(self, name_mapping: dict[str, str] | None = None) -> None:
         """Initialize the name-tokenizer class.
@@ -240,8 +302,12 @@ class NameTokenizer:
         if not normalized:
             return []
 
+        # split into tokens: by space (" ") and by glued units at token ends
+        tokens = normalized.split()
+        tokens = self._split_glued_unit_number(tokens)
+
         out: list[str] = []
-        for tok in normalized.split():  # split into tokens
+        for tok in tokens:
             if tok in self._exclude_vocabulary:
                 out.append(tok)
             elif tok in self._demote_vocabulary:
@@ -266,36 +332,46 @@ class NameTokenizer:
             return cached
 
         tokens = tuple(self.tokenize(normalized))
-        weights = tuple(self._get_weight(tok) for tok in tokens)
+        types, weights = (
+            zip(*(self._get_type_and_weight(t) for t in tokens)) if tokens else ((), ())
+        )
 
-        result = WeightedTokens(tokens, weights)
+        result = WeightedTokens(tokens, weights, types)
         self._weighted_cache[normalized] = result
         return result
 
     # ---------------------------------------------------------------------------
-    # Helper methods
+    # Helper methods: tokenize
     # ---------------------------------------------------------------------------
-    def _get_weight(self, token: str) -> float:
-        """Dictionary-based token importance weight (no corpus-frequency stats).
+    def _split_glued_unit_number(self, tokens: list[str]) -> list[str]:
+        """Split a trailing unit number off its letter stem ("turc3" -> "turc", "3").
 
-        - Exact exclude_vocabulary value (generic unit/plant-type word) -> EXCLUDE_WEIGHT
-        - Exact demote_words value (generic energy word & fuel types) -> DEMOTE_WEIGHT
-        - Short alphanumeric unit-designator pattern (g1, u2, bare digits) -> DEMOTE_WEIGHT
-        - Everything else (presumed discriminative place/EGE name) -> DEFAULT_WEIGHT
+        Operators glue unit numbers onto a name fragment, which is otherwise counted - and
+        potentially demoted - as one token, so the name is lost. This method:
+        - splits a token (with >= 3 chars & trailing number) into two separate tokens, e.g.
+            tokens: ("turc3") -> name: "turc", unit designator: "3"
+            tokens: ("mint5") -> name: "mint", unit designator: "5"
+        - skip names where a fuller version already exists (including the abbreviation
+          adds a full-weight token that brings score down):
+            tokens: ("isalnita, isal8") -> name: "isalnita", unit designator: "8"
 
         Args:
-            token (str): The token to calculate weight for.
+            tokens (list[str]): Normalized tokens of one name.
 
         Returns:
-            float: The weight of the token.
+            list[str]: Tokens with glued unit numbers split out.
         """
-        if token in self._exclude_vocabulary:
-            return EXCLUDE_WEIGHT
-        if token in self._demote_words:
-            return DEMOTE_WEIGHT
-        if _SHORT_EGE_DESCRIPTOR_PATTERNS.match(token):
-            return DEMOTE_WEIGHT
-        return DEFAULT_WEIGHT
+        out: list[str] = []
+        for tok in tokens:
+            match = self._GLUED_UNIT_NUMBER_PATTERN.fullmatch(tok)
+            if match:
+                name, designator = match.groups()
+                in_other_tok = any(t != tok and t.startswith(name) for t in tokens)
+                out.extend([name, designator] if not in_other_tok else [designator])
+            else:
+                out.append(tok)
+
+        return out
 
     def _strip_glued(self, token: str) -> str:
         """Repeatedly strip known vocabulary words off the start or end of a token.
@@ -326,3 +402,42 @@ class NameTokenizer:
                     changed = True
                     break
         return current
+
+    # ---------------------------------------------------------------------------
+    # Helper methods: weighting
+    # ---------------------------------------------------------------------------
+    def _get_type_and_weight(self, token: str) -> tuple[str, float]:
+        """Dictionary-based token classification (importance) and derived weight.
+
+        - Exact exclude_vocabulary value (generic unit/plant-type word) -> EXCLUDE_WEIGHT
+        - Exact demote_words value (generic energy word & fuel types) -> DEMOTE_WEIGHT
+        - Short alphanumeric unit-designator pattern ('u1', '3') -> DESIGNATOR_WEIGHT
+        - Everything else (presumed discriminative place/EGE name) -> FULL_WEIGHT
+
+        Args:
+            token (str): The token to calculate type and weight for.
+
+        Returns:
+            str, float: The token classification and its derived weight.
+        """
+        if token in self._exclude_vocabulary:
+            return "generic", EXCLUDE_WEIGHT
+        if token in self._demote_words:
+            return "generic", DEMOTE_WEIGHT
+        if self.is_unit_designator(token):
+            return "designator", DESIGNATOR_WEIGHT
+        return "discriminator", FULL_WEIGHT
+
+    def is_unit_designator(self, token: str) -> bool:
+        """Whether a token designates a unit (number/letter) rather than describing it.
+
+        Args:
+            token (str): The token to check.
+
+        Returns:
+            bool: Whether the token is a unit designator. True if it is.
+        """
+        return (
+            bool(self._UNIT_DESIGNATOR_PATTERNS.match(token))
+            or token in ROMAN_UNIT_NUMERALS
+        )

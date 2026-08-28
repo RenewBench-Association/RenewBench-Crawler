@@ -233,7 +233,7 @@ class TestDefaultPipelineHelpers:
 
         Every weighting rule that can classify a token DEMOTE_WEIGHT (vocabulary
         membership, or the bare-1-2-letter/1-3-digit designator pattern)
-        guarantees any surviving DEFAULT_WEIGHT token is already >=3 chars, so
+        guarantees any surviving FULL_WEIGHT token is already >=3 chars, so
         an explicit length guard on the joined key would be unreachable -- this
         case (zero survivors) is the only way to end up with no usable key.
 

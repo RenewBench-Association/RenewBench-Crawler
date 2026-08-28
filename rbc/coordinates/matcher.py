@@ -38,6 +38,20 @@ from rbc.coordinates.utils.tokenizer import (
 )
 from rbc.coordinates.utils.values import is_missing, normalize_name
 
+# Operator-dependent styles for name matching & tokenization
+STYLE_POLICY: dict[str, dict[str, float]] = {
+    "real": {  # real names of places: exact matching required (strict(er) thresholds)
+        "fuzz_ratio_threshold": 100.0,  # fuzzy ratio only passes with identical tokens
+        "threshold": 95.0,
+        "weighted_threshold": 85.0,  # stricter threshold
+    },
+    "code": {  # names are codes/abbr: matching via partial tokens (lenient thresholds)
+        "fuzz_ratio_threshold": 50.0,  # tokens with some similarity already pass
+        "threshold": 75.0,
+        "weighted_threshold": 65.0,  # more lenient threshold
+    },
+}
+
 
 class NameMatcher:
     """Lookup-based fuzzy name matcher for multiple (coordinate) locator data sources.
@@ -58,10 +72,11 @@ class NameMatcher:
     - Caching for repeated matches
 
     Example:
-        >>> matcher = NameMatcher(country="Germany",gem_locator=gem_loc,ppdb_locator=ppm_loc)
-        ...     osm_df=osm_df, tok=tok
+        >>> matcher = NameMatcher(
+        ...     country="Germany", gem_locator=gem_loc, ppdb_locator=ppm_loc
+        ...     osm_df=osm_df, tok=tok, style_policy="code"
         ... )
-        >>> result = matcher.match("Enguri Unit 5",fueltype="hydro")
+        >>> result = matcher.match("Enguri Unit 5",target_fueltype="hydro")
         >>> if result.matched:
         ...     candidate = result.candidate
         ...     print(f"Found: {candidate.name} at ({candidate.lat}, {candidate.lon})")
@@ -74,6 +89,7 @@ class NameMatcher:
         ppdb_locator: PPMLocator | OSMPPLocator | None = None,
         osm_df: pd.DataFrame | None = None,
         tok: NameTokenizer | None = None,
+        style_policy: str = "real",
     ) -> None:
         """Initialize the name matcher.
 
@@ -88,6 +104,8 @@ class NameMatcher:
             tok (NameTokenizer | None): NameTokenizer instance for tokenization. Defaults
                 to None, in which case a vocabulary-less tokenizer is created (generic
                 tokens only, no operator/country name translations).
+            style_policy (str): The style used by the operator in target EGE naming, defining
+                how to handle matching. Options are "real" or "code". Defaults to "code".
         """
         self.target_country = country
         self.norm_target_country = normalize_operator_country_name(country)
@@ -99,6 +117,12 @@ class NameMatcher:
 
         # Tokenizer
         self.tok: NameTokenizer = tok if tok is not None else NameTokenizer()
+
+        # Operator-dependent naming convention style
+        style = STYLE_POLICY.get(style_policy, STYLE_POLICY["code"])
+        self.fuzz_ratio_threshold = style["fuzz_ratio_threshold"]
+        self.threshold = style["threshold"]  # min score to accept an exact-lookup match
+        self.weighted_threshold = style["weighted_threshold"]  # ...a weighted-tok match
 
         # Cache for target name variants and alternatives (e.g. from EIC enrichment)
         self._target_variants: dict[str, list[str]] = {}  # name -> [variants]
@@ -122,9 +146,7 @@ class NameMatcher:
     def match(
         self,
         target_name: str,
-        fueltype: str | None = None,
-        threshold: float = 75.0,
-        weighted_threshold: float = 65.0,
+        target_fueltype: str | None = None,
     ) -> MatchResult:
         """Find the best match for a target EGE name across all candidate data sources.
 
@@ -133,14 +155,8 @@ class NameMatcher:
         2. Falls back to weighted-token scoring (s. tokenizer.py) against all valid candidates
 
         Args:
-            target_name (str): The name to match.
-            fueltype (str | None): Fuel type for validation (overrides class default).
-                Defaults to None.
-            threshold (float): Minimum score (0-100) to accept an exact-lookup match
-                (exact-match-plus-bonuses score). Defaults to 75.
-            weighted_threshold (float): Minimum score (0-100) to accept a weighted token
-                match (weighted average of per-token rapidfuzz.ratio scores plus the same
-                source/fuel bonuses). Defaults to 65.
+            target_name (str): The target name to match.
+            target_fueltype (str | None): Target fuel type for validation. Defaults to None.
 
         Returns:
             MatchResult with matched candidate or None if no match found.
@@ -170,10 +186,10 @@ class NameMatcher:
             if variant in candidate_index:
                 for candidate in candidate_index[variant]:
                     score = 100.0
-                    score = self._adjust_score(score, fueltype, candidate.fueltype)
+                    score = _adjust_score(score, target_fueltype, candidate.fueltype)
 
                     all_matches.append((candidate, score))
-                    if score >= threshold:
+                    if score >= self.threshold:
                         winning_matches.append((candidate, score))
 
             # if a variant has been matched, stop 'descending' down the list
@@ -195,12 +211,21 @@ class NameMatcher:
                 for candidate in all_candidates:
                     candidate_wt = self.tok.weighted_tokenize(candidate.norm_name)
 
-                    score = get_weighted_token_score(target_wt, candidate_wt)
-                    score = self._adjust_score(score, fueltype, candidate.fueltype)
+                    true_score, debug_score = get_weighted_token_score(
+                        target_wt,
+                        candidate_wt,
+                        fuzz_ratio_floor=self.fuzz_ratio_threshold,
+                    )
+                    true_score = _adjust_score(
+                        true_score, target_fueltype, candidate.fueltype
+                    )
+                    debug_score = _adjust_score(
+                        debug_score, target_fueltype, candidate.fueltype
+                    )
 
-                    all_matches.append((candidate, score))
-                    if score >= weighted_threshold:
-                        winning_matches.append((candidate, score))
+                    all_matches.append((candidate, debug_score))
+                    if true_score >= self.weighted_threshold:
+                        winning_matches.append((candidate, true_score))
 
                 # if a variant has been matched, stop descending
                 if winning_matches:
@@ -229,8 +254,8 @@ class NameMatcher:
         )
         top_matches = [
             (cand, score)
-            for cand, score in all_matches[:10]
-            if score >= min(threshold, weighted_threshold) - 5.0
+            for cand, score in all_matches[:5]
+            if score > 5.0  # don't include 0.0 scores with +5 fuel bonus
         ]
 
         # 4. Get matched candidate with the best score
@@ -412,29 +437,29 @@ class NameMatcher:
         self._target_variants[name] = variants
         return variants
 
-    @staticmethod
-    def _adjust_score(
-        score: float, target_fuel: str | None, candidate_fuel: str | None
-    ) -> float:
-        """Adjust score for a given candidate depending on whether the fuel types match.
 
-        Get fuel type match level with the classify_fueltype_match helper, define handling
-        based on the classification str.
+def _adjust_score(
+    score: float, target_fuel: str | None, cand_fuel: str | None
+) -> float:
+    """Adjust score for a given candidate depending on whether the fuel types match.
 
-        Args:
-            score (float): The score to adjust.
-            target_fuel (str | None): The target's fuel type. Defaults to None.
-            candidate_fuel (str | None): The candidate's fuel type. Defaults to None.
+    Get fuel type match level with the classify_fueltype_match helper, define handling
+    based on the classification str.
 
-        Returns:
-            float: The adjusted score.
-        """
-        level = classify_fueltype_match(target_fuel, candidate_fuel)
-        if level == "mismatch":  # redefine to 0
-            return 0.0
-        elif level == "unknown":  # leave score unchanged
-            return score
+    Args:
+        score (float): The score to adjust.
+        target_fuel (str | None): The target's fuel type. Defaults to None.
+        cand_fuel (str | None): The candidate's fuel type. Defaults to None.
 
-        # bonus for correct match ("exact" or "compatible")
-        score += 5.0
+    Returns:
+        float: The adjusted score.
+    """
+    level = classify_fueltype_match(target_fuel, cand_fuel)
+    if level == "mismatch":  # redefine to 0
+        return 0.0
+    elif level == "unknown":  # leave score unchanged
         return score
+
+    # bonus for correct match ("exact" or "compatible")
+    score += 5.0
+    return score

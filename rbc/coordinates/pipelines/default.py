@@ -7,7 +7,7 @@ import pandas as pd
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.pipelines._base import BasePipeline
-from rbc.coordinates.utils.tokenizer import DEFAULT_WEIGHT
+from rbc.coordinates.utils.tokenizer import FULL_WEIGHT
 from rbc.coordinates.utils.values import strip_str
 
 
@@ -117,9 +117,7 @@ class DefaultPipeline(BasePipeline):
         """
         wt = self.tok.weighted_tokenize(name)
         survivors = [
-            tok
-            for tok, weight in zip(wt.tokens, wt.weights)
-            if weight == DEFAULT_WEIGHT
+            tok for tok, weight in zip(wt.tokens, wt.weights) if weight == FULL_WEIGHT
         ]
         key = " ".join(survivors).strip()
         return key or None

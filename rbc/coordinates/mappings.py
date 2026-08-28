@@ -5,7 +5,7 @@ and other global parameters for coordinate finding. They are mainly used by the 
 modules and utility helpers.
 """
 
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from rbc.energy.entsoe.mappings import EGE_NAME_TRANSLATIONS as ENTSOE_NAME_TRANSLATIONS
 from rbc.energy.entsoe.mappings import FUELTYPE_CODE_MAPPINGS as ENTSOE_FUEL_MAPPINGS
@@ -26,6 +26,9 @@ class OperatorInfo(TypedDict):
     needs_coordinates: bool
     country: str
     entity_col: str
+    entity_str_style: NotRequired[Literal["real", "code"]]  # fuzzy matching strategy
+    # "real" = spaced real place names -> exact match
+    # "code" = special-char-divided code-like names -> partial match (lower fuzzy threshold)
     entity_mapping: NotRequired[dict[str, str] | dict[str, dict[str, str]]]
     code_col: NotRequired[str]
     fuel_col: NotRequired[str]
@@ -35,27 +38,31 @@ class OperatorInfo(TypedDict):
 
 # Map: Operator name → defining details for location finding (e.g. data column names)
 OPERATOR_METADATA: dict[str, OperatorInfo] = {
-    "adme": OperatorInfo(country="Uruguay", entity_col="", needs_coordinates=True),
+    "adme": OperatorInfo(  # todo: check if other entity_str_style def required
+        country="Uruguay",
+        entity_col="",
+        needs_coordinates=True,
+    ),
     "aemo": OperatorInfo(
         country="Australia",
         entity_col="unit_code",
         fuel_col="unit_fueltech_id",
         needs_coordinates=False,
     ),
-    "aeso": OperatorInfo(
+    "aeso": OperatorInfo(  # todo: check if other entity_str_style def required
         country="Canada",
         entity_col="Asset Name",
         fuel_col="Fuel Type",
         needs_coordinates=True,
     ),
-    "cen": OperatorInfo(
+    "cen": OperatorInfo(  # todo: check if other entity_str_style def required
         country="Chile",
         entity_col="central",
         fuel_col="tipo_tecnologia",
         code_col="id_central",
         needs_coordinates=True,
     ),
-    "eat": OperatorInfo(
+    "eat": OperatorInfo(  # todo: check if other entity_str_style def required
         country="New Zealand",
         entity_col="gen_code",
         fuel_col="fuel_code",
@@ -77,9 +84,12 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         fuel_mapping=ENTSOE_FUEL_MAPPINGS,
         pipeline="entsoe",
         needs_coordinates=True,
+        entity_str_style="code",
     ),
-    "epias": OperatorInfo(
-        country="Türkiye", entity_col="powerPlantName", needs_coordinates=True
+    "epias": OperatorInfo(  # todo: check if other entity_str_style def required
+        country="Türkiye",
+        entity_col="powerPlantName",
+        needs_coordinates=True,
     ),
     "ieso": OperatorInfo(
         country="Canada",
@@ -95,10 +105,18 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         fuel_col="nom_tipousina",
         fuel_mapping=ONS_FUEL_MAPPINGS,
         needs_coordinates=True,
+        entity_str_style="real",
     ),
-    "rei": OperatorInfo(country="Japan", entity_col="", needs_coordinates=False),
-    "taipower": OperatorInfo(
-        country="Taiwan", entity_col="name", fuel_col="fueltype", needs_coordinates=True
+    "rei": OperatorInfo(
+        country="Japan",
+        entity_col="",
+        needs_coordinates=False,
+    ),
+    "taipower": OperatorInfo(  # todo: check if other entity_str_style def required
+        country="Taiwan",
+        entity_col="name",
+        fuel_col="fueltype",
+        needs_coordinates=True,
     ),
 }
 

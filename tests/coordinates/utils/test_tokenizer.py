@@ -4,9 +4,10 @@
 import pytest
 
 from rbc.coordinates.utils.tokenizer import (
-    DEFAULT_WEIGHT,
     DEMOTE_WEIGHT,
+    DESIGNATOR_WEIGHT,
     EXCLUDE_WEIGHT,
+    FULL_WEIGHT,
     NameTokenizer,
     get_weighted_token_score,
     normalize_name,
@@ -19,7 +20,7 @@ from rbc.coordinates.utils.tokenizer import (
 # these tests pin the tokenizer's mechanics, not the operators' evolving word lists.
 TEST_VOCAB: dict[str, str] = {
     "elektrijaam": "power plant",  # multi-word value, both words already generic
-    "ej": "power plant elektrijaam",  # value re-using another vocabulary key
+    "ej": "power plant",  # value re-using another vocabulary key
     "pumpspeicherkraftwerk": "pumped hydro",  # value word that is NOT a generic token
     "Kraftværk": "power plant",  # accented + capitalized key
     "Barragem da Usina": "dam",  # multi-word key -> unreachable by design
@@ -156,7 +157,12 @@ class TestStripNormalizedHelpers:
 
 
 class TestGetWeightedTokenScore:
-    """Tests for get_weighted_token_score."""
+    """Tests for get_weighted_token_score.
+
+    The function returns (true_score, debug_score): identical unless a veto fired, in
+    which case true_score is 0.0 while debug_score still reports how close the candidate
+    came -- which is what keeps vetoed rows readable in the review CSV.
+    """
 
     def test_high_score(self, tok_vocab: NameTokenizer) -> None:
         """Happy path: Matching a name's tokens against itself scores 100.
@@ -165,7 +171,7 @@ class TestGetWeightedTokenScore:
             tok_vocab (NameTokenizer): Tokenizer carrying TEST_VOCAB.
         """
         tokens = tok_vocab.weighted_tokenize("Auvere EJ- G1")
-        assert get_weighted_token_score(tokens, tokens) == 100.0
+        assert get_weighted_token_score(tokens, tokens) == (100.0, 100.0)
 
     def test_high_score_when_partial_with_high_weight(
         self, tok_vocab: NameTokenizer
@@ -180,7 +186,8 @@ class TestGetWeightedTokenScore:
         """
         target = tok_vocab.weighted_tokenize("Auvere G1")
         candidate = tok_vocab.weighted_tokenize("Auvere G7")
-        assert get_weighted_token_score(target, candidate) > 80.0
+        true_score, _ = get_weighted_token_score(target, candidate)
+        assert true_score > 80.0
 
     def test_low_score_when_partial_with_low_weight(
         self, tok_vocab: NameTokenizer
@@ -195,7 +202,8 @@ class TestGetWeightedTokenScore:
         """
         target = tok_vocab.weighted_tokenize("Auvere Elektrijaam")
         candidate = tok_vocab.weighted_tokenize("Balti Elektrijaam")
-        assert get_weighted_token_score(target, candidate) < 50.0
+        true_score, _ = get_weighted_token_score(target, candidate)
+        assert true_score < 50.0
 
     def test_zero_score_when_empty_inputs(self, tok_plain: NameTokenizer) -> None:
         """Failure path: An empty token set on either side scores 0, not an error.
@@ -205,8 +213,8 @@ class TestGetWeightedTokenScore:
         """
         empty = tok_plain.weighted_tokenize("")
         non_empty = tok_plain.weighted_tokenize("Auvere")
-        assert get_weighted_token_score(empty, non_empty) == 0.0
-        assert get_weighted_token_score(non_empty, empty) == 0.0
+        assert get_weighted_token_score(empty, non_empty) == (0.0, 0.0)
+        assert get_weighted_token_score(non_empty, empty) == (0.0, 0.0)
 
     def test_zero_score_when_only_excluded_tokens(
         self, tok_plain: NameTokenizer
@@ -218,7 +226,99 @@ class TestGetWeightedTokenScore:
         """
         target = tok_plain.weighted_tokenize("Unit Block")
         assert sum(target.weights) == 0.0
-        assert get_weighted_token_score(target, target) == 0.0
+        assert get_weighted_token_score(target, target) == (0.0, 0.0)
+
+    def test_no_discriminative_token_is_vetoed(self, tok_plain: NameTokenizer) -> None:
+        """Failure path: A name of only generic words cannot be matched, however well it fits.
+
+        "hydro power plant" agrees perfectly with any plant of that type, so a high
+        similarity says nothing about identity.
+
+        Both scores are 0.0 here, unlike the other veto: this one short-circuits before
+        scoring, since no candidate could rescue a target that names nothing. The review
+        CSV therefore shows no runners-up for such a target -- read target.weighted_tokens
+        instead, which shows the absent discriminator directly.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+        """
+        target = tok_plain.weighted_tokenize("hydro power plant")
+        candidate = tok_plain.weighted_tokenize("random hydro power plant")
+
+        assert get_weighted_token_score(target, candidate) == (0.0, 0.0)
+
+    def test_unmatched_discriminative_token_is_vetoed(
+        self, tok_plain: NameTokenizer
+    ) -> None:
+        """Failure path: Generic agreement cannot carry a name whose real token is absent.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+        """
+        target = tok_plain.weighted_tokenize("Auvere power plant")
+        candidate = tok_plain.weighted_tokenize("Balti power plant")
+
+        true_score, debug_score = get_weighted_token_score(target, candidate)
+        assert true_score == 0.0
+        assert debug_score > 0.0
+
+    def test_unmatched_generic_token_does_not_dilute(
+        self, tok_plain: NameTokenizer
+    ) -> None:
+        """Happy path: Boilerplate the candidate lacks must not cost a matched name.
+
+        A candidate missing "power station" says nothing about whether it is the same
+        plant, so those tokens drop out of the denominator rather than dragging the score.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+        """
+        target = tok_plain.weighted_tokenize("Auvere power station")
+        candidate = tok_plain.weighted_tokenize("Auvere")
+
+        true_score, _ = get_weighted_token_score(target, candidate)
+        assert true_score == 100.0
+
+    def test_unmatched_designator_does_dilute(self, tok_plain: NameTokenizer) -> None:
+        """Happy path: A unit number the candidate contradicts DOES cost the score.
+
+        Unlike boilerplate, a differing unit designator is evidence: "Maua 3" is not
+        "Maua 6". It only counts when the candidate has a designator of its own, so a
+        plant-level candidate (no unit number at all) is not penalised for lacking one.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+        """
+        target = tok_plain.weighted_tokenize("Auvere 6")
+        wrong_unit = tok_plain.weighted_tokenize("Auvere 3")
+        plant_level = tok_plain.weighted_tokenize("Auvere")
+
+        assert get_weighted_token_score(target, wrong_unit)[0] < 100.0
+        assert get_weighted_token_score(target, plant_level)[0] == 100.0
+
+    @pytest.mark.parametrize(
+        "floor, expect_match",
+        [(50.0, True), (100.0, False)],
+        ids=["lenient_code_style", "strict_real_style"],
+    )
+    def test_fuzz_ratio_floor_switches_strictness(
+        self, tok_plain: NameTokenizer, floor: float, expect_match: bool
+    ) -> None:
+        """Happy path: The floor is what makes "real" and "code" operators behave differently.
+
+        "aracati"/"maracai" are different places that rapidfuzz rates 85.7 -- accepted for
+        code-style names full of abbreviations, refused where names are real words.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+            floor (float): Minimum rapidfuzz ratio for a token pair to count.
+            expect_match (bool): Whether the pair should score above zero at that floor.
+        """
+        target = tok_plain.weighted_tokenize("aracati")
+        candidate = tok_plain.weighted_tokenize("maracai")
+
+        true_score, _ = get_weighted_token_score(target, candidate, floor)
+        assert (true_score > 0.0) is expect_match
 
 
 # ----------------------------------
@@ -303,7 +403,6 @@ class TestNameTokenizerTokenize:
             "auvere",
             "power",
             "plant",
-            "elektrijaam",
             "g1",
         ]
 
@@ -390,11 +489,14 @@ class TestNameTokenizerWeights:
     @pytest.mark.parametrize(
         "name, token, expected_output",
         [
-            ("Auvere", "auvere", DEFAULT_WEIGHT),  # discriminative place name
+            ("Auvere", "auvere", FULL_WEIGHT),  # discriminative place name
             ("Sloe Power Station", "power", DEMOTE_WEIGHT),  # generic energy token
-            ("Auvere EJ", "elektrijaam", DEMOTE_WEIGHT),  # emitted by an expansion
+            ("Auvere EJ", "plant", DEMOTE_WEIGHT),  # emitted by an expansion
             ("Pumpspeicherkraftwerk X", "pumped", DEMOTE_WEIGHT),  # value-only word
-            ("Auvere G1", "g1", DEMOTE_WEIGHT),  # short unit designator
+            ("Auvere G1", "g1", DESIGNATOR_WEIGHT),  # letter+digit unit designator
+            ("Maua Bloco 6", "6", DESIGNATOR_WEIGHT),  # bare unit number
+            ("Maua Bloco 5A", "5a", DESIGNATOR_WEIGHT),  # digit+letter unit designator
+            ("Santana III", "iii", DESIGNATOR_WEIGHT),  # roman unit numeral
             ("Sloe unit 20", "unit", EXCLUDE_WEIGHT),  # generic unit token
         ],
     )
@@ -412,18 +514,16 @@ class TestNameTokenizerWeights:
         wt = tok_vocab.weighted_tokenize(name)
         assert dict(zip(wt.tokens, wt.weights))[token] == expected_output
 
-    def test_discriminative_token_outweighs_generic_ones(
-        self, tok_vocab: NameTokenizer
-    ) -> None:
+    def test_real_token_outweighs_generic_ones(self, tok_vocab: NameTokenizer) -> None:
         """Happy path: One real name outweighs any number of generic tokens around it.
 
         Args:
             tok_vocab (NameTokenizer): Tokenizer carrying TEST_VOCAB.
         """
-        wt = tok_vocab.weighted_tokenize("Auvere EJ")
-        assert (
-            get_weighted_token_score(wt, tok_vocab.weighted_tokenize("auvere")) > 80.0
-        )
+        target_wt = tok_vocab.weighted_tokenize("Auvere EJ")
+        cand_wt = tok_vocab.weighted_tokenize("auvere")
+        true_score, _ = get_weighted_token_score(target_wt, cand_wt)
+        assert true_score > 80.0
 
 
 # ----------------------------------

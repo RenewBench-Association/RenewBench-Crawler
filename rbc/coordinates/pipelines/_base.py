@@ -118,6 +118,9 @@ class BasePipeline:
             self.name_mapping: dict[str, str] | dict[str, dict[str, str]] = (
                 OPERATOR_METADATA[self.operator].get("entity_mapping", {})
             )
+            self.name_str_style = OPERATOR_METADATA[self.operator].get(
+                "entity_str_style", "code"
+            )
             self.code_col = OPERATOR_METADATA[self.operator].get("code_col")
             self.fuel_col = OPERATOR_METADATA[self.operator].get("fuel_col")
             self.fuel_mapping = OPERATOR_METADATA[self.operator].get("fuel_mapping", {})
@@ -341,6 +344,7 @@ class BasePipeline:
             ppdb_locator=self.ppdb_loc,
             osm_df=self.osm_df if len(self.osm_df) > 0 else None,
             tok=self.tok,
+            style_policy=self.name_str_style,
         )
         self._add_alt_names(df, matcher)
 
@@ -462,9 +466,7 @@ class BasePipeline:
                     continue
 
                 result = matcher.match(
-                    target_name=clean_candidate,
-                    fueltype=sysop_fuel,
-                    threshold=75,  # lower to get more matches with enhanced fuzzy matching
+                    target_name=clean_candidate, target_fueltype=sysop_fuel
                 )
                 fuzzy_results_list.extend(
                     result.to_dicts(target_idx=idx, target_fueltype=sysop_fuel)

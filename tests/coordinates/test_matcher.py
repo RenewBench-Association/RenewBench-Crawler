@@ -270,7 +270,7 @@ class TestNameMatcherTargetVariants:
         Args:
             unit_matcher (NameMatcher): Matcher over "Mauá 3" and "Mauá 6".
         """
-        result = unit_matcher.match("Mauá Bloco 6", fueltype="hydro")
+        result = unit_matcher.match("Mauá Bloco 6", target_fueltype="hydro")
 
         assert result.matched
         assert result.candidate is not None
@@ -291,7 +291,7 @@ class TestNameMatcherTargetVariants:
         Args:
             unit_matcher (NameMatcher): Matcher over "Mauá 3" and "Mauá 6".
         """
-        result = unit_matcher.match("Mauá Bloco 6", fueltype="hydro")
+        result = unit_matcher.match("Mauá Bloco 6", target_fueltype="hydro")
         assert len(result.top_matches) == 2
 
 
