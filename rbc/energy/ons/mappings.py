@@ -6,6 +6,7 @@
 # ======= FUEL TYPES =======
 FUELTYPE_BASE_MAPPING = {
     "TÉRMICA": "thermal (coal/gas/oil/waste/biomass)",
+    "termeletrica": "thermal (coal/gas/oil/waste/biomass)",
     "Óleo Diesel": "diesel oil",
     "Óleo Combustível": "fuel oil",
     "Carvão": "coal",

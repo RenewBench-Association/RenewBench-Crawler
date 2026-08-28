@@ -270,10 +270,10 @@ ROMANIAN_NAME_TRANSLATIONS = {
     "fotovoltaică": "solar",
     "solară": "solar",
     "nucleară": "nuclear",
-    # "cte": "thermal",
-    # "che": "hydroelectric",
-    # "ce": "wind",
-    # "cne": "nuclear",
+    "cte": "thermal",
+    "cet": "thermal",
+    "che": "hydroelectric",
+    "cne": "nuclear",
 }
 
 
