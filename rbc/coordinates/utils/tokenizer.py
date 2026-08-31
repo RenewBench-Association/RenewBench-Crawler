@@ -138,7 +138,7 @@ class WeightedTokens:
 
 
 def get_weighted_token_score(
-    target: WeightedTokens, candidate: WeightedTokens, fuzz_ratio_floor: float = 50.0
+    target: WeightedTokens, candidate: WeightedTokens, fuzz_ratio_floor: float = 60.0
 ) -> tuple[float, float]:
     """Get the weighted-average best-token-match score between two WeightedTokens (0-100).
 
@@ -164,7 +164,7 @@ def get_weighted_token_score(
         fuzz_ratio_floor (float, optional): The minimum rapidfuzz ratio for a token pair
             to count. If below it, the score is 0 (no partial credit). 100.0 is an exact
             match; 0.0 disables the rule (meaning completely different tokens match).
-            Defaults to 50.0.
+            Defaults to 60.0.
 
     Returns:
         tuple[float, float]: True best weighted token match score,

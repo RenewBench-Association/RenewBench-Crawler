@@ -46,7 +46,9 @@ STYLE_POLICY: dict[str, dict[str, float]] = {
         "weighted_threshold": 85.0,  # stricter threshold
     },
     "code": {  # names are codes/abbr: matching via partial tokens (lenient thresholds)
-        "fuzz_ratio_threshold": 50.0,  # tokens with some similarity already pass
+        "fuzz_ratio_threshold": 60.0,  # tokens with some similarity pass
+        # 60.0 is the highest floor that keeps correct abbreviation matches ("cra"/"craiova"),
+        # 50.0 admits weak pairs (e.g "West Offaly"/"Rhode" (IE), "Retezat"/"Bretea" (RO))
         "threshold": 75.0,
         "weighted_threshold": 65.0,  # more lenient threshold
     },
