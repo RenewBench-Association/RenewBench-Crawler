@@ -15,6 +15,8 @@ FUELTYPE_BASE_MAPPING = {
     "NUCLEAR": "nuclear",
     "Nuclear": "nuclear",
     "Biomassa": "biomass",
+    "Bioen": "bioenergy",
+    "Bioenergia": "bioenergy",
     "HIDROELÉTRICA": "hydroelectric",
     "Hidrelétrica": "hydroelectric",
     "Hidráulica": "hydro",
@@ -48,12 +50,13 @@ EGE_NAME_BASE_TRANSLATIONS = {
     "Térmica": "thermal",
     "Diesel": "diesel oil",
     "Combustível": "fuel oil",
-    "Industriais": "industrial",
+    "Industrial": "industrial",
     "Resíduos": "waste",
     # from Operator (ONS)
     "Central": "power plant",
-    "Centrais": "power plant",
     "Pequena": "small",
+    "Gov": "operator",
+    "Governador": "operator",
     # from Locator (OSM)
     "Casa": "house",
     "Força": "power",
@@ -64,5 +67,14 @@ EGE_NAME_BASE_TRANSLATIONS = {
 EGE_NAME_TRANSLATIONS = EGE_NAME_BASE_TRANSLATIONS.copy()
 for key, value in EGE_NAME_BASE_TRANSLATIONS.items():
     key = key.title()
-    if key.endswith("a") and len(key) > 3:
-        EGE_NAME_TRANSLATIONS[key + "s"] = value
+    if len(key) > 3:
+        if key.endswith("a"):
+            EGE_NAME_TRANSLATIONS[key + "s"] = value
+        elif key.endswith("r"):
+            EGE_NAME_TRANSLATIONS[key + "es"] = value
+        elif key.endswith("al"):
+            EGE_NAME_TRANSLATIONS[key.removesuffix("l") + "is"] = value
+        elif key.endswith("em"):
+            EGE_NAME_TRANSLATIONS[key.removesuffix("m") + "ns"] = value
+        elif key.endswith("el"):
+            EGE_NAME_TRANSLATIONS[key.removesuffix("l") + "is"] = value

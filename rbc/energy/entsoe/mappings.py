@@ -196,6 +196,12 @@ DUTCH_NAME_TRANSLATIONS = {
     "warmtekrachtcentrale": "thermal power",
 }
 
+ENGLISH_NAME_TRANSLATIONS = {
+    "CCGT": "gas power plant",
+    "OCGT": "gas power plant",
+    "CHP": "thermal power plant",
+}
+
 FRENCH_NAME_TRANSLATIONS = {
     "centrale": "power plant",
     "central": "power plant",
@@ -347,6 +353,7 @@ EGE_NAME_TRANSLATIONS: dict[str, dict[str, str]] = {
         "aurinkovoimala": "solar",
     },
     "FR": FRENCH_NAME_TRANSLATIONS,
+    "GB": ENGLISH_NAME_TRANSLATIONS,
     "GE": {  # Georgian (Georgian script + Latin transliterations)
         "ჰესი": "hydroelectric",
         "hesi": "hydroelectric",
@@ -374,6 +381,7 @@ EGE_NAME_TRANSLATIONS: dict[str, dict[str, str]] = {
         "szélerőmű": "wind",
         "napelemes": "solar",
     },
+    "IE": {**ENGLISH_NAME_TRANSLATIONS, "ESB": "electricity supply board"},
     "IT": ITALIAN_NAME_TRANSLATIONS,
     "LT": {  # Lithuanian
         "elektrinė": "power plant",
