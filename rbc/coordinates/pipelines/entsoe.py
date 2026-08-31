@@ -361,18 +361,3 @@ class EntsoePipeline(BasePipeline):
 
             if alt_names:
                 matcher.add_target_alternatives(raw_name, alt_names)
-
-    def _name_candidates(self, row: pd.Series) -> list[str | None]:
-        """Define EGE candidate names to try against matcher. Overwritable by child pipeline.
-
-        Args:
-            row (pd.Series): The row to try against.
-
-        Returns:
-            list[str]: List of EGE candidate names to try against the matcher.
-        """
-        return [
-            row.get(WCODE_LONGNAME),
-            row.get(WCODE_PARENT_LONGNAME),
-            row.get(self.sysop_name_col),
-        ]

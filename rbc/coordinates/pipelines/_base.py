@@ -348,9 +348,7 @@ class BasePipeline:
         )
         self._add_alt_names(df, matcher)
 
-        return self._fuzzy_match_core(
-            df, matcher, lambda row: self._name_candidates(row)
-        )
+        return self._fuzzy_match_core(df, matcher)
 
     def _step_validate_fueltype(self, df: pd.DataFrame) -> pd.DataFrame:
         """VALIDATION STEP --- Fuel-type validation for all matched units (from any source).
@@ -437,17 +435,19 @@ class BasePipeline:
         self,
         df: pd.DataFrame,
         matcher: NameMatcher,
-        name_candidates_fn,
     ) -> pd.DataFrame:
         """FUZZY STEP HELPER --- Shared per-row fuzzy-match loop, used by every pipeline.
 
         The method _ensure_exact_match_columns(df) needs to have been called beforehand.
 
+        Each EGE is matched on its sysop_name alone. Any further names worth trying (e.g.
+        ENTSO-E's EIC registry names) are registered by _add_alt_names and enter as the
+        first rungs of the matcher's own variant ladder, so all names for one EGE are
+        ordered and tried within a single match() call.
+
         Args:
             df (pd.DataFrame): The working dataframe.
             matcher (NameMatcher): A matcher object attuned to pipeline-related locator.
-            name_candidates_fn (Callable(row)): A function to try an ordered list of name
-                strings against the matcher (most authoritative first).
 
         Returns:
             df (pd.DataFrame): Updated working dataframe (now with ppdb, gem, osm matches).
@@ -459,33 +459,27 @@ class BasePipeline:
         # 2. Fuzzy matching candidate search
         for idx, row in df[self._still_unmatched(df)].iterrows():
             sysop_fuel = row.get(self.sysop_fuel_col)
+            sysop_name = strip_str(row.get(self.sysop_name_col))
+            if sysop_name is None:
+                continue
 
-            for name_candidate in name_candidates_fn(row):
-                clean_candidate = strip_str(name_candidate)
-                if clean_candidate is None:
-                    continue
+            result = matcher.match(target_name=sysop_name, target_fueltype=sysop_fuel)
+            fuzzy_results_list.extend(
+                result.to_dicts(target_idx=idx, target_fueltype=sysop_fuel)
+            )
 
-                result = matcher.match(
-                    target_name=clean_candidate, target_fueltype=sysop_fuel
-                )
-                fuzzy_results_list.extend(
-                    result.to_dicts(target_idx=idx, target_fueltype=sysop_fuel)
-                )
+            if result.matched and result.candidate:
+                candidate = result.candidate
+                locator = candidate.source
 
-                if result.matched and result.candidate:
-                    candidate = result.candidate
-                    locator = candidate.source
-
-                    if locator in LOCATOR_RELIABILITY:
-                        self._write_candidate_into_df(
-                            df,
-                            idx,
-                            candidate,
-                            match_score=result.score,
-                            match_source=f"{locator}_fuzzy",
-                        )
-
-                    break
+                if locator in LOCATOR_RELIABILITY:
+                    self._write_candidate_into_df(
+                        df,
+                        idx,
+                        candidate,
+                        match_score=result.score,
+                        match_source=f"{locator}_fuzzy",
+                    )
 
         # 3. Postprocessing
         df_fuzzy_results = pd.DataFrame(fuzzy_results_list)
@@ -635,14 +629,3 @@ class BasePipeline:
             matcher (NameMatcher): NameMatcher instance.
         """
         return None
-
-    def _name_candidates(self, row: pd.Series) -> list[str | None]:
-        """Define EGE candidate names to try against matcher. Overwritable by child pipeline.
-
-        Args:
-            row (pd.Series): The row to try against.
-
-        Returns:
-            list[str]: List of EGE candidate names to try against the matcher.
-        """
-        return [row.get(self.sysop_name_col)]
