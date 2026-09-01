@@ -12,8 +12,7 @@ from rbc.coordinates.utils.tokenizer import (
     get_weighted_token_score,
     normalize_name,
     split_camelcase,
-    strip_glued_generic_tokens,
-    strip_separate_generic_tokens,
+    split_glued_generic_tokens,
 )
 
 # Synthetic vocabulary, deliberately NOT imported from rbc.energy.<operator>.mappings:
@@ -53,11 +52,8 @@ def tok_vocab() -> NameTokenizer:
 # ----------------------------------
 # Tests - module-level string helpers
 # ----------------------------------
-class TestSplitRawHelpers:
-    """Tests for split_camelcase.
-
-    Unlike the strip helpers, this one requires the raw name.
-    """
+class TestSplitHelpers:
+    """Tests for split_camelcase and split_glued_generic_tokens."""
 
     @pytest.mark.parametrize(
         "raw, expected_output",
@@ -101,59 +97,60 @@ class TestSplitRawHelpers:
         """
         assert split_camelcase(raw) == ""
 
+    @pytest.mark.parametrize(
+        "raw, expected_output",
+        [
+            ("ENGURIUNIT_5", "enguri unit 5"),
+            ("HPPEnguriUnit 3", "hppenguri unit 3"),
+            ("energoblok 1", "energo blok 1"),
+            ("SLOEUNIT10", "sloe unit 10"),
+            ("Fynsvaerket bioblok 2", "fynsvaerket bio blok 2"),
+        ],
+    )
+    def test_split_glued(self, raw: str, expected_output: str) -> None:
+        """Happy path: stem, generic word and unit number all survive the split.
 
-class TestStripNormalizedHelpers:
-    """Tests for strip_separate_generic_tokens and strip_glued_generic_tokens.
-
-    Both expect an already-normalized name, so every case feeds them through
-    normalize_name first -- exactly as _generate_target_variants does.
-    """
-
-    def test_strip_separate(self) -> None:
-        """Happy path: Digits and generic unit tokens are dropped, place name survives.
-
-        Used as a station-level fallback where the sysop name carries a unit
-        number but OSM only stores the plant (e.g. just "Sloecentrale").
-        """
-        assert (
-            strip_separate_generic_tokens(normalize_name("Sloecentrale unit 20"))
-            == "sloecentrale"
-        )
-
-    @pytest.mark.parametrize("value", ["Unit 1", "Block III", ""])
-    def test_strip_separate_all_generic_returns_empty(self, value: str) -> None:
-        """Failure path: A fully generic name reduces to an empty string.
+        The unit number is deliberately kept: dropping it would collapse "ENGURIUNIT_1"
+        through "ENGURIUNIT_5" onto one identical variant.
 
         Args:
-            value (str): Name consisting only of generic/numeric/roman-numeral tokens.
+            raw (str): Raw name carrying a glued generic unit word.
+            expected_output (str): Expected split name.
         """
-        assert strip_separate_generic_tokens(normalize_name(value)) == ""
+        assert split_glued_generic_tokens(normalize_name(raw)) == expected_output
 
-    def test_strip_separate_raw_input_is_not_stripped(self) -> None:
-        """Failure path: Un-normalized input silently survives, since matching is lowercase.
+    @pytest.mark.parametrize(
+        "raw",
+        ["Riverside", "Svelgen", "Dormagen", "Groningen", "cogeneration", "", None],
+        ids=["no_generic", "no_place", "de_place", "nl_place", "word", "empty", "none"],
+    )
+    def test_short_generics_and_no_match_return_empty(self, raw: str | None) -> None:
+        """Failure path: <=3-char generics ("gen", "g") are excluded from the split.
 
-        Pins the caller's obligation: NORM_GENERIC_UNIT_TOKENS holds lowercase tokens, so
-        "Unit" never matches and a raw name comes back only half-stripped.
+        These are ordinary word endings, so splitting on them would mutilate the name
+        ("cogeneration" -> "co generation", "Svelgen" -> "svel gen"). An unchanged name
+        yields '', i.e. no variant to add.
+
+        Args:
+            raw (str | None): Raw name with no splittable glued generic token.
         """
-        assert (
-            strip_separate_generic_tokens("Sloecentrale Unit 20") == "Sloecentrale Unit"
-        )
+        assert split_glued_generic_tokens(normalize_name(raw)) == ""
 
-    def test_strip_glued(self) -> None:
-        """Happy path: A unit suffix glued onto the name with no separator is stripped.
+    @pytest.mark.parametrize(
+        "raw",
+        ["United", "Conjuncta", "Groupama", "Unitech", "Blockheizkraftwerk"],
+        ids=["short_residual", "lead_conj", "lead_group", "lead_unit", "lead_block"],
+    )
+    def test_leading_generic_and_short_residual_not_split(self, raw: str) -> None:
+        """Failure path: the generic must trail the token and leave > 3 chars behind.
 
-        "ENGURIUNIT_5" normalizes to one glued token "enguriunit 5", which
-        strip_trailing_generic cannot split -- this regex-based pass can.
+        A leading generic is nearly always part of a real name, and a 1-2 char residual
+        means the "generic" was really a word ending ("United" -> "unit" + "ed").
+
+        Args:
+            raw (str): Real name starting with (or barely exceeding) a generic token.
         """
-        assert strip_glued_generic_tokens(normalize_name("ENGURIUNIT_5")) == "enguri"
-
-    def test_strip_glued_no_suffix_returns_input(self) -> None:
-        """Failure path: A name with no recognized unit suffix comes back unchanged.
-
-        Harmless because _generate_target_variants de-duplicates variants, so an
-        unchanged name is simply not added a second time.
-        """
-        assert strip_glued_generic_tokens(normalize_name("Riverside")) == "riverside"
+        assert split_glued_generic_tokens(normalize_name(raw)) == ""
 
 
 class TestGetWeightedTokenScore:
@@ -450,6 +447,27 @@ class TestNameTokenizerTokenize:
             name (str): Real name containing a generic energy word as a substring.
         """
         assert tok_vocab.tokenize(name) == [name.lower()]
+
+    @pytest.mark.parametrize(
+        "name",
+        ["Svelgen", "Dormagen", "Groningen", "generation", "cogen", "hydrogen"],
+        ids=["no_place", "de_place", "nl_place", "word", "compound", "fuel"],
+    )
+    def test_glue_stripping_spares_short_generic_endings(
+        self, tok_plain: NameTokenizer, name: str
+    ) -> None:
+        """Regression pin: Vocabulary words of <= 3 chars may not be stripped from a token.
+
+        "gen" and "g" are generic unit tokens, but they are also ordinary word and place
+        name endings. Were _strip_glued to consider them (as it did at length >= 3), these
+        would be eaten down to "svel" / "dorma" / "gronin" / "eration" / "co" / "hydro" --
+        4300 GEM names among them.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+            name (str): Real name starting or ending in a short generic unit token.
+        """
+        assert tok_plain.tokenize(name) == [name.lower()]
 
     @pytest.mark.parametrize(
         "name",

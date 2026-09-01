@@ -22,9 +22,16 @@ from rbc.coordinates.mappings import GENERIC_ENERGY_TOKENS, GENERIC_UNIT_TOKENS
 from rbc.coordinates.utils.values import normalize_name
 
 NORM_GENERIC_UNIT_TOKENS = [normalize_name(t) for t in GENERIC_UNIT_TOKENS]
-JOINED_GENERIC_UNIT_TOKENS = "|".join(t for t in NORM_GENERIC_UNIT_TOKENS if len(t) > 1)
 NORM_GENERIC_ENERGY_TOKENS = [normalize_name(t) for t in GENERIC_ENERGY_TOKENS]
 
+# Pattern: Find a generic unit word (+ number) glued onto the end of a token (> 3 chars)
+# (e.g. "enguriunit" -> "enguri unit" / "sloeunit10" -> "sloe unit 10").
+JOINED_GENERIC_UNIT_TOKENS = "|".join(
+    sorted((t for t in NORM_GENERIC_UNIT_TOKENS if len(t) > 3), key=len, reverse=True)
+)
+GLUED_GENERIC_TOKEN_PATTERN = re.compile(
+    rf"\b([a-z]{{3,}})({JOINED_GENERIC_UNIT_TOKENS})(\d{{0,3}})\b"
+)
 ROMAN_UNIT_NUMERALS: frozenset[str] = frozenset(
     "i ii iii iv v vi vii viii ix x xi xii xiii xiv xv xvi xvii xviii xix xx".split()
 )
@@ -69,52 +76,29 @@ def split_camelcase(raw: str | None) -> str:
     return new if new != raw else ""
 
 
-def strip_separate_generic_tokens(normalized: str | None) -> str:
-    """Strip trailing generic tokens/digits from the normalized EGE name.
+def split_glued_generic_tokens(normalized: str | None) -> str:
+    """Split generic unit words glued onto the normalized EGE name into separate tokens.
 
-    This is a last-resort fallback for cases where names include unit numbers and / or generic
-    unit markers (e.g. "Ensuri Unit 20", "Sloecentrale Block II") but locators only store the
-    station-level name without a per-unit suffix (e.g. just "Ensuri" or "Sloecentrale").
+    Some naming conventions add the unit word directly onto the EGE name with no separating
+    space/underscore (e.g. "ENGURIUNIT_5", "energoblok 3"), leaving one long token that
+    matches nothing. This splits the parts apart rather than dropping them, so the variant
+    loses no information: the stem stays discriminative, the generic word is zero-weighted
+    by the tokenizer anyway, and the unit number survives to tell sibling units apart
+    (e.g. "ENGURIUNIT_5" -> "enguri unit 5", not "enguri").
 
     Args:
         normalized (str | None): The previously normalized name to process.
 
     Returns:
-        str: Name with numeric tokens and generic unit tokens removed or '' if no changes.
+        str: The name with glued unit words split out or '' if no changes.
     """
     if not normalized:
         return ""
 
-    tokens = [
-        token
-        for token in normalized.split()
-        if not token.isdigit()
-        and token not in NORM_GENERIC_UNIT_TOKENS
-        and token not in ROMAN_UNIT_NUMERALS
-    ]
-    new = " ".join(tokens).strip()
+    new = GLUED_GENERIC_TOKEN_PATTERN.sub(
+        lambda m: " ".join(group for group in m.groups() if group), normalized
+    )
     return new if new != normalized else ""
-
-
-def strip_glued_generic_tokens(normalized: str | None) -> str:
-    """Strip trailing generic tokens (units) glued to the normalized EGE name.
-
-    This is another last-resort fallback. Some naming conventions add the unit suffix
-    directly onto the EGE name with no separating space/underscore (e.g. "ENGURIUNIT_5").
-    The space-tokenized strip_generic_tokens won't catch these since "enguriunit" and "5"
-    remain a single glued token. This is done here (e.g. "ENGURIUNIT_5" -> "enguri").
-
-    Args:
-        normalized (str | None): The previously normalized name to process.
-
-    Returns:
-        str: The name with the trailing unit-suffix removed or '' if no changes.
-    """
-    if not normalized:
-        return ""
-
-    # use regex pattern based on |-joined generic unit tokens
-    return re.sub(rf"(?:{JOINED_GENERIC_UNIT_TOKENS})\s*\d*$", "", normalized).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -256,13 +240,13 @@ class NameTokenizer:
             )
 
         # build lists of vocabulary words for specific comparisons
-        # 2. exclusion words: those that have more than 3 characters (no 2-letter codes!)
+        # 1. exclusion words: those with more than 3 characters (no "g"/"gen") for stripping
         self._exclude_words: list[str] = sorted(
-            (w for w in self._exclude_vocabulary if len(w) >= 3),
+            (w for w in self._exclude_vocabulary if len(w) > 3),
             key=len,
             reverse=True,
         )
-        # 1. demotion words: the individual values of the key-value pair dict
+        # 2. demotion words: the individual values of the key-value pairs (the vocab dict)
         self._demote_words: frozenset[str] = frozenset(
             w for v in self._demote_vocabulary.values() for w in v.split()
         )
@@ -346,6 +330,7 @@ class NameTokenizer:
     def _split_glued_unit_number(self, tokens: list[str]) -> list[str]:
         """Split a trailing unit number off its letter stem ("turc3" -> "turc", "3").
 
+        This is included here in the class so that it is applied to ALL target variants!
         Operators glue unit numbers onto a name fragment, which is otherwise counted - and
         potentially demoted - as one token, so the name is lost. This method:
         - splits a token (with >= 3 chars & trailing number) into two separate tokens, e.g.
@@ -376,7 +361,8 @@ class NameTokenizer:
     def _strip_glued(self, token: str) -> str:
         """Repeatedly strip known vocabulary words off the start or end of a token.
 
-        Only whole vocabulary words of length >= 3 are considered. This prevents 2-letter
+        Only whole unit-related vocabulary words of length > 3 are considered. This prevents
+        2-letter
         codes (he/te/...) from being falsely matched and the accidental removal of
         important name parts (e.g. place name "auvere" → "auve" → "au").
 
