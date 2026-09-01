@@ -1,4 +1,4 @@
 paths:
-  dst_dir_raw: /lsdf/raw/weather/era5/
+  dst_dir_raw: /lsdf/raw/weather/
 access:
   api_key: "YOUR-CDS-KEY---DON'T-COMMIT!!!"

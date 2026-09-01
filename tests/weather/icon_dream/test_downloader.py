@@ -8,8 +8,58 @@ import pytest
 import requests
 
 from rbc.weather.icon_dream import IconDreamDownloader
-from rbc.weather.icon_dream.mappings import VARIABLE_TO_SHORT_PARAM
-from rbc.weather.utils import get_short_param
+from rbc.weather.icon_dream.mappings import MODEL_CONFIG, VARIABLE_TO_SHORT_PARAM
+from rbc.weather.utils import get_short_param, raw_data_dir
+
+
+def _expected_file(
+    downloader: IconDreamDownloader, year: int, month: str, dwd_code: str
+) -> Path:
+    """Build the file path IconDreamDownloader itself would write for one variable.
+
+    Args:
+        downloader (IconDreamDownloader): Instance under test.
+        year (int): Year.
+        month (str): Month (zero-padded).
+        dwd_code (str): DWD parameter short code.
+
+    Returns:
+        Path: Expected local file path under downloader.output_path.
+    """
+    filename = f"{downloader.model_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
+    return Path(downloader.output_path, filename)
+
+
+def _data_dir(base_dir: Path, model: str = "global") -> Path:
+    """Return the expected raw-data directory for one model variant.
+
+    Args:
+        base_dir (Path): Root raw-data directory shared by every ICON-DREAM
+            model variant.
+        model (str): ICON-DREAM model key. Defaults to "global".
+
+    Returns:
+        Path: Expected temporal-resolution-specific raw-data directory.
+    """
+    config = MODEL_CONFIG[model]
+    raw_folder = str(config["raw_folder"])
+    temporal_res_folder = str(config["temporal_res_folder"])
+    return raw_data_dir(base_dir, raw_folder, temporal_res_folder)
+
+
+def _metadata_dir(base_dir: Path, model: str = "global") -> Path:
+    """Return the expected grid-metadata directory for one model variant.
+
+    Args:
+        base_dir (Path): Root raw-data directory shared by every ICON-DREAM
+            model variant.
+        model (str): ICON-DREAM model key. Defaults to "global".
+
+    Returns:
+        Path: Expected metadata directory.
+    """
+    raw_folder = str(MODEL_CONFIG[model]["raw_folder"])
+    return raw_data_dir(base_dir, raw_folder, "metadata")
 
 
 # ----------------------------------
@@ -79,9 +129,9 @@ def test_downloader_initialization(init_args: dict) -> None:
         assert downloader.variables == init_args["variables"]
         assert downloader.dry_run == init_args["dry_run"]
         assert downloader.resume == init_args["resume"]
-        assert downloader.output_path == Path(init_args["output_path"], "global")
+        assert downloader.output_path == _data_dir(init_args["output_path"])
         assert downloader.checkpoint_path == Path(
-            init_args["output_path"], "global", "status.pickle"
+            _data_dir(init_args["output_path"]), "status.pickle"
         )
 
 
@@ -262,7 +312,7 @@ def test_checkpoint_resume(tmp_path: Path) -> None:
         tmp_path (Path): Path to the temporary directory.
     """
     checkpoint = {(2020, "01", "temperature"): 1}
-    checkpoint_path = Path(tmp_path, "global", "status.pickle")
+    checkpoint_path = Path(_data_dir(tmp_path), "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -510,7 +560,8 @@ def test_download_variables_already_exists(
         downloader (IconDreamDownloader): Instance of IconDreamDownloader.
     """
     # Create a dummy file
-    dummy_file = Path(downloader.output_path, "ICON-DREAM-Global_202001_T_hourly.grb")
+    dummy_file = _expected_file(downloader, 2020, "01", "T")
+    dummy_file.parent.mkdir(parents=True, exist_ok=True)
     dummy_file.write_text("dummy content")
 
     status = downloader._download_variables(
@@ -541,9 +592,7 @@ def test_download_variables_success(downloader: IconDreamDownloader) -> None:
 
         assert status == 1
         # File should exist
-        assert (
-            Path(downloader.output_path, "ICON-DREAM-Global_202001_T_hourly.grb")
-        ).exists()
+        assert _expected_file(downloader, 2020, "01", "T").exists()
 
 
 def test_download_variables_network_error(
@@ -697,7 +746,7 @@ def test_download_metadata_creates_directory(downloader: IconDreamDownloader) ->
     Args:
         downloader (IconDreamDownloader): Instance of IconDreamDownloader.
     """
-    metadata_dir = Path(downloader.output_path, "metadata")
+    metadata_dir = _metadata_dir(downloader.base_dir)
     assert not metadata_dir.exists()
 
     downloader.download_metadata(dry_run=True)
@@ -722,7 +771,7 @@ def test_download_metadata_success(downloader: IconDreamDownloader) -> None:
     ):
         downloader.download_metadata(dry_run=False)
 
-    metadata_dir = Path(downloader.output_path, "metadata")
+    metadata_dir = _metadata_dir(downloader.base_dir)
     assert (metadata_dir / "icon_grid_0026_R03B07_G.nc").exists()
     assert (metadata_dir / "icon_grid_0026_R03B07_G-grfinfo.nc").exists()
 
@@ -754,7 +803,7 @@ def test_download_metadata_size_mismatch_redownload(
     Args:
         downloader (IconDreamDownloader): Instance of IconDreamDownloader.
     """
-    metadata_dir = Path(downloader.output_path, "metadata")
+    metadata_dir = _metadata_dir(downloader.base_dir)
     metadata_dir.mkdir(parents=True)
     existing_file = metadata_dir / "icon_grid_0026_R03B07_G.nc"
     existing_content = "small"
@@ -805,7 +854,7 @@ def test_download_metadata_existing_file_matching_size_is_skipped(
     Args:
         downloader (IconDreamDownloader): Instance of IconDreamDownloader.
     """
-    metadata_dir = Path(downloader.output_path, "metadata")
+    metadata_dir = _metadata_dir(downloader.base_dir)
     metadata_dir.mkdir(parents=True)
     existing_content = b"test_metadata_content"
     file1 = metadata_dir / "icon_grid_0026_R03B07_G.nc"
@@ -840,7 +889,7 @@ def test_download_metadata_head_request_exception_preserves_existing_file(
     Args:
         downloader (IconDreamDownloader): Instance of IconDreamDownloader.
     """
-    metadata_dir = Path(downloader.output_path, "metadata")
+    metadata_dir = _metadata_dir(downloader.base_dir)
     metadata_dir.mkdir(parents=True)
     existing_content = b"preserved_content"
     file1 = metadata_dir / "icon_grid_0026_R03B07_G.nc"

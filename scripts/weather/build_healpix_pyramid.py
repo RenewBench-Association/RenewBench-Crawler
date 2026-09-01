@@ -2,7 +2,7 @@
 """HEALPIX PYRAMID REGRIDDING SCRIPT.
 
 Regrid weather reanalysis sources onto a shared HEALPix pyramid and write
-them into one combined Zarr store.
+each (model_name, time_res, healpix_level) into its own Zarr store.
 """
 
 import argparse
@@ -37,6 +37,30 @@ _EXTRA_KWARGS: dict[str, dict] = {
     "barra2_c2_20min": {"model": "C2_20min"},
     "icon_dream_global": {"model": "global"},
     "icon_dream_eu": {"model": "eu"},
+}
+
+# Maps each source_name to its contract "model_name" for the regridded output
+# store. barra2_c2 and barra2_c2_20min deliberately share one ("barra2_c2")
+# -- they're the same physical model/grid, sampled at two temporal
+# resolutions, distinguished by the "1h"/"20min" subdirectory instead.
+_MODEL_NAME: dict[str, str] = {
+    "era5": "era5",
+    "barra2_r2": "barra2_r2",
+    "barra2_c2": "barra2_c2",
+    "barra2_c2_20min": "barra2_c2",
+    "icon_dream_global": "icon_dream_global",
+    "icon_dream_eu": "icon_dream_eu",
+}
+
+# Each source's temporal resolution, per the weather Zarr contract's
+# "{model_name}/{time_res}/level_{N}.zarr" output layout.
+_TIME_RES: dict[str, str] = {
+    "era5": "1h",
+    "barra2_r2": "1h",
+    "barra2_c2": "1h",
+    "barra2_c2_20min": "20min",
+    "icon_dream_global": "1h",
+    "icon_dream_eu": "1h",
 }
 
 
@@ -149,18 +173,22 @@ def main() -> None:
 
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
     cfg = load_config(source=SOURCE, overrides=overrides)
-    setup_logging(output_dir=cfg.paths.dst_zarr_store.parent)
+    setup_logging(output_dir=cfg.paths.dst_data_base_dir)
     logger.info(f"Flags for the '{SOURCE}' regrid:\n{args}")
     logger.info(f"Config for the '{SOURCE}' regrid:\n{cfg}")
 
     min_level = args.healpix_min_level or cfg.healpix_min_level
     max_level_overrides = _parse_max_level_overrides(args.healpix_max_level)
 
-    writer = HealpixZarrWriter(store_path=cfg.paths.dst_zarr_store, min_level=min_level)
+    writer = HealpixZarrWriter(
+        base_dir=cfg.paths.dst_data_base_dir, min_level=min_level
+    )
 
     for name in args.sources:
+        model_name = _MODEL_NAME[name]
+        time_res = _TIME_RES[name]
         regridder = REGRIDDER_CLASSES[name](
-            raw_dir=getattr(cfg.paths, f"{name}_raw_dir"),
+            raw_dir=cfg.paths.raw_data_base_dir,
             source_name=name,
             weights_cache_dir=cfg.paths.weights_cache_dir,
             min_level=min_level,
@@ -174,12 +202,16 @@ def main() -> None:
         )
 
         for task, pyramid in regridder.regrid():
-            writer.append(source_name=name, task=task, pyramid=pyramid)
+            writer.append(
+                model_name=model_name, time_res=time_res, task=task, pyramid=pyramid
+            )
             # Only mark done once the write above actually succeeds -- see
             # GridRegridder.mark_done()'s docstring for why this can't
             # happen inside regrid() itself.
             regridder.mark_done(task)
-            writer.emit_stac_item(source_name=name, task=task, pyramid=pyramid)
+            writer.emit_stac_item(
+                model_name=model_name, time_res=time_res, task=task, pyramid=pyramid
+            )
 
 
 if __name__ == "__main__":

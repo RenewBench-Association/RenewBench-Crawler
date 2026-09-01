@@ -1,12 +1,7 @@
 paths:
-  era5_raw_dir: /lsdf/raw/weather/era5/2025/
-  barra2_r2_raw_dir: /lsdf/raw/weather/barra2/R2/
-  barra2_c2_raw_dir: /lsdf/raw/weather/barra2/C2/
-  barra2_c2_20min_raw_dir: /lsdf/raw/weather/barra2/C2_20min/
-  icon_dream_global_raw_dir: /lsdf/raw/weather/icon_dream_global/
-  icon_dream_eu_raw_dir: /lsdf/raw/weather/icon_dream_eu/
+  raw_data_base_dir: /lsdf/raw/weather/
   weights_cache_dir: /lsdf/processed/weather/healpix/weights_cache/
-  dst_zarr_store: /lsdf/processed/weather/healpix/combined.zarr
+  dst_data_base_dir: /lsdf/processed/weather/healpix/
 healpix_min_level: 4
 healpix_max_level:
   era5: 8

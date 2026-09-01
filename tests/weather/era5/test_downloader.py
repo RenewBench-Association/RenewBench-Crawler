@@ -10,8 +10,22 @@ import numpy as np
 import pytest
 
 from rbc.weather.era5 import Era5Downloader
-from rbc.weather.era5.mappings import VARIABLE_TO_SHORT_PARAM
-from rbc.weather.utils import get_short_param
+from rbc.weather.era5.mappings import MODEL_CONFIG, VARIABLE_TO_SHORT_PARAM
+from rbc.weather.utils import get_short_param, raw_data_dir
+
+
+def _data_dir(base_dir: Path) -> Path:
+    """Return the expected ERA5 raw-data directory under base_dir.
+
+    Args:
+        base_dir (Path): Root raw-data directory.
+
+    Returns:
+        Path: Expected temporal-resolution-specific raw-data directory.
+    """
+    return raw_data_dir(
+        base_dir, MODEL_CONFIG["raw_folder"], MODEL_CONFIG["temporal_res_folder"]
+    )
 
 
 # ----------------------------------
@@ -122,8 +136,10 @@ def test_downloader_initialization(downloader: Era5Downloader, init_args: dict) 
     assert downloader.area == init_args["area"]
     assert downloader.pressure_levels == init_args["pressure_levels"]
     assert downloader.model_levels == init_args["model_levels"]
-    assert downloader.output_path == init_args["output_path"]
-    assert downloader.checkpoint_path == Path(init_args["output_path"], "status.pickle")
+    assert downloader.output_path == _data_dir(init_args["output_path"])
+    assert downloader.checkpoint_path == Path(
+        _data_dir(init_args["output_path"]), "status.pickle"
+    )
 
 
 def test_downloader_initialization_default_months(
@@ -279,7 +295,8 @@ def test_checkpoint_resume(api_credentials: dict, tmp_path: Path) -> None:
     """
     # Save a fake checkpoint file
     checkpoint = np.ones((1, 1))
-    checkpoint_path = Path(tmp_path, "status.pickle")
+    checkpoint_path = Path(_data_dir(tmp_path), "status.pickle")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
 

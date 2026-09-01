@@ -25,6 +25,7 @@ from rbc.weather.utils import (
     WeatherDownloader,
     download_file_streaming,
     get_short_param,
+    raw_data_dir,
 )
 
 
@@ -134,14 +135,16 @@ class Barra2Downloader(WeatherDownloader):
         self.temporal_res: str = self.model_config["temporal_res"]
         self.include_invariants = include_invariants
 
-        # Output path setup: append model subdirectory if not already present
-        base_output_path = Path(output_path)
-        resolved_output_path = (
-            base_output_path
-            if self.model in base_output_path.name
-            else Path(base_output_path, self.model)
+        # base_dir is the shared raw-data root
+        self.base_dir = Path(output_path)
+        resolved_output_path = raw_data_dir(
+            self.base_dir,
+            self.model_config["raw_folder"],
+            self.model_config["temporal_res_folder"],
         )
-        self.invariant_output_path = Path(resolved_output_path, "invariant")
+        self.invariant_output_path = raw_data_dir(
+            self.base_dir, self.model_config["raw_folder"], "invariant"
+        )
 
         # Build available BARRA2 codes and variable names for selected model
         self.available_codes = _get_available_codes(self.model)

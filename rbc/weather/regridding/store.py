@@ -1,6 +1,7 @@
 """STORE.
 
-Shared Zarr store writer for regridded HEALPix pyramids.
+Zarr writer for regridded HEALPix pyramids, per the weather Zarr contract
+(modeled on DKRZ's Waterpark).
 """
 
 import time
@@ -13,53 +14,66 @@ from tqdm.dask import TqdmCallback
 
 
 class HealpixZarrWriter:
-    """Owns the single shared Zarr store all sources write their pyramids into.
+    """Writes regridded HEALPix pyramids into per-(model, time_res, level) Zarr stores.
 
-    One group per (source, level): "<source_name>/level_<n>", inside one shared
-    store — not `grid_doctor.save_pyramid()`'s own default of one independent
-    store per level (confirmed in the Phase 0 spike); `save_pyramid()` is not
-    used here at all. Every write uses `consolidated=False`: confirmed by spike
-    that xarray otherwise auto-rewrites a whole-tree metadata blob on the store
-    root on every single append, regardless of zarr_format; disabling it keeps
-    each group's write scoped to itself, at the cost of directory-listing opens
-    instead of one metadata read (an acceptable tradeoff outside cloud object
-    storage).
+    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr" -- one fully
+    independent Zarr store per (model_name, time_res, level), not one shared
+    store with internal groups. Surface, pressure-level, height-level, and
+    model-level variables all coexist as differently-shaped variables within
+    the same store (distinguished by their own dimensions, e.g. [time, cell]
+    vs. [time, level, cell]), per the contract's "separation... as standard
+    in other Zarr stores" clause -- not separate stores or groups.
+
+    Every write uses `consolidated=False`: carried over from the shared-store
+    design this replaced, where it avoided a whole-tree metadata rewrite on
+    every append; less critical now that each store is independent, but kept
+    for consistency, and because Zarr itself still flags consolidated
+    metadata as not yet part of the v3 spec.
 
     Attributes:
-        store_path (Path): Root Zarr store all sources write their pyramids into.
+        base_dir (Path): Root directory the per-(model, time_res, level)
+            Zarr stores are written under.
         min_level (int): Shared coarsest HEALPix level, validated against
             every incoming pyramid.
     """
 
-    def __init__(self, store_path: Path, min_level: int) -> None:
+    def __init__(self, base_dir: Path, min_level: int) -> None:
         """Initializes the instance.
 
         Args:
-            store_path (Path): Root Zarr store path. `to_zarr` creates it (and
-                any group inside it) on first write.
+            base_dir (Path): Root directory for the per-(model, time_res,
+                level) Zarr stores. `to_zarr` creates the full nested path
+                on first write.
             min_level (int): Shared coarsest HEALPix level across sources.
         """
-        self.store_path = Path(store_path)
+        self.base_dir = Path(base_dir)
         self.min_level = min_level
 
     def append(
-        self, source_name: str, task: tuple, pyramid: dict[int, xr.Dataset]
+        self,
+        model_name: str,
+        time_res: str,
+        task: tuple,
+        pyramid: dict[int, xr.Dataset],
     ) -> None:
-        """Write or grow each level's group for one task's pyramid.
+        """Write or grow each level's store for one task's pyramid.
 
-        First write per (source, level) uses `mode="w"`; later writes append
-        along time. Not fully crash-atomic — call `GridRegridder.mark_done()`
-        only after this returns successfully.
+        First write per (model_name, time_res, level) uses `mode="w"`; later
+        writes append along time. Not fully crash-atomic — call
+        `GridRegridder.mark_done()` only after this returns successfully.
 
         Args:
-            source_name (str): Canonical source name; the top-level group name.
+            model_name (str): Contract "model_name" (e.g. "barra2_c2" --
+                shared by barra2_c2 and barra2_c2_20min, distinguished by
+                time_res instead).
+            time_res (str): "1h" or "20min".
             task (tuple): Task identifier, used only for logging/errors here.
             pyramid (dict[int, xr.Dataset]): HEALPix pyramid to write, keyed
                 by level.
 
         Raises:
             ValueError: If the pyramid is missing the shared `min_level`; if
-                an existing group's `healpix_level`/`healpix_order` don't
+                an existing store's `healpix_level`/`healpix_order` don't
                 match the incoming data; or if any incoming timestamp is
                 already present.
         """
@@ -71,111 +85,135 @@ class HealpixZarrWriter:
 
         task_start = time.time()
         for level, ds in pyramid.items():
-            group = self._group(source_name, level)
+            ds = self._normalize_dim_order(ds)
+            store_path = self._store_path(model_name, time_res, level)
             level_start = time.time()
 
-            if self._group_exists(group):
-                self._validate_consistency(group, ds)
+            if self._store_exists(store_path):
+                self._validate_consistency(store_path, ds)
                 incoming_times = set(pd.to_datetime(ds["time"].values))
-                overlap = self.already_written(source_name, level) & incoming_times
+                overlap = (
+                    self.already_written(model_name, time_res, level) & incoming_times
+                )
                 if overlap:
                     raise ValueError(
-                        f"'{source_name}' level {level}, task {task}: "
-                        f"{len(overlap)} incoming timestamp(s) already present in "
-                        f"the store (e.g. {sorted(overlap)[0]}). Refusing to "
-                        "append duplicates."
+                        f"'{store_path}', task {task}: {len(overlap)} incoming "
+                        f"timestamp(s) already present in the store (e.g. "
+                        f"{sorted(overlap)[0]}). Refusing to append duplicates."
                     )
-                logger.info(f"{group}: appending task {task}...")
-                with TqdmCallback(desc=group):
+                logger.info(f"{store_path}: appending task {task}...")
+                with TqdmCallback(desc=str(store_path)):
                     ds.to_zarr(
-                        self.store_path,
-                        group=group,
-                        mode="a",
-                        append_dim="time",
-                        consolidated=False,
+                        store_path, mode="a", append_dim="time", consolidated=False
                     )
             else:
-                logger.info(f"{group}: creating group for task {task}...")
-                with TqdmCallback(desc=group):
-                    ds.to_zarr(
-                        self.store_path, group=group, mode="w", consolidated=False
-                    )
+                logger.info(f"{store_path}: creating store for task {task}...")
+                with TqdmCallback(desc=str(store_path)):
+                    ds.to_zarr(store_path, mode="w", consolidated=False)
 
-            logger.info(f"{group}: write finished ({time.time() - level_start:.1f}s).")
+            logger.info(
+                f"{store_path}: write finished ({time.time() - level_start:.1f}s)."
+            )
 
         logger.info(
-            f"'{source_name}' task {task}: all {len(pyramid)} levels written "
-            f"({time.time() - task_start:.1f}s total)."
+            f"'{model_name}/{time_res}' task {task}: all {len(pyramid)} levels "
+            f"written ({time.time() - task_start:.1f}s total)."
         )
 
-    def already_written(self, source_name: str, level: int) -> set:
-        """Return timestamps already present in a (source, level) group.
+    def already_written(self, model_name: str, time_res: str, level: int) -> set:
+        """Return timestamps already present in a (model, time_res, level) store.
 
         Args:
-            source_name (str): Canonical source name.
+            model_name (str): Contract "model_name".
+            time_res (str): "1h" or "20min".
             level (int): HEALPix level.
 
         Returns:
             set: `pandas.Timestamp` values already written; empty if the
-                group doesn't exist yet.
+                store doesn't exist yet.
         """
-        group = self._group(source_name, level)
-        if not self._group_exists(group):
+        store_path = self._store_path(model_name, time_res, level)
+        if not self._store_exists(store_path):
             return set()
-        existing = xr.open_zarr(self.store_path, group=group, consolidated=False)
+        existing = xr.open_zarr(store_path, consolidated=False)
         return set(pd.to_datetime(existing["time"].values))
 
     def emit_stac_item(
-        self, source_name: str, task: tuple, pyramid: dict[int, xr.Dataset]
+        self,
+        model_name: str,
+        time_res: str,
+        task: tuple,
+        pyramid: dict[int, xr.Dataset],
     ) -> None:
         """No-op hook for future STAC item generation (Phase 5).
 
         Args:
-            source_name (str): Canonical source name.
+            model_name (str): Contract "model_name".
+            time_res (str): "1h" or "20min".
             task (tuple): Task identifier.
             pyramid (dict[int, xr.Dataset]): The pyramid just written.
         """
         return None
 
-    def _group(self, source_name: str, level: int) -> str:
-        """Return the group path for one (source, level) pair.
+    def _store_path(self, model_name: str, time_res: str, level: int) -> Path:
+        """Return the Zarr store path for one (model_name, time_res, level).
 
         Args:
-            source_name (str): Canonical source name.
+            model_name (str): Contract "model_name".
+            time_res (str): "1h" or "20min".
             level (int): HEALPix level.
 
         Returns:
-            str: `<source_name>/level_<level>`.
+            Path: "<base_dir>/<model_name>/<time_res>/level_<level>.zarr".
         """
-        return f"{source_name}/level_{level}"
+        return Path(self.base_dir, model_name, time_res, f"level_{level}.zarr")
 
-    def _group_exists(self, group: str) -> bool:
-        """Whether a group has already been written to the store.
+    def _normalize_dim_order(self, ds: xr.Dataset) -> xr.Dataset:
+        """Enforce the contract's dimension order: time, then a vertical dim, then cell.
+
+        Upstream regridding steps (e.g. xr.concat() prepending a new vertical
+        dimension) don't reliably produce "(time, level, cell)" order --
+        confirmed on real BARRA2 data coming out as "(level, time, cell)"
+        instead. Applies uniformly regardless of which vertical dim (level,
+        height, model_level) or none a given variable has.
 
         Args:
-            group (str): Group path, e.g. "era5/level_7".
+            ds (xr.Dataset): Dataset about to be written.
 
         Returns:
-            bool: True if the group has been written to disk.
+            xr.Dataset: Same data, with every variable's dims reordered.
         """
-        return Path(self.store_path, *group.split("/"), "zarr.json").exists()
+        return ds.transpose(
+            "time", "level", "height", "model_level", "cell", missing_dims="ignore"
+        )
 
-    def _validate_consistency(self, group: str, ds: xr.Dataset) -> None:
-        """Validate an incoming Dataset's HEALPix attrs against an existing group.
+    def _store_exists(self, store_path: Path) -> bool:
+        """Whether a store has already been written to disk.
 
         Args:
-            group (str): Existing group path.
+            store_path (Path): Path from `_store_path()`.
+
+        Returns:
+            bool: True if the store has been written to disk.
+        """
+        return Path(store_path, "zarr.json").exists()
+
+    def _validate_consistency(self, store_path: Path, ds: xr.Dataset) -> None:
+        """Validate an incoming Dataset's HEALPix attrs against an existing store.
+
+        Args:
+            store_path (Path): Path from `_store_path()`.
             ds (xr.Dataset): Incoming Dataset about to be appended.
 
         Raises:
             ValueError: If `healpix_level` or `healpix_order` don't match.
         """
-        existing = xr.open_zarr(self.store_path, group=group, consolidated=False)
+        existing = xr.open_zarr(store_path, consolidated=False)
         for attr in ("healpix_level", "healpix_order"):
             existing_value = existing.attrs.get(attr)
             new_value = ds.attrs.get(attr)
             if existing_value != new_value:
                 raise ValueError(
-                    f"'{attr}' mismatch for group '{group}': store has "
+                    f"'{attr}' mismatch for store '{store_path}': store has "
                     f"{existing_value!r}, incoming data has {new_value!r}."
                 )

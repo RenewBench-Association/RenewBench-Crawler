@@ -315,24 +315,27 @@ class RegridPaths(BaseModel):
     """Filesystem paths used by the HEALPix regridding pipeline.
 
     Attributes:
-        era5_raw_dir (Path): ERA5 raw data, already downloaded.
-        barra2_r2_raw_dir (Path): BARRA2 R2 raw data, already downloaded.
-        barra2_c2_raw_dir (Path): BARRA2 C2 raw data, already downloaded.
-        barra2_c2_20min_raw_dir (Path): BARRA2 C2_20min raw data, already downloaded.
-        icon_dream_global_raw_dir (Path): ICON-DREAM Global raw data, already downloaded.
-        icon_dream_eu_raw_dir (Path): ICON-DREAM EU raw data, already downloaded.
+        raw_data_base_dir (Path): Shared root all sources' already-downloaded
+            raw data lives under, e.g. "/lsdf/raw/weather/". Passed straight
+            through, unmodified, to every GridRegridder -- each one resolves
+            its own "<raw_data_base_dir>/<raw_folder>/<temporal_res_folder>/"
+            directory via rbc.weather.utils.raw_data_dir(), the same shared
+            convention every WeatherDownloader itself writes into (raw_folder
+            and temporal_res_folder come from that source's own MODEL_CONFIG
+            in its mappings.py). No source needs a year subdirectory -- year
+            is already embedded in each raw filename.
         weights_cache_dir (Path): Where grid-doctor's ESMF weight files are cached.
-        dst_zarr_store (Path): Root of the shared HEALPix Zarr store.
+        dst_data_base_dir (Path): Shared root the regridded HEALPix output
+            lives under. Per the weather Zarr contract, each
+            (model_name, time_res, level) combination gets its own
+            independent Zarr store at
+            "<dst_data_base_dir>/<model_name>/<time_res>/level_<N>.zarr" --
+            not one shared store with internal groups.
     """
 
-    era5_raw_dir: Path
-    barra2_r2_raw_dir: Path
-    barra2_c2_raw_dir: Path
-    barra2_c2_20min_raw_dir: Path
-    icon_dream_global_raw_dir: Path
-    icon_dream_eu_raw_dir: Path
+    raw_data_base_dir: Path
     weights_cache_dir: Path
-    dst_zarr_store: Path
+    dst_data_base_dir: Path
 
 
 class RegridHealpixConfig(BaseModel):
@@ -343,7 +346,7 @@ class RegridHealpixConfig(BaseModel):
     (`PathValidation`'s behavior for every other schema's `paths`) would mask
     a real error instead of failing fast — `GridRegridder.__init__` already
     raises `FileNotFoundError` for a missing raw_dir; `weights_cache_dir` and
-    `dst_zarr_store` are created on demand by the code that writes to them.
+    `dst_data_base_dir` are created on demand by the code that writes to them.
 
     Attributes:
         source (Literal): Name of the data source.

@@ -12,9 +12,23 @@ import requests
 from rbc.weather.barra import Barra2Downloader
 from rbc.weather.barra.mappings import (
     DEFAULT_VARIABLES,
+    MODEL_CONFIG,
     VARIABLE_TO_SHORT_PARAM,
 )
-from rbc.weather.utils import get_short_param
+from rbc.weather.utils import get_short_param, raw_data_dir
+
+
+def _r2_data_dir(base_dir: Path) -> Path:
+    """Return the R2 data directory under base_dir, per utils.raw_data_dir()'s convention.
+
+    Args:
+        base_dir (Path): Root raw-data directory shared by every BARRA2 model variant.
+
+    Returns:
+        Path: R2's own temporal-resolution-specific raw-data directory.
+    """
+    config = MODEL_CONFIG["R2"]
+    return raw_data_dir(base_dir, config["raw_folder"], config["temporal_res_folder"])
 
 
 # ----------------------------------
@@ -80,10 +94,10 @@ def test_downloader_initialization(init_args: dict) -> None:
     assert downloader.months == init_args["months"]
     assert downloader.variables == init_args["variables"]
     assert downloader.dry_run == init_args["dry_run"]
-    assert downloader.output_path == Path(init_args["output_path"], "R2")
+    assert downloader.output_path == _r2_data_dir(init_args["output_path"])
     assert downloader.output_path.exists()
     assert downloader.checkpoint_path == Path(
-        init_args["output_path"], "R2", "status.pickle"
+        _r2_data_dir(init_args["output_path"]), "status.pickle"
     )
     assert isinstance(downloader.checkpoint, dict)
     assert downloader.checkpoint == {}
@@ -102,19 +116,6 @@ def test_connectivity_check_failure(init_args: dict) -> None:
         mock_head.return_value.raise_for_status.side_effect = Exception("timeout")
         with pytest.raises(ConnectionError, match="BARRA2 endpoints are unreachable"):
             Barra2Downloader(**init_args)
-
-
-def test_downloader_initialization_pre_suffixed_output_path(init_args: dict) -> None:
-    """Test that passing an output path already ending in the model name is handled correctly.
-
-    Args:
-        init_args (dict): Initialization arguments for Barra2Downloader.
-    """
-    pre_suffixed = init_args["output_path"] / "R2"
-    init_args["output_path"] = pre_suffixed
-    downloader = Barra2Downloader(**init_args)
-    # Path should not be doubled to .../R2/R2
-    assert downloader.output_path == pre_suffixed
 
 
 @pytest.mark.parametrize(
@@ -260,7 +261,7 @@ def test_checkpoint_resume_behavior(
         exp_checkpoint (dict): Expected checkpoint state after initialization.
     """
     checkpoint = {(2020, "01", "1.5m_temperature"): 1}
-    checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
+    checkpoint_path = Path(_r2_data_dir(init_args["output_path"]), "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -522,7 +523,7 @@ def test_download_data_skips_completed(init_args: dict) -> None:
         (2020, "01", "1.5m_temperature", ""): 1,
         (2020, "01", "total_precipitation", ""): 1,
     }
-    checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
+    checkpoint_path = Path(_r2_data_dir(init_args["output_path"]), "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)
@@ -570,7 +571,7 @@ def test_download_data_skips_completed_invariant(init_args: dict) -> None:
         init_args (dict): Initialization arguments for Barra2Downloader.
     """
     checkpoint: dict = {("fx", "fx", "orography", ""): 1}
-    checkpoint_path = Path(init_args["output_path"], "R2", "status.pickle")
+    checkpoint_path = Path(_r2_data_dir(init_args["output_path"]), "status.pickle")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_path, "wb") as f:
         pickle.dump(checkpoint, f)

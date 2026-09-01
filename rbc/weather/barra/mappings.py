@@ -390,7 +390,16 @@ VARIABLE_TO_SHORT_PARAM = {
     "land_sea_mask": "sftlf",
 }
 
-# Model configs and mapping of model names to dataset info
+# Model configs and mapping of model names to dataset info.
+#
+# "raw_folder" and "temporal_res_folder" define the on-disk raw-data
+# convention shared by the downloader (writing files) and the regridder
+# (finding them): <base_dir>/<raw_folder>/<temporal_res_folder>/<file>, with
+# invariant fields under <base_dir>/<raw_folder>/invariant/ instead (see
+# data_dir()/invariant_dir()/construct_file_path() below). C2 and C2_20min
+# share one raw_folder (same physical grid/domain), distinguished only by
+# temporal_res_folder -- "1hr" is normalized to "1h" to match the rest of the
+# project's temporal-resolution folder naming (e.g. the regridded Zarr store).
 MODEL_CONFIG = {
     "R2": {
         "label": "BARRA-R2",
@@ -399,6 +408,8 @@ MODEL_CONFIG = {
         "grid": "AUS-11",
         "domain": "Australia + surrounding (88.48-207.39°E, -57.97-12.98°N)",
         "temporal_res": "1hr",
+        "raw_folder": "barra2_r2",
+        "temporal_res_folder": "1h",
         "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/1hr/catalog.html",
         "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUS-11/BOM/ERA5/historical/hres/BARRA-R2/v1",
@@ -412,6 +423,8 @@ MODEL_CONFIG = {
         "grid": "AUST-04",
         "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
         "temporal_res": "1hr",
+        "raw_folder": "barra2_c2",
+        "temporal_res_folder": "1h",
         "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/1hr/catalog.html",
         "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",
@@ -425,6 +438,8 @@ MODEL_CONFIG = {
         "grid": "AUST-04",
         "domain": "Australia only (107.02-160.90°E, -46.69--4.01°N)",
         "temporal_res": "20min",
+        "raw_folder": "barra2_c2",
+        "temporal_res_folder": "20min",
         "catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/20min/catalog.html",
         "invariant_catalog_url": "https://thredds.nci.org.au/thredds/catalog/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1/fx/catalog.html",
         "opendap_url": "https://thredds.nci.org.au/thredds/dodsC/ob53/output/reanalysis/AUST-04/BOM/ERA5/historical/hres/BARRA-C2/v1",

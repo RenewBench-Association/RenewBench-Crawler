@@ -149,6 +149,27 @@ class WeatherDownloader(ABC):
         temp_path.replace(self.checkpoint_path)
 
 
+def raw_data_dir(base_dir: Path, raw_folder: str, sub_folder: str) -> Path:
+    """Return the canonical raw-data directory for one source/model variant.
+
+    Shared by every WeatherDownloader subclass (writing files) and its
+    matching GridRegridder (finding them), so both always agree on one
+    on-disk convention: "<base_dir>/<raw_folder>/<sub_folder>/". sub_folder
+    is normally a temporal-resolution folder (e.g. "1h", "20min"), but the
+    same convention also covers non-time-indexed data via sub_folder values
+    like "invariant" (BARRA2) or "metadata" (ICON-DREAM).
+
+    Args:
+        base_dir (Path): Root raw-data directory shared by every source.
+        raw_folder (str): This source/model variant's own folder name.
+        sub_folder (str): Temporal-resolution folder, or "invariant"/"metadata".
+
+    Returns:
+        Path: "<base_dir>/<raw_folder>/<sub_folder>/".
+    """
+    return Path(base_dir, raw_folder, sub_folder)
+
+
 def get_short_param(variable: str, mapping: dict[str, str]) -> str:
     """Convert a variable name to its parameter short code using the provided mapping.
 

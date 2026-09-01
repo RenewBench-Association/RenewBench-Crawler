@@ -9,7 +9,9 @@ import cfgrib  # type: ignore[import-untyped]
 import pandas as pd
 import xarray as xr
 
+from rbc.weather.era5.mappings import MODEL_CONFIG
 from rbc.weather.regridding.base import GridRegridder
+from rbc.weather.utils import raw_data_dir
 
 # Native cfgrib variable name -> canonical name, verified against real sample
 # data and cross-referenced with rbc/weather/era5/mappings.py's own canonical
@@ -53,6 +55,22 @@ class Era5Regridder(GridRegridder):
     isn't part of ERA5's default variable set).
     """
 
+    def __init__(self, **kwargs) -> None:
+        """Initializes the instance.
+
+        Args:
+            **kwargs: Forwarded to GridRegridder.__init__.
+        """
+        super().__init__(**kwargs)
+        # Computed once here (raw_dir only exists after super().__init__()),
+        # rather than on every _load_source_chunk() call -- invariant for the
+        # lifetime of this instance.
+        self.source_dir = raw_data_dir(
+            self.raw_dir,
+            MODEL_CONFIG["raw_folder"],
+            MODEL_CONFIG["temporal_res_folder"],
+        )
+
     def _load_source_chunk(self, task: tuple) -> xr.Dataset:
         """Open and merge every single/pressure-level file for one task.
 
@@ -77,22 +95,35 @@ class Era5Regridder(GridRegridder):
             xr.Dataset: Merged dataset for this task, in native variable names.
         """
         year, month = task
-        files = sorted(self.raw_dir.glob(f"era5_{year}_{month}_sl_*.grib")) + sorted(
-            self.raw_dir.glob(f"era5_{year}_{month}_pl_*.grib")
+        files = sorted(self.source_dir.glob(f"era5_{year}_{month}_sl_*.grib")) + sorted(
+            self.source_dir.glob(f"era5_{year}_{month}_pl_*.grib")
         )
-        print(self.raw_dir)
-        print(files)
         datasets = [
             sub_ds
             for f in files
             for sub_ds in (
                 self._open_single_level(f)
                 if "_sl_" in f.name
-                else [xr.open_dataset(f, engine="cfgrib", chunks={})]
+                else [self._open_pressure_level(f)]
             )
         ]
         merged = xr.merge(datasets)
         return self._trim_to_month(merged, year, month)
+
+    def _open_pressure_level(self, path: Path) -> xr.Dataset:
+        """Open a pressure-level file, renaming its level dim to match the contract.
+
+        cfgrib names this dimension "isobaricInhPa"; the weather Zarr contract
+        uses "level" uniformly for pressure-level variables across sources.
+
+        Args:
+            path (Path): Path to the pressure-level .grib file.
+
+        Returns:
+            xr.Dataset: Opened dataset with "isobaricInhPa" renamed to "level".
+        """
+        ds = xr.open_dataset(path, engine="cfgrib", chunks={})
+        return ds.rename({"isobaricInhPa": "level"})
 
     def _open_single_level(self, path: Path) -> list[xr.Dataset]:
         """Open a single-level file's hypercubes, flattening any (time, step) one.

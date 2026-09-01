@@ -12,8 +12,24 @@ import xarray as xr
 from rbc.weather.era5.mappings import (
     ALL_PRESSURE_LEVEL_VARIABLES,
     ALL_SINGLE_LEVEL_VARIABLES,
+    MODEL_CONFIG,
 )
 from rbc.weather.regridding.era5 import VARIABLE_MAPPING, Era5Regridder
+from rbc.weather.utils import raw_data_dir
+
+
+def _source_dir(raw_dir: Path) -> Path:
+    """Return the expected ERA5 raw-data directory under raw_dir.
+
+    Args:
+        raw_dir (Path): Root raw-data directory (shared base).
+
+    Returns:
+        Path: Expected temporal-resolution-specific raw-data directory.
+    """
+    return raw_data_dir(
+        raw_dir, MODEL_CONFIG["raw_folder"], MODEL_CONFIG["temporal_res_folder"]
+    )
 
 
 # ----------------------------------
@@ -128,6 +144,41 @@ class TestOpenSingleLevel:
 
 
 # ----------------------------------
+# Era5Regridder._open_pressure_level
+# ----------------------------------
+class TestOpenPressureLevel:
+    """Tests for Era5Regridder._open_pressure_level()."""
+
+    def test_renames_isobaricinhpa_to_level(self, base_args: dict) -> None:
+        """The "isobaricInhPa" dim cfgrib gives is renamed to "level".
+
+        Per the weather Zarr contract's naming convention for pressure-level
+        variables.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        rg = Era5Regridder(**base_args)
+
+        pl_ds = xr.Dataset(
+            {"t": (("isobaricInhPa", "time"), [[1.0], [2.0]])},
+            coords={"isobaricInhPa": [1000.0, 950.0], "time": [0]},
+        )
+
+        with patch(
+            "rbc.weather.regridding.era5.xr.open_dataset", return_value=pl_ds
+        ) as mock_open:
+            result = rg._open_pressure_level(Path("fake_pl.grib"))
+
+        mock_open.assert_called_once_with(
+            Path("fake_pl.grib"), engine="cfgrib", chunks={}
+        )
+        assert "level" in result.dims
+        assert "isobaricInhPa" not in result.dims
+        assert list(result["level"].values) == [1000.0, 950.0]
+
+
+# ----------------------------------
 # Era5Regridder._load_source_chunk
 # ----------------------------------
 class TestLoadSourceChunk:
@@ -139,9 +190,10 @@ class TestLoadSourceChunk:
         Args:
             base_args (dict): Minimal valid keyword arguments for Era5Regridder.
         """
-        raw_dir = base_args["raw_dir"]
-        sl_file = Path(raw_dir, "era5_2020_04_sl_2t.grib")
-        pl_file = Path(raw_dir, "era5_2020_04_pl_1000_t.grib")
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        sl_file = Path(source_dir, "era5_2020_04_sl_2t.grib")
+        pl_file = Path(source_dir, "era5_2020_04_pl_1000_t.grib")
         sl_file.touch()
         pl_file.touch()
 
@@ -149,7 +201,10 @@ class TestLoadSourceChunk:
 
         time = pd.to_datetime(["2020-04-01T00:00", "2020-04-01T01:00"])
         sl_ds = xr.Dataset({"t2m": ("time", [1.0, 2.0])}, coords={"time": time})
-        pl_ds = xr.Dataset({"z": ("time", [3.0, 4.0])}, coords={"time": time})
+        pl_ds = xr.Dataset(
+            {"z": (("isobaricInhPa", "time"), [[3.0, 4.0]])},
+            coords={"time": time, "isobaricInhPa": [1000.0]},
+        )
 
         with (
             patch.object(rg, "_open_single_level", return_value=[sl_ds]) as mock_sl,
@@ -162,6 +217,8 @@ class TestLoadSourceChunk:
         mock_sl.assert_called_once_with(sl_file)
         mock_pl.assert_called_once_with(pl_file, engine="cfgrib", chunks={})
         assert set(result.data_vars) == {"t2m", "z"}
+        assert "level" in result["z"].dims
+        assert "isobaricInhPa" not in result.dims
         assert list(result["time"].values) == list(time)
 
     def test_ignores_model_level_files(self, base_args: dict) -> None:
@@ -170,10 +227,11 @@ class TestLoadSourceChunk:
         Args:
             base_args (dict): Minimal valid keyword arguments for Era5Regridder.
         """
-        raw_dir = base_args["raw_dir"]
-        sl_file = Path(raw_dir, "era5_2020_04_sl_2t.grib")
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        sl_file = Path(source_dir, "era5_2020_04_sl_2t.grib")
         sl_file.touch()
-        Path(raw_dir, "era5_2020_04_ml_133_q.grib").touch()
+        Path(source_dir, "era5_2020_04_ml_133_q.grib").touch()
 
         rg = Era5Regridder(**base_args)
 

@@ -20,6 +20,7 @@ from rbc.weather.utils import (
     WeatherDownloader,
     download_file_streaming,
     get_short_param,
+    raw_data_dir,
 )
 
 
@@ -104,12 +105,12 @@ class IconDreamDownloader(WeatherDownloader):
         self.model = _normalize_model(model)
         self.model_config = _get_model_config(self.model)
 
-        # Output path setup: append model subdirectory if not already present
-        base_output_path = Path(output_path)
-        resolved_output_path = (
-            base_output_path
-            if self.model in base_output_path.name
-            else Path(base_output_path, self.model)
+        # base_dir is the shared raw-data root
+        self.base_dir = Path(output_path)
+        resolved_output_path = raw_data_dir(
+            self.base_dir,
+            self.model_config["raw_folder"],
+            self.model_config["temporal_res_folder"],
         )
 
         # Discover available data from DWD before calling super().__init__ so that
@@ -180,8 +181,8 @@ class IconDreamDownloader(WeatherDownloader):
         """
         dwd_code = get_short_param(variable, VARIABLE_TO_SHORT_PARAM)
         filename = f"{self.model_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
-        url = f"{self.model_config['base_url']}/{dwd_code}/{filename}"
         output_file = Path(self.output_path, filename)
+        url = f"{self.model_config['base_url']}/{dwd_code}/{filename}"
         description = f"{year}-{month} ({variable})"
 
         if output_file.exists():
@@ -192,7 +193,7 @@ class IconDreamDownloader(WeatherDownloader):
             logger.info(f"{description}: DRY RUN - Would download from {url}")
             return 1
 
-        logger.info(f"{description}: Downloading {filename}...")
+        logger.info(f"{description}: Downloading {output_file.name}...")
         return download_file_streaming(
             url=url, output_file=output_file, description=description
         )
@@ -210,7 +211,9 @@ class IconDreamDownloader(WeatherDownloader):
         if dry_run is None:
             dry_run = self.dry_run
 
-        metadata_dir = Path(self.output_path, "metadata")
+        metadata_dir = raw_data_dir(
+            self.base_dir, self.model_config["raw_folder"], "metadata"
+        )
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
         metadata_files = self.model_config["metadata_files"]

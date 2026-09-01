@@ -23,7 +23,7 @@ from rbc.weather.era5.mappings import (
     MODEL_CONFIG,
     VARIABLE_TO_SHORT_PARAM,
 )
-from rbc.weather.utils import WeatherDownloader, get_short_param
+from rbc.weather.utils import WeatherDownloader, get_short_param, raw_data_dir
 
 
 class Era5Downloader(WeatherDownloader):
@@ -116,8 +116,16 @@ class Era5Downloader(WeatherDownloader):
             logger.error("Initialization ERA5 connectivity check failed!")
             raise ConnectionError(f"CDS API endpoint unreachable: {e}")
 
+        # base_dir is the shared raw-data root
+        self.base_dir = Path(output_path)
+        resolved_output_path = raw_data_dir(
+            self.base_dir,
+            self.model_config["raw_folder"],
+            self.model_config["temporal_res_folder"],
+        )
+
         super().__init__(
-            output_path=output_path,
+            output_path=resolved_output_path,
             years=years,
             months=months,
             variables=resolved_variables,

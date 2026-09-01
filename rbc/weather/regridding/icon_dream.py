@@ -13,16 +13,16 @@ from rbc.weather.icon_dream.downloader import _get_model_config, _normalize_mode
 from rbc.weather.icon_dream.mappings import VARIABLE_TO_SHORT_PARAM
 from rbc.weather.regridding.base import GridRegridder
 from rbc.weather.regridding.regional import build_regional_healpix_pyramid
+from rbc.weather.utils import raw_data_dir
 
-# Reverse of icon_dream/mappings.py's own short-code -> canonical mapping. Only
-# entries confirmed against real sample data (T, T_2M) are included -- cfgrib's
-# own variable naming diverges from DWD's short codes (like ERA5), so each
-# additional entry needs the same kind of verification before being added.
+# Reverse of icon_dream/mappings.py's own short-code -> canonical mapping.
+# cfgrib's own decoded variable name diverges from DWD's short code (e.g.
+# "T_2M" decodes as "t2m"), so this can't be used to rename by matching
+# against cfgrib's name directly -- _load_source_chunk() instead renames each
+# file's one variable to its DWD code (read from the filename, which the
+# downloader itself embeds verbatim) before this mapping is applied, so every
+# entry here is usable without per-variable real-data verification.
 _SHORT_TO_CANONICAL = {v: k for k, v in VARIABLE_TO_SHORT_PARAM.items()}
-VARIABLE_MAPPING = {
-    "t2m": _SHORT_TO_CANONICAL["T_2M"],
-    "t": _SHORT_TO_CANONICAL["T"],
-}
 
 
 class IconDreamRegridder(GridRegridder):
@@ -52,6 +52,15 @@ class IconDreamRegridder(GridRegridder):
         self.model = _normalize_model(model)
         self.model_config = _get_model_config(self.model)
         super().__init__(**kwargs)
+        # Computed once here (raw_dir only exists after super().__init__()),
+        # rather than on every _load_source_chunk()/_grid_metadata_path()
+        # call -- invariant for the lifetime of this instance.
+        self.model_dir = Path(self.raw_dir, self.model_config["raw_folder"])
+        self.source_dir = raw_data_dir(
+            self.raw_dir,
+            self.model_config["raw_folder"],
+            self.model_config["temporal_res_folder"],
+        )
 
     def _load_source_chunk(self, task: tuple) -> xr.Dataset:
         """Open, flatten, and merge every raw ICON-DREAM file for one task.
@@ -63,19 +72,50 @@ class IconDreamRegridder(GridRegridder):
         past calendar-month boundaries the same way ERA5's do, so the merged
         result is trimmed to the exact month.
 
+        Each file's one variable is renamed to its DWD short code, read
+        directly from the filename (the downloader's own naming embeds it
+        verbatim: "{label}_{year}{month}_{dwd_code}_hourly.grb") rather than
+        from cfgrib's decoded variable name, which diverges from it (e.g.
+        "T_2M" decodes as "t2m") -- this is what lets _variable_mapping()
+        reuse icon_dream/mappings.py's own short-code table directly.
+
+        When self.variables is set, each requested canonical variable's exact
+        file path is built directly from its DWD code -- the same filename
+        the downloader itself writes -- rather than globbing and opening
+        every file in the month, since ICON-DREAM is genuinely one variable
+        per file with no level-file-splitting. This avoids loading
+        unrequested (and possibly large, e.g. model-level) files at all.
+        With no variables filter, every file for the month is globbed and
+        opened.
+
         Args:
             task (tuple): (year, month) task identifier.
 
         Returns:
-            xr.Dataset: Merged dataset for this task, in native variable names,
-                with the "values" dim renamed to "cell".
+            xr.Dataset: Merged dataset for this task, in DWD short-code
+                variable names, with the "values" dim renamed to "cell".
         """
         year, month = task
         label = self.model_config["label"]
-        files = sorted(self.raw_dir.glob(f"{label}_{year}{month}_*_hourly.grb"))
+        prefix = f"{label}_{year}{month}_"
+        suffix = "_hourly.grb"
+
+        if self.variables:
+            codes = sorted(
+                {
+                    VARIABLE_TO_SHORT_PARAM[v]
+                    for v in self.variables
+                    if v in VARIABLE_TO_SHORT_PARAM
+                }
+            )
+            files = [Path(self.source_dir, f"{prefix}{code}{suffix}") for code in codes]
+            files = [f for f in files if f.exists()]
+        else:
+            files = sorted(self.source_dir.glob(f"{prefix}*{suffix}"))
 
         datasets = []
         for f in files:
+            dwd_code = f.name.removeprefix(prefix).removesuffix(suffix)
             for ds in cfgrib.open_datasets(f, chunks={}):
                 if "step" in ds.dims:
                     ds = (
@@ -84,7 +124,17 @@ class IconDreamRegridder(GridRegridder):
                         .drop_vars(["time", "step", "_flat"])
                         .rename({"valid_time": "time"})
                     )
-                datasets.append(ds.rename_dims({"values": "cell"}))
+                (var_name,) = ds.data_vars
+                # "generalVerticalLayer" only appears on model-level files
+                # (e.g. "T", not "T_2M") -- rename() would raise if asked to
+                # rename a name absent from a given file, hence the check.
+                # Unlike "values" (a bare dim, no coordinate), it's also a
+                # coordinate variable, so rename() is used (not rename_dims())
+                # to keep the dimension and its coordinate values in sync.
+                renames: dict[str, str] = {str(var_name): dwd_code, "values": "cell"}
+                if "generalVerticalLayer" in ds.dims:
+                    renames["generalVerticalLayer"] = "model_level"
+                datasets.append(ds.rename(renames))
 
         merged = xr.merge(datasets)
         return self._trim_to_month(merged, year, month)
@@ -114,7 +164,7 @@ class IconDreamRegridder(GridRegridder):
         grid_file = next(
             f for f in self.model_config["metadata_files"] if "grfinfo" not in f
         )
-        return Path(self.raw_dir, "metadata", grid_file)
+        return Path(self.model_dir, "metadata", grid_file)
 
     def _regrid_kwargs(self) -> dict:
         """ICON-DREAM is unstructured -- grid-doctor needs this told explicitly.
@@ -144,6 +194,7 @@ class IconDreamRegridder(GridRegridder):
         """Return the native-to-canonical variable name mapping for ICON-DREAM.
 
         Returns:
-            dict[str, str]: Mapping of cfgrib variable names to canonical names.
+            dict[str, str]: Mapping of DWD short codes to canonical names
+                (icon_dream/mappings.py's own table, reversed).
         """
-        return VARIABLE_MAPPING
+        return _SHORT_TO_CANONICAL

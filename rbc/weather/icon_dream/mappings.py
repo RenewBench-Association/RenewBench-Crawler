@@ -106,6 +106,8 @@ MODEL_CONFIG = {
         "dataset": "ICON-DREAM-Global (DWD Open Data)",
         "resolution": "~13km (icosahedral grid)",
         "base_url": "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-Global/hourly",
+        "raw_folder": "icon_dream_global",
+        "temporal_res_folder": "1h",
         "metadata_files": {
             "icon_grid_0026_R03B07_G.nc": (
                 "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0026_R03B07_G.nc",
@@ -123,6 +125,8 @@ MODEL_CONFIG = {
         "dataset": "ICON-DREAM-EU (DWD Open Data)",
         "resolution": "~6.5km (icosahedral grid)",
         "base_url": "https://opendata.dwd.de/climate_environment/REA/ICON-DREAM-EU/hourly",
+        "raw_folder": "icon_dream_eu",
+        "temporal_res_folder": "1h",
         "metadata_files": {
             "icon_grid_0027_R03B08_N02.nc": (
                 "http://icon-downloads.mpimet.mpg.de/grids/public/edzw/icon_grid_0027_R03B08_N02.nc",

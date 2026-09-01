@@ -717,6 +717,8 @@ class _MARSConfig(TypedDict):
 class _ModelConfig(TypedDict):
     url: str
     start_year: str
+    raw_folder: str
+    temporal_res_folder: str
     MARS: _MARSConfig
     CDS: _CDSConfig
 
@@ -724,6 +726,10 @@ class _ModelConfig(TypedDict):
 MODEL_CONFIG: _ModelConfig = {
     "url": "https://cds.climate.copernicus.eu/api",
     "start_year": "1940",
+    # Raw-data folder convention shared by the downloader (writing files) and
+    # the regridder (finding them) -- see rbc.weather.utils.raw_data_dir().
+    "raw_folder": "era5",
+    "temporal_res_folder": "1h",
     "MARS": {
         "dataset": "reanalysis-era5-complete",
         "mars_class": "ea",

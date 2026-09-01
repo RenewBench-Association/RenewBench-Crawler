@@ -6,17 +6,18 @@ HEALPix regridder for BARRA2 reanalysis data (regional lat-lon, R2/C2/C2_20min).
 import re
 from pathlib import Path
 
+import numpy as np
 import xarray as xr
 
 from rbc.weather.barra.mappings import MODEL_CONFIG, VARIABLE_TO_SHORT_PARAM
 from rbc.weather.regridding.base import GridRegridder
 from rbc.weather.regridding.regional import build_regional_healpix_pyramid
+from rbc.weather.utils import raw_data_dir
 
-# Reverse of barra/mappings.py's own short-code -> canonical mapping. BARRA2's
-# raw NetCDF files carry the short code directly as their variable name
-# (confirmed: "..._tas.nc" contains a variable literally named "tas") --
-# unlike ERA5, where cfgrib's own naming diverges from CDS's short codes, so
-# no hand-built mapping is needed here.
+# Reverse of barra/mappings.py's own short-code -> canonical mapping. Usable
+# directly (no hand-verification needed, unlike ICON-DREAM) since BARRA2's
+# short code is read from each filename and used to rename the file's one
+# variable in _load_source_chunk(), matching this table's keys exactly.
 _SHORT_TO_CANONICAL = {v: k for k, v in VARIABLE_TO_SHORT_PARAM.items()}
 
 # Height-level variables get their own consolidated canonical name (a
@@ -68,8 +69,17 @@ class Barra2Regridder(GridRegridder):
             **kwargs: Forwarded to GridRegridder.__init__.
         """
         self.model = model
-        self.temporal_res = MODEL_CONFIG[model]["temporal_res"]
+        self.model_config = MODEL_CONFIG[model]
+        self.temporal_res = self.model_config["temporal_res"]
         super().__init__(**kwargs)
+        # Computed once here (raw_dir only exists after super().__init__()),
+        # rather than on every _load_source_chunk() call -- invariant for the
+        # lifetime of this instance.
+        self.source_dir = raw_data_dir(
+            self.raw_dir,
+            self.model_config["raw_folder"],
+            self.model_config["temporal_res_folder"],
+        )
 
     def _load_source_chunk(self, task: tuple) -> xr.Dataset:
         """Open, consolidate, and merge every raw BARRA2 file for one task.
@@ -77,10 +87,11 @@ class Barra2Regridder(GridRegridder):
         Pressure-level and height-level files each carry one variable per
         level (e.g. "..._ta950.nc" contains just "ta950") -- confirmed on
         real sample data. Both are consolidated into one stacked variable
-        per base code (plev/height dims respectively) before merging with
-        single-level variables. Named "<base>_plev"/"<base>_height" during
-        consolidation so _variable_mapping() can map pressure- and
-        height-level variants of the same base code (e.g. "ta") to distinct
+        per base code (level/height dims respectively, per the weather Zarr
+        contract's naming) before merging with single-level variables. Named
+        "<base>_plev"/"<base>_height" during consolidation so
+        _variable_mapping() can map pressure- and height-level variants of
+        the same base code (e.g. "ta") to distinct
         canonical names, rather than colliding under one name.
 
         Args:
@@ -91,17 +102,26 @@ class Barra2Regridder(GridRegridder):
                 (disambiguated) variable names.
         """
         year, month = task
-        pattern = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_*.nc"
-        files = sorted(self.raw_dir.glob(pattern))
+        prefix = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_"
+        suffix = ".nc"
+        files = sorted(self.source_dir.glob(f"{prefix}*{suffix}"))
 
         single_level = []
         pressure_level: dict[str, list[tuple[int, xr.DataArray]]] = {}
         height_level: dict[str, list[tuple[int, xr.DataArray]]] = {}
 
         for f in files:
+            # The short code is read from the filename (matching the wildcard
+            # in the glob pattern above) and used to rename the file's one
+            # variable -- BARRA2's content name always matches this already
+            # (confirmed, unlike ICON-DREAM), but sourcing identity from the
+            # filename consistently, rather than file contents, keeps both
+            # regridders on the same pattern.
+            code = f.name.removeprefix(prefix).removesuffix(suffix)
             ds = xr.open_dataset(f, chunks={})
             (var_name,) = ds.data_vars
-            match = _LEVEL_CODE_RE.match(str(var_name))
+            ds = ds.rename({str(var_name): code})
+            match = _LEVEL_CODE_RE.match(code)
             if match is None:
                 single_level.append(ds)
                 continue
@@ -119,20 +139,31 @@ class Barra2Regridder(GridRegridder):
                 continue
             level = int(level_str)
             target = height_level if is_height else pressure_level
-            target.setdefault(base, []).append((level, ds[var_name]))
+            target.setdefault(base, []).append((level, ds[code]))
 
+        # Level coordinate values are cast to float64 to match the dtype raw
+        # source files themselves use for physical coordinates (confirmed
+        # against real ERA5/BARRA2 data: lat/lon and ERA5's own pressure-level
+        # coordinate are all float64 natively) -- these would otherwise come
+        # out int64, since they're built here from plain Python ints.
         merged_vars: dict[str, xr.DataArray] = {}
         for base, level_das in pressure_level.items():
             level_das.sort(key=lambda pair: pair[0], reverse=True)
             levels, das = zip(*level_das)
             merged_vars[f"{base}_plev"] = xr.concat(
-                das, dim=xr.DataArray(list(levels), dims="plev", name="plev")
+                das,
+                dim=xr.DataArray(
+                    np.asarray(levels, dtype=np.float64), dims="level", name="level"
+                ),
             )
         for base, level_das in height_level.items():
             level_das.sort(key=lambda pair: pair[0])
             levels, das = zip(*level_das)
             merged_vars[f"{base}_height"] = xr.concat(
-                das, dim=xr.DataArray(list(levels), dims="height", name="height")
+                das,
+                dim=xr.DataArray(
+                    np.asarray(levels, dtype=np.float64), dims="height", name="height"
+                ),
             )
 
         return xr.merge([*single_level, xr.Dataset(merged_vars)], compat="no_conflicts")

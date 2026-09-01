@@ -8,7 +8,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from rbc.weather.barra.mappings import MODEL_CONFIG
 from rbc.weather.regridding.barra2 import Barra2Regridder
+from rbc.weather.utils import raw_data_dir
 
 
 # ----------------------------------
@@ -38,17 +40,30 @@ def base_args(tmp_path: Path) -> dict:
     }
 
 
-def _write_var_file(raw_dir: Path, filename: str, var_name: str, value: float) -> None:
+def _write_var_file(
+    raw_dir: Path, filename: str, var_name: str, value: float, model: str = "C2"
+) -> None:
     """Write a minimal single-variable NetCDF file, matching real BARRA2 layout.
 
+    Writes under raw_data_dir(raw_dir, ...) -- utils.py's shared convention,
+    the same one the regridder itself resolves from raw_dir; no year
+    subdirectory, since year is already embedded in the filename.
+
     Args:
-        raw_dir (Path): Directory to write into.
+        raw_dir (Path): Regridder's raw_dir (base dir shared by every model
+            variant).
         filename (str): File name (without directory).
         var_name (str): The single data variable's name.
         value (float): A scalar value to fill the variable with.
+        model (str): BARRA2 model variant. Defaults to "C2".
     """
+    config = MODEL_CONFIG[model]
+    source_dir = raw_data_dir(
+        raw_dir, config["raw_folder"], config["temporal_res_folder"]
+    )
+    source_dir.mkdir(parents=True, exist_ok=True)
     ds = xr.Dataset({var_name: (("lat", "lon"), [[value]])})
-    ds.to_netcdf(Path(raw_dir, filename))
+    ds.to_netcdf(Path(source_dir, filename))
 
 
 # ----------------------------------
@@ -79,6 +94,8 @@ class TestLoadSourceChunk:
     def test_consolidates_pressure_level_files(self, base_args: dict) -> None:
         """Same-quantity pressure-level files stack into "ta_plev", descending.
 
+        Uses a "level" dim, per the weather Zarr contract's naming convention.
+
         Args:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
         """
@@ -91,7 +108,9 @@ class TestLoadSourceChunk:
         result = rg._load_source_chunk((2025, "01"))
 
         assert "ta_plev" in result.data_vars
-        assert list(result["plev"].values) == [1000, 975, 950]
+        assert "level" in result["ta_plev"].dims
+        assert list(result["level"].values) == [1000.0, 975.0, 950.0]
+        assert result["level"].dtype == np.float64
         np.testing.assert_allclose(result["ta_plev"].values.squeeze(), [1.0, 3.0, 2.0])
 
     def test_consolidates_height_level_files(self, base_args: dict) -> None:
@@ -108,7 +127,8 @@ class TestLoadSourceChunk:
         result = rg._load_source_chunk((2025, "01"))
 
         assert "ta_height" in result.data_vars
-        assert list(result["height"].values) == [50, 100]
+        assert list(result["height"].values) == [50.0, 100.0]
+        assert result["height"].dtype == np.float64
         np.testing.assert_allclose(result["ta_height"].values.squeeze(), [10.0, 20.0])
 
     def test_single_level_file_passes_through_unchanged(self, base_args: dict) -> None:
