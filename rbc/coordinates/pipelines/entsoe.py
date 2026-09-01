@@ -322,13 +322,17 @@ class EntsoePipeline(BasePipeline):
             base = " ".join(tokens).strip()
             return base or None
 
-        long_name_key = df[WCODE_LONGNAME].map(_plant_base_key)
-        long_name_key = long_name_key.map(lambda k: f"long_name:{k}" if k else None)
+        long_name_key = df[WCODE_LONGNAME].map(
+            lambda v: f"long_name:{k}" if (k := _plant_base_key(v)) else None
+        )
 
         # OPTION 3: group by the shared alphabetic prefix of the official EIC display name
-        display_prefix = df[WCODE_DISPLAYNAME].map(eic.extract_prefix)
-        display_prefix = display_prefix.map(
-            lambda p: f"display_prefix:{p}" if len(p) >= 3 else None
+        display_prefix = df[WCODE_DISPLAYNAME].map(
+            lambda v: (
+                f"display_prefix:{k}"
+                if (k := normalize_name(eic.extract_prefix(v))) and len(k) >= 3
+                else None
+            )
         )
 
         return (

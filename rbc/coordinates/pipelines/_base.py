@@ -510,7 +510,7 @@ class BasePipeline:
         return df
 
     def _sibling_fallback_core(
-        self, df: pd.DataFrame, plant_group_key: pd.Series
+        self, df: pd.DataFrame, plant_group_keys: pd.Series
     ) -> pd.DataFrame:
         """FALLBACK STEP HELPER --- Shared sibling-unit fallback (via prev-derived group key).
 
@@ -521,7 +521,7 @@ class BasePipeline:
 
         Args:
             df (pd.DataFrame): The working dataframe.
-            plant_group_key (pd.Series): The previously-derived plant group key.
+            plant_group_keys (pd.Series): The previously-derived plant group keys.
 
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with sibling matches).
@@ -532,13 +532,15 @@ class BasePipeline:
 
         interim_lat, interim_lon = self._interim_coords(df)
 
-        has_group_key = plant_group_key.notna()
+        has_group_key = plant_group_keys.map(
+            lambda k: isinstance(k, str) and bool(k.strip())
+        )
         already_matched = interim_lat.notna()
 
         sibling_lookup = (
             pd.DataFrame(
                 {
-                    "_key": plant_group_key[already_matched & has_group_key],
+                    "_key": plant_group_keys[already_matched & has_group_key],
                     "_lat": interim_lat[already_matched & has_group_key],
                     "_lon": interim_lon[already_matched & has_group_key],
                     "_name": df.loc[
@@ -553,7 +555,7 @@ class BasePipeline:
 
         needs_sibling = ~already_matched & has_group_key
         for idx in df.index[needs_sibling]:
-            key = plant_group_key.at[idx]
+            key = plant_group_keys.at[idx]
             if key in sibling_lookup.index:
                 sib = sibling_lookup.loc[key]
                 df.at[idx, "sibling.lat"] = sib["_lat"]
