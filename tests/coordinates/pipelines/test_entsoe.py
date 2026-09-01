@@ -187,9 +187,7 @@ class TestEntsoePipelineSteps:
 class TestEntsoePipelineHelpers:
     """Tests for EntsoePipeline's helper methods."""
 
-    def test_derive_plant_group_key_eic_groups_siblings(
-        self, entsoe_pipeline: EntsoePipeline
-    ) -> None:
+    def test_derive_plant_group_key_eic(self, entsoe_pipeline: EntsoePipeline) -> None:
         """Happy path: units sharing a resolved parent EIC get the same group key.
 
         Args:

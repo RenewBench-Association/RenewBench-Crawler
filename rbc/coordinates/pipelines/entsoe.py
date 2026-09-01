@@ -301,7 +301,7 @@ class EntsoePipeline(BasePipeline):
         )
 
         # OPTION 2: use EGE's own extractable long name key
-        def _plant_base_key(long_name: str | None) -> str | None:
+        def _base_key(long_name: str | None) -> str | None:
             """Derive the base key from the official EIC long name with suffix stripped.
 
             Example: "Balti G09" / "Balti G10" / "Balti G11" -> "balti"
@@ -323,7 +323,7 @@ class EntsoePipeline(BasePipeline):
             return base or None
 
         long_name_key = df[WCODE_LONGNAME].map(
-            lambda v: f"long_name:{k}" if (k := _plant_base_key(v)) else None
+            lambda v: f"long_name:{k}" if (k := _base_key(v)) else None
         )
 
         # OPTION 3: group by the shared alphabetic prefix of the official EIC display name

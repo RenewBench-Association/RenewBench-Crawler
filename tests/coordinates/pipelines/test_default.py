@@ -165,9 +165,7 @@ class TestDefaultPipelineSteps:
 class TestDefaultPipelineHelpers:
     """Tests for DefaultPipeline's helper methods."""
 
-    def test_derive_plant_group_key_name_groups_siblings(
-        self, eia_pipeline: DefaultPipeline
-    ) -> None:
+    def test_derive_plant_group_key_name(self, eia_pipeline: DefaultPipeline) -> None:
         """Happy path: units sharing a base name get the same group key, others don't.
 
         Args:
@@ -187,10 +185,22 @@ class TestDefaultPipelineHelpers:
         assert keys.iloc[2] != keys.iloc[0]  # unrelated plant -> different key
         assert keys.iloc[0] is not None and str(keys.iloc[0]).startswith("name_base:")
 
-    def test_sibling_fallback_core_inherits_coords_from_matched_sibling(
-        self, eia_pipeline: DefaultPipeline
+    @pytest.mark.parametrize("name", ["Unit 1", "Plant Q1"])
+    def test_derive_plant_group_key_name_all_generic_is_none(
+        self, eia_pipeline: DefaultPipeline, name: str
     ) -> None:
-        """Happy path for the shared sibling-fallback machinery, independent of key strategy.
+        """Failure path: a name with no discriminative tokens has no base key.
+
+        Args:
+            eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
+            name (str): A name without any discriminative tokens in it.
+        """
+        df = pd.DataFrame({"sysop.respondent-name": [name]})
+        keys = eia_pipeline._derive_plant_group_key_name(df)
+        assert keys.iloc[0] is None
+
+    def test_sibling_fallback_core(self, eia_pipeline: DefaultPipeline) -> None:
+        """Happy path: Shared sibling-fallback works for Default independent of key strategy.
 
         Args:
             eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
@@ -213,32 +223,3 @@ class TestDefaultPipelineHelpers:
         assert pd.isna(
             result.loc[0, "sibling.lat"]
         )  # already matched, no fallback needed
-
-    def test_base_name_key_collapses_sibling_units(
-        self, eia_pipeline: DefaultPipeline
-    ) -> None:
-        """Happy path: units differing only by a unit designator share one base key.
-
-        Args:
-            eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
-        """
-        assert eia_pipeline.base_name_key(
-            "Plant X Unit 1"
-        ) == eia_pipeline.base_name_key("Plant X Unit 2")
-
-    def test_base_name_key_all_generic_returns_none(
-        self, eia_pipeline: DefaultPipeline
-    ) -> None:
-        """Failure path: a name with no discriminative tokens has no base key.
-
-        Every weighting rule that can classify a token DEMOTE_WEIGHT (vocabulary
-        membership, or the bare-1-2-letter/1-3-digit designator pattern)
-        guarantees any surviving FULL_WEIGHT token is already >=3 chars, so
-        an explicit length guard on the joined key would be unreachable -- this
-        case (zero survivors) is the only way to end up with no usable key.
-
-        Args:
-            eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
-        """
-        assert eia_pipeline.base_name_key("Unit 1") is None
-        assert eia_pipeline.base_name_key("Q1") is None

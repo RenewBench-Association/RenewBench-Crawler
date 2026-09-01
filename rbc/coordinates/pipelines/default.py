@@ -7,7 +7,6 @@ import pandas as pd
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.pipelines._base import BasePipeline
-from rbc.coordinates.utils.tokenizer import FULL_WEIGHT
 from rbc.coordinates.utils.values import strip_str
 
 
@@ -79,8 +78,8 @@ class DefaultPipeline(BasePipeline):
     def _derive_plant_group_key_name(self, df: pd.DataFrame) -> pd.Series:
         """Find name-based sibling-unit grouping key for SysOps with no EIC codes.
 
-        Reduces each unit's name to its discriminative tokens via base_name_key,
-        so e.g. "Plant X Unit 1" and "Plant X Unit 2" group together.
+        Reduces each unit's name to its discriminative tokens, so e.g. "Plant X Unit 1" and
+        "Plant X Unit 2" group together.
         Known, accepted limitation: two genuinely different plants that reduce to the same
         base name will incorrectly group (if there is no unique per-plant ID to fall back on).
 
@@ -94,30 +93,30 @@ class DefaultPipeline(BasePipeline):
             pd.Series: The derived EGE group key name.
         """
 
-        def _key(name: object) -> str | None:
+        def _base_key(name: object) -> str | None:
+            """Derive the base key from the EGE name by reducing to its discriminative tokens.
+
+            Example: "Mauá 3" / "Mauá Bloco 4" / "Mauá Bloco 5A" -> "maua"
+
+            Args:
+                name (str | None): The EGE name.
+
+            Returns:
+                str | None: The base key if it can be found, otherwise None.
+            """
             clean_name = strip_str(name)
             if clean_name is None:
                 return None
-            base = self.base_name_key(clean_name)
-            return f"name_base:{base}" if base else None
 
-        return df[self.sysop_name_col].map(_key)
+            wt = self.tok.weighted_tokenize(clean_name)
+            full_tokens = [
+                tok
+                for tok, ttype in zip(wt.tokens, wt.types)
+                if ttype == "discriminator"
+            ]
+            base = " ".join(full_tokens).strip()
+            return base or None
 
-    def base_name_key(self, name: str | None) -> str | None:
-        """Reduce a name to only the relevant (highly weighted) tokens.
-
-        Removes generic/unit tokens (e.g. "Plant X Unit 1" and "Plant X Unit 2" both become
-        "plant x"). Used to group sibling units of the same physical plant by name alone.
-
-        Args:
-            name (str | None): The name to reduce.
-
-        Returns:
-            str | None: The reduced name or None, if nothing remains (name was fully generic).
-        """
-        wt = self.tok.weighted_tokenize(name)
-        survivors = [
-            tok for tok, weight in zip(wt.tokens, wt.weights) if weight == FULL_WEIGHT
-        ]
-        key = " ".join(survivors).strip()
-        return key or None
+        return df[self.sysop_name_col].map(
+            lambda v: f"name_base:{k}" if (k := _base_key(v)) else None
+        )
