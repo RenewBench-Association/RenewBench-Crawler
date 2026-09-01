@@ -114,7 +114,7 @@ class EntsoePipeline(BasePipeline):
 
         wcode_populated = df[WCODE_LONGNAME].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] W_eicCodes enrichment: {wcode_populated}/{len(df)} "
+            f"[{self.output_stem}] W_eicCodes enrichment: {wcode_populated}/{len(df)} "
             f"units found in EIC directory."
         )
         return df
@@ -168,7 +168,7 @@ class EntsoePipeline(BasePipeline):
         ppdb_direct_count = df["ppdb.lat"].notna().sum()
         gem_direct_count = df["gem.lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] Direct/EicParent match: {gem_direct_count} via GEM, "
+            f"[{self.output_stem}] Direct/EicParent match: {gem_direct_count} via GEM, "
             f"{ppdb_direct_count} via ppdb (PPM) (out of {len(df)})."
         )
         return df
@@ -200,7 +200,7 @@ class EntsoePipeline(BasePipeline):
 
         parent_found = df[WCODE_PARENT_EIC].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] Fuzzy parent matching: {parent_found} parent "
+            f"[{self.output_stem}] Fuzzy parent matching: {parent_found} parent "
             f"production units resolved."
         )
         return df
@@ -246,8 +246,8 @@ class EntsoePipeline(BasePipeline):
         ppdb_after_parent = df["ppdb.lat"].notna().sum()
         gem_after_parent = df["gem.lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] Match via parent EIC: {gem_after_parent} via GEM "
-            f"total, {ppdb_after_parent} via ppdb (PPM) total "
+            f"[{self.output_stem}] Match via parent EIC: {gem_after_parent} via GEM total, "
+            f"{ppdb_after_parent} via ppdb (PPM) total "
             f"({ppdb_after_parent + gem_after_parent} total)."
         )
         return df

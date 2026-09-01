@@ -32,7 +32,12 @@ from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
-from rbc.energy.utils import MissingDataError, load_df_from_file
+from rbc.energy.utils import DownloadTask, MissingDataError, load_df_from_file
+
+TRES_PATTERN = (
+    DownloadTask._TRES_PATTERN
+)  # temporal resolution dir names ("1h", "15min")
+DATE_PATTERN = DownloadTask._DATE_PATTERN  # data file stems ("2020-01-05")
 
 
 class BasePipeline:
@@ -100,6 +105,13 @@ class BasePipeline:
         self.output_dir = output_dir
         if self.output_dir:
             self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # unique output-file stem (e.g. "15min_10YRO-TEL------P")
+        self.output_stem = (
+            f"{input_dir.parent.name}_{input_dir.name}"
+            if TRES_PATTERN.match(input_dir.parent.name)
+            else input_dir.name
+        )
 
         self.osm_update = osm_update
         self.osm_live = osm_live
@@ -262,21 +274,44 @@ class BasePipeline:
 
         df_all = pd.concat(all_dfs, ignore_index=True)
 
-        rel_cols = [
-            c
-            for c in [self.name_col, self.code_col, self.fuel_col]
-            if c and c in df_all.columns
-        ]
+        # define relevant columns and ensure they actually exist in the operator data
+        relevant_cols = []
+        for col in [self.name_col, self.code_col, self.fuel_col]:
+            if not col:
+                continue
+            if col not in df_all.columns:
+                raise MissingDataError(f"No '{col}' column in '{self.input_dir}' CSVs!")
+            relevant_cols.append(col)
+
         dedupe_subset = [self.code_col] if self.code_col else [self.name_col]
+
+        # Operators may report the same EGE with & without its name, so define the unique
+        # winner by sorting (named before nameless) & code existence, not appearance
+        if self.code_col:
+            unnamed = df_all[self.name_col].isna()
+            df_all = df_all.sort_values(
+                by=self.name_col, key=lambda _: unnamed, kind="stable"
+            )
+
         df_unique = (
-            df_all[rel_cols]
+            df_all[relevant_cols]
             .drop_duplicates(subset=dedupe_subset)
             .reset_index(drop=True)
         )
 
+        # If unnamed EGEs in THIS temporal resolution, check if they are named in another
+        if self.code_col:
+            self._backfill_names_from_other_tres(df_unique)
+
+        still_unnamed = df_unique[self.name_col].isna().sum()
         logger.info(
-            f"[{self.input_dir.name}] {len(df_unique)} unique generation units found "
-            f"across {len(all_dfs)} CSV(s)."
+            f"[{self.output_stem}] {len(df_unique)} unique generation units found "
+            f"across {len(all_dfs)} CSV(s)"
+            + (
+                f", {still_unnamed} of them without a name (unmatchable by name)."
+                if still_unnamed
+                else "."
+            )
         )
         return df_unique
 
@@ -382,7 +417,7 @@ class BasePipeline:
         mismatches = (df["fuel_type_match_level"] == "mismatch").sum()
         if mismatches:
             logger.warning(
-                f"[{self.input_dir.name}] Fuel-type mismatch on {mismatches} matched "
+                f"[{self.output_stem}] Fuel-type mismatch on {mismatches} matched "
                 f"unit(s) — verify these rows manually."
             )
         return df
@@ -415,15 +450,15 @@ class BasePipeline:
 
         total_matched = df["lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] Location finding complete: {total_matched}/{len(df)} "
+            f"[{self.output_stem}] Location finding complete: {total_matched}/{len(df)} "
             f"EGEs with coordinates.\nSources: {df['match_source'].value_counts().to_dict()}"
         )
 
         if self.output_dir:
-            out_path = Path(self.output_dir, f"coordinates_{self.input_dir.name}.csv")
+            out_path = Path(self.output_dir, f"coordinates_{self.output_stem}.csv")
             df.to_csv(out_path, index=False)
             logger.info(
-                f"[{self.input_dir.name}] Dataframe with coordinates saved to '{out_path}'."
+                f"[{self.output_stem}] Coordinates dataframe saved to '{out_path}'."
             )
 
         return df
@@ -431,6 +466,60 @@ class BasePipeline:
     # ------------------------------------------------------------------
     # DIRECT HELPER METHODS (used by shared and/or pipeline-specific steps)
     # ------------------------------------------------------------------
+    def _backfill_names_from_other_tres(self, df: pd.DataFrame) -> None:
+        """Fill in any missing EGE names from other temporal resolutions of the same data.
+
+        Operators may omit an EGE's name entirely in one temporal resolution while naming
+        it in another. Without a name, no name-based matching can occur. Example:
+        - Entsoe RO 1h:     self.name_col = 'CET_MINT2_CA', self.code_col = 30WMINTMINT2---1
+        - Entsoe RO 15min:  self.name_col = '', self.code_col = 30WMINTMINT2---1
+
+        Modifies ``df`` in place, reading files only while names are still missing.
+        EGEs where no names are found (via exact code matching) are left as is.
+
+        Args:
+            df (pd.DataFrame): The deduplicated working dataframe, with one row per EGE.
+        """
+        unnamed = df[self.name_col].isna()
+        missing_codes = set(df.loc[unnamed, self.code_col].dropna())
+        if not missing_codes:
+            return
+
+        found: dict[str, str] = {}
+        for other_dir in self._other_tres_dirs():
+            for path in sorted(other_dir.glob("*.csv")):
+                if not DATE_PATTERN.match(path.stem):
+                    continue
+
+                df_other = load_df_from_file(path)
+                if not {self.name_col, self.code_col}.issubset(df_other.columns):
+                    continue
+
+                named = df_other[
+                    df_other[self.code_col].isin(missing_codes)
+                    & df_other[self.name_col].notna()
+                ][[self.code_col, self.name_col]].drop_duplicates()
+
+                for code, name in named.itertuples(index=False):
+                    if found.setdefault(code, name) != name:
+                        logger.warning(
+                            f"[{self.output_stem}] '{code}' named both '{found[code]}' and "
+                            f"'{name}' in other temporal resolutions. Keeping the first."
+                        )
+
+                if len(found) == len(missing_codes):
+                    break
+
+            if len(found) == len(missing_codes):
+                break
+
+        if found:
+            df.loc[unnamed, self.name_col] = df.loc[unnamed, self.code_col].map(found)
+            logger.info(
+                f"[{self.output_stem}] Recovered {len(found)}/{len(missing_codes)} missing "
+                f"EGE name(s) from other temporal resolutions:\n{sorted(found.values())}"
+            )
+
     def _fuzzy_match_core(
         self,
         df: pd.DataFrame,
@@ -493,18 +582,16 @@ class BasePipeline:
         gem_final = df["gem.lat"].notna().sum()
         osm_final = df["osm.lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] NameMatcher: "
-            f"{ppdb_final} via ppdb (PPM/OSMPP) total, {gem_final} via GEM total, "
-            f"{osm_final} via OSM."
+            f"[{self.output_stem}] NameMatcher: {ppdb_final} via ppdb (PPM/OSMPP) total, "
+            f"{gem_final} via GEM total, {osm_final} via OSM."
         )
 
         # 4. Storing the fuzzy matching df
         if self.output_dir and not df_fuzzy_results.empty:
-            out_path = Path(self.output_dir, f"fuzzy_matches_{self.input_dir.name}.csv")
+            out_path = Path(self.output_dir, f"fuzzy_matches_{self.output_stem}.csv")
             df_fuzzy_results.to_csv(out_path, index=False)
             logger.info(
-                f"[{self.input_dir.name}] Dataframe with all fuzzy matching candidates "
-                f"saved to '{out_path}'."
+                f"[{self.output_stem}] Debugging dataframe saved to '{out_path}'."
             )
 
         return df
@@ -564,7 +651,7 @@ class BasePipeline:
 
         sibling_matched_count = df["sibling.lat"].notna().sum()
         logger.info(
-            f"[{self.input_dir.name}] Sibling-unit fallback: {sibling_matched_count} "
+            f"[{self.output_stem}] Sibling-unit fallback: {sibling_matched_count} "
             f"additional units matched via a co-located sibling unit."
         )
         return df
@@ -572,6 +659,34 @@ class BasePipeline:
     # ------------------------------------------------------------------
     # GENERAL HELPER METHODS
     # ------------------------------------------------------------------
+    def _other_tres_dirs(self) -> list[Path]:
+        """Find the equivalents of the input directory for other temporal resolutions.
+
+        Swap the tres-component of the input path for every other resolution present, e.g.:
+        - self.input_dir = "entsoe/15min/10YRO-TEL------P" -> ["entsoe/1h/10YRO-TEL------P"]
+        - self.input_dir = "aeso/1h" -> ["aeso/5min"]
+
+        Returns:
+            list[Path]: Existing directories of this data in other temporal resolutions or
+                empty list, if no other resolutions exists.
+        """
+        parts = self.input_dir.parts
+        tres_idx = next((i for i, p in enumerate(parts) if TRES_PATTERN.match(p)), None)
+        if tres_idx is None:
+            return []
+
+        other_dirs: list[Path] = []
+        for tres_dir in sorted(Path(*parts[:tres_idx]).iterdir()):
+            if not tres_dir.is_dir() or tres_dir.name == parts[tres_idx]:
+                continue
+            if not TRES_PATTERN.match(tres_dir.name):
+                continue
+            candidate = Path(tres_dir, *parts[tres_idx + 1 :])
+            if candidate.is_dir():
+                other_dirs.append(candidate)
+
+        return other_dirs
+
     @staticmethod
     def _still_unmatched(df: pd.DataFrame) -> pd.Series:
         """Check which rows / EGEs have no match from any coordinate finding source yet.
