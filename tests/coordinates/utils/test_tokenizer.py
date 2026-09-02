@@ -418,11 +418,8 @@ class TestNameTokenizerTokenize:
         """
         assert tok_plain.tokenize(name) == [name]
 
-    def test_split_glued_name(self, tok_plain: NameTokenizer) -> None:
+    def test_strip_glued(self, tok_plain: NameTokenizer) -> None:
         """Happy path: A glued unit word is stripped off a non-vocabulary token.
-
-        "hpp" is not in any current dictionary, so only the trailing "unit" strips --
-        this pins the actual (documented) gap, not the aspirational "river" result.
 
         Args:
             tok_plain (NameTokenizer): Tokenizer without a name_mapping.
@@ -433,14 +430,13 @@ class TestNameTokenizerTokenize:
         "name",
         ["Solaris", "Windsor", "Gaspar", "Plantation"],
     )
-    def test_glue_stripping_spares_real_names(
+    def test_strip_glued_no_energy_toks(
         self, tok_vocab: NameTokenizer, name: str
     ) -> None:
         """Regression pin: Only unit designators may be stripped from inside a token.
 
-        _strip_glued draws on GENERIC_UNIT_TOKENS alone. Were it to draw on the whole
-        vocabulary (which holds "solar", "wind", "gas", "plant"), these place names would
-        be eaten down to "is" / "sor" / "par" / "ation".
+        _strip_glued uses GENERIC_UNIT_TOKENS alone, not GENERIC_ENERGY_TOKENS (e.g. "solar")
+        Otherwise, place names could be mutilated (e.g. "Solaris" -> "is".)
 
         Args:
             tok_vocab (NameTokenizer): Tokenizer carrying TEST_VOCAB.
@@ -453,21 +449,80 @@ class TestNameTokenizerTokenize:
         ["Svelgen", "Dormagen", "Groningen", "generation", "cogen", "hydrogen"],
         ids=["no_place", "de_place", "nl_place", "word", "compound", "fuel"],
     )
-    def test_glue_stripping_spares_short_generic_endings(
+    def test_strip_glued_no_short_toks(
         self, tok_plain: NameTokenizer, name: str
     ) -> None:
         """Regression pin: Vocabulary words of <= 3 chars may not be stripped from a token.
 
-        "gen" and "g" are generic unit tokens, but they are also ordinary word and place
-        name endings. Were _strip_glued to consider them (as it did at length >= 3), these
-        would be eaten down to "svel" / "dorma" / "gronin" / "eration" / "co" / "hydro" --
-        4300 GEM names among them.
+        "gen" and "g" are GENERIC_UNIT_TOKENS, but also ordinary word and place name endings.
+        If used, place names could be mutilated ("Svelgen" -> "Svel"). Affects 4300 GEM names.
 
         Args:
             tok_plain (NameTokenizer): Tokenizer without a name_mapping.
             name (str): Real name starting or ending in a short generic unit token.
         """
         assert tok_plain.tokenize(name) == [name.lower()]
+
+    @pytest.mark.parametrize(
+        "name",
+        ["United", "Unity", "Conjuncta", "Groupama", "Blockheizkraftwerk"],
+        ids=["unit_ed", "unit_y", "conj", "group", "block"],
+    )
+    def test_strip_glued_not_from_start(
+        self, tok_plain: NameTokenizer, name: str
+    ) -> None:
+        """Regression pin: A generic unit word may only be stripped off a token's END.
+
+        A leading GENERIC_UNIT_TOKENS is nearly always the start of a real name, so stripping
+        makes it nonsensical ("United" -> "ed"). Affects 115 GEM tokens, only one of which is
+        an actual compound ("blockheizkraftwerk" -> added to entsoe mappings).
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+            name (str): Real name beginning with a generic unit word.
+        """
+        assert tok_plain.tokenize(name) == [name.lower()]
+
+    @pytest.mark.parametrize(
+        "name", ["cogenerator", "cunit"], ids=["generator_co", "unit_c"]
+    )
+    def test_strip_glued_rest_is_usable(
+        self, tok_plain: NameTokenizer, name: str
+    ) -> None:
+        """Regression pin: A strip leaving fewer than 3 characters behind is refused.
+
+        A 1-2 character remainder means the "generic" was part of a full name, not glued on,
+        and the remainder has no meaning. This prevents it being kept as a discriminative tok.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+            name (str): Real name whose generic suffix would leave too little behind.
+        """
+        assert tok_plain.tokenize(name) == [name.lower()]
+
+    @pytest.mark.parametrize(
+        "name, expected_output",
+        [
+            ("hppriverunit", ["hppriver"]),
+            ("inbetriebnahmeblock", ["inbetriebnahme"]),
+            ("progroup", ["pro"]),
+        ],
+        ids=["unit", "block", "group"],
+    )
+    def test_glue_stripping_still_strips_valid_suffixes(
+        self, tok_plain: NameTokenizer, name: str, expected_output: list[str]
+    ) -> None:
+        """Happy path: A trailing generic leaving >= 3 chars behind is still stripped.
+
+        Counterpart to the two pins above, so that neither can be satisfied by disabling
+        glue-stripping altogether.
+
+        Args:
+            tok_plain (NameTokenizer): Tokenizer without a name_mapping.
+            name (str): Name with a genuinely glued trailing generic unit word.
+            expected_output (list[str]): Expected tokens.
+        """
+        assert tok_plain.tokenize(name) == expected_output
 
     @pytest.mark.parametrize(
         "name",

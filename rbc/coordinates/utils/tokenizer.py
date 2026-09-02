@@ -298,7 +298,10 @@ class NameTokenizer:
                 out.extend(self._demote_vocabulary[tok].split())
             else:
                 stripped = self._strip_glued(tok)
-                out.append(stripped if stripped else tok)
+                if stripped in self._demote_vocabulary:
+                    out.extend(self._demote_vocabulary[stripped].split())
+                else:
+                    out.append(stripped)
         return out
 
     def weighted_tokenize(self, name: str | None) -> WeightedTokens:
@@ -359,12 +362,13 @@ class NameTokenizer:
         return out
 
     def _strip_glued(self, token: str) -> str:
-        """Repeatedly strip known vocabulary words off the start or end of a token.
+        """Repeatedly strip known vocabulary words off the end of a token.
 
-        Only whole unit-related vocabulary words of length > 3 are considered. This prevents
-        2-letter
-        codes (he/te/...) from being falsely matched and the accidental removal of
-        important name parts (e.g. place name "auvere" → "auve" → "au").
+        Only whole unit-related vocabulary words of length > 3 are stripped (e.g. "unit")
+        from the end of a token.
+        This prevents actual parts of the words from accidentally being removed:
+        1. short (len <= 3) toks (e.g. "gen", "g") from the end (e.g. 'Svelgen' -/> 'Svel')
+        2. anything (e.g. "unit") from the start (e.g. 'United' -/> 'ed')
 
         Args:
             token (str): The token to inspect and strip (e.g. "riverunit").
@@ -377,12 +381,8 @@ class NameTokenizer:
         while changed and current:
             changed = False
             for word in self._exclude_words:
-                if len(word) >= len(current):
+                if len(current) - len(word) < 3:
                     continue
-                if current.startswith(word):
-                    current = current[len(word) :]
-                    changed = True
-                    break
                 if current.endswith(word):
                     current = current[: len(current) - len(word)]
                     changed = True

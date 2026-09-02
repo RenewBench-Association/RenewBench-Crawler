@@ -219,6 +219,7 @@ FRENCH_NAME_TRANSLATIONS = {
 GERMAN_NAME_TRANSLATIONS = {
     "kraftwerk": "power plant",
     "heizkraftwerk": "power plant heating",
+    "blockheizkraftwerk": "power plant heating",
     "gaskraftwerk": "power plant gas",
     "kohlekraftwerk": "power plant coal",
     "wasserkraftwerk": "power plant hydro hydroelectric",
