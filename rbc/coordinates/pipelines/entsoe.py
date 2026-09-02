@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 
 import pandas as pd
-from loguru import logger
 
 import rbc.coordinates.locators.eic_registry as eic
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
@@ -112,10 +111,8 @@ class EntsoePipeline(BasePipeline):
             for col in wcode_fields:
                 df.at[idx, f"{WCODE_PREFIX}.{col}"] = full_row.get(col)
 
-        wcode_populated = df[WCODE_LONGNAME].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] W_eicCodes enrichment: {wcode_populated}/{len(df)} "
-            f"units found in EIC directory."
+        self._log_step_result(
+            "Enriched via EICRegistry", matched=int(df[WCODE_LONGNAME].notna().sum())
         )
         return df
 
@@ -165,12 +162,7 @@ class EntsoePipeline(BasePipeline):
                         df, idx, candidate, match_source=source
                     )
 
-        ppdb_direct_count = df["ppdb.lat"].notna().sum()
-        gem_direct_count = df["gem.lat"].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] Direct/EicParent match: {gem_direct_count} via GEM, "
-            f"{ppdb_direct_count} via ppdb (PPM) (out of {len(df)})."
-        )
+        self._log_step_result("Matched directly by EIC IDs", df=df)
         return df
 
     def _step_entsoe_resolve_parent_unit(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -198,10 +190,9 @@ class EntsoePipeline(BasePipeline):
                 for col in self.eic_reg.MATCH_FIELDS:
                     df.at[idx, f"{WCODE_PARENT_PREFIX}.{col}"] = parent.get(col)
 
-        parent_found = df[WCODE_PARENT_EIC].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] Fuzzy parent matching: {parent_found} parent "
-            f"production units resolved."
+        self._log_step_result(
+            "Fuzzy-find parent EIC names",
+            matched=int(df[WCODE_PARENT_EIC].notna().sum()),
         )
         return df
 
@@ -243,13 +234,7 @@ class EntsoePipeline(BasePipeline):
                         df, idx, candidate, match_source="ppdb_parent_entsoe_id"
                     )
 
-        ppdb_after_parent = df["ppdb.lat"].notna().sum()
-        gem_after_parent = df["gem.lat"].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] Match via parent EIC: {gem_after_parent} via GEM total, "
-            f"{ppdb_after_parent} via ppdb (PPM) total "
-            f"({ppdb_after_parent + gem_after_parent} total)."
-        )
+        self._log_step_result("Fuzzy-matched by parent EIC IDs", df=df)
         return df
 
     def _step_sibling_fallback_eic(self, df: pd.DataFrame) -> pd.DataFrame:

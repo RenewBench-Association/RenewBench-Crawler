@@ -52,6 +52,10 @@ def perform_coordinate_finding(
     shared = build_shared_locators(
         source=source, gem_dir=gem_dir, output_dir=output_dir
     )
+    logger.info(
+        f"Initialized shared locators. Now analyzing {len(csv_dirs)} directories...\n--"
+        "-------------------------------------------------------------------------------"
+    )
 
     dataframes: list[pd.DataFrame] = []
     labels: list[str] = []
@@ -84,7 +88,9 @@ def perform_coordinate_finding(
                 fuel_col = cl.sysop_fuel_col if fuel_col is None else fuel_col
 
         except Exception as e:
-            logger.warning(f"{csv_dir}: skipped — {e}")
+            logger.exception(
+                f"Error occurred while analysing {csv_dir}: {e}. Skipping..."
+            )
 
     if dataframes:
         build_map(

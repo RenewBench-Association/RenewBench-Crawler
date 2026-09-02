@@ -12,6 +12,7 @@ pipeline-specific "_step_*" methods & a STEPS list declaring the order to run th
 This class shouldn't be instantiated directly -- its __init__ raises TypeError if you try.
 """
 
+from functools import reduce
 from pathlib import Path
 from pprint import pformat
 from typing import cast
@@ -34,10 +35,13 @@ from rbc.coordinates.utils.values import strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
 from rbc.energy.utils import DownloadTask, MissingDataError, load_df_from_file
 
-TRES_PATTERN = (
-    DownloadTask._TRES_PATTERN
-)  # temporal resolution dir names ("1h", "15min")
+TRES_PATTERN = DownloadTask._TRES_PATTERN  # temporal res dir names ("1h", "15min")
 DATE_PATTERN = DownloadTask._DATE_PATTERN  # data file stems ("2020-01-05")
+
+SORTED_LOCATORS = sorted(
+    LOCATOR_RELIABILITY, key=lambda loc: LOCATOR_RELIABILITY[loc], reverse=True
+)
+SORTED_MATCH_SOURCES = SORTED_LOCATORS + ["sibling"]
 
 
 class BasePipeline:
@@ -189,6 +193,10 @@ class BasePipeline:
             f"{pformat(vars(self), indent=4, sort_dicts=False)}"
         )
 
+        # For logging status updates:
+        self.unique_targets: int = 0  # total number of unique EGEs in operator df
+        self._matched_so_far: int = 0  # running count of EGEs matched so far
+
     def run_pipeline(self) -> pd.DataFrame:
         """Run this pipeline's ALL_STEPS end-to-end.
 
@@ -229,24 +237,48 @@ class BasePipeline:
     def _create_match_method_columns(df: pd.DataFrame) -> None:
         """Create all columns generally required by the matching methods/algorithms.
 
-        This method ensures the generally required columns lat/lon/match_source for the
-        matching methods (ppdb.*/gem.*/osm.*) are created as None to prevent KeyErrors.
-        Pipelines with an exact-ID stage (e.g. entsoe) normally create these directly;
-        pipelines with no exact-ID stage do not necessarily. Does nothing if a column exists.
+        This method ensures the required columns lat/lon/match_source for the matching
+        methods (e.g. fuzzy name via ppdb.*/gem.*/osm.*) are created to prevent KeyErrors.
+
+        Args:
+            df (pd.DataFrame): The working dataframe of SysOp (target EGE) data.
         """
-        for col in (
-            "ppdb.lat",
-            "ppdb.lon",
-            "ppdb.match_source",
-            "gem.lat",
-            "gem.lon",
-            "gem.match_source",
-            "osm.lat",
-            "osm.lon",
-            "osm.match_source",
-        ):
-            if col not in df.columns:
-                df[col] = None
+        for ms in SORTED_MATCH_SOURCES:  # currently: "gem", "ppdb", "osm", "sibling"
+            for col in [f"{ms}.lat", f"{ms}.lon", f"{ms}.match_source"]:
+                if col not in df.columns:
+                    df[col] = None
+
+    @staticmethod
+    def _matched_coords(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        """Best lat/lon coords from all algorithms so far (e.g. exact-ID, fuzzy, sibling).
+
+        Args:
+            df (pd.DataFrame): The working dataFrame of SysOp (target EGE) data.
+
+        Returns:
+            tuple[pd.Series, pd.Series]: Best-so-far lat and lon coordinates.
+        """
+        lat = reduce(
+            lambda a, b: a.combine_first(b),
+            (df[f"{s}.lat"] for s in SORTED_MATCH_SOURCES),
+        )
+        lon = reduce(
+            lambda a, b: a.combine_first(b),
+            (df[f"{s}.lon"] for s in SORTED_MATCH_SOURCES),
+        )
+        return lat, lon
+
+    @classmethod
+    def _still_unmatched(cls, df: pd.DataFrame) -> pd.Series:
+        """Check which rows / target EGEs have no match from any locator yet.
+
+        Args:
+            df (pd.DataFrame): The working dataframe of SysOp (target EGE) data.
+
+        Returns:
+            pd.Series: List of bool values, True if a target EGE is still unmatched else False.
+        """
+        return cls._matched_coords(df)[0].isna()
 
     # ------------------------------------------------------------------
     # SHARED STEP METHODS (run by every pipeline)
@@ -303,15 +335,15 @@ class BasePipeline:
         if self.code_col:
             self._backfill_names_from_other_tres(df_unique)
 
-        still_unnamed = df_unique[self.name_col].isna().sum()
-        logger.info(
-            f"[{self.output_stem}] {len(df_unique)} unique generation units found "
-            f"across {len(all_dfs)} CSV(s)"
-            + (
-                f", {still_unnamed} of them without a name (unmatchable by name)."
-                if still_unnamed
-                else "."
-            )
+        self.unique_targets = len(df_unique)
+        unnamed = int(df_unique[self.name_col].isna().sum())
+        self._log_step_result(
+            "Load & dedupe",
+            matched=self.unique_targets - unnamed,
+            note=(
+                f"across {len(all_dfs)} CSV(s)"
+                + (f"; {unnamed} unnamed (unmatchable by name)" if unnamed else "")
+            ),
         )
         return df_unique
 
@@ -431,14 +463,13 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): Enriched SysOp df with matched coordinates.
         """
-        interim_lat, interim_lon = self._interim_coords(df)
-        df["lat"] = interim_lat.combine_first(df["sibling.lat"])
-        df["lon"] = interim_lon.combine_first(df["sibling.lon"])
+        df["lat"], df["lon"] = self._matched_coords(df)
 
-        fallback = pd.Series(False, index=df.index)
-        conditions = [df["sibling.lat"].notna() if "sibling.lat" in df else fallback]
         derived_source = pd.Series(
-            np.select(conditions, ["sibling_unit"], default="unmatched"), index=df.index
+            np.select(
+                [df["sibling.lat"].notna()], ["sibling_unit"], default="unmatched"
+            ),
+            index=df.index,
         )
 
         df["match_source"] = (
@@ -448,17 +479,19 @@ class BasePipeline:
             .combine_first(derived_source)
         )
 
-        total_matched = df["lat"].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] Location finding complete: {total_matched}/{len(df)} "
-            f"EGEs with coordinates.\nSources: {df['match_source'].value_counts().to_dict()}"
+        sources = df.loc[df["lat"].notna(), "match_source"].value_counts().to_dict()
+        self._log_step_result(
+            "--- TOTAL ---",
+            matched=int(df["lat"].notna().sum()),
+            note="\n" + "\n".join(f"    {k}:\t{v}" for k, v in sources.items()),
         )
 
         if self.output_dir:
             out_path = Path(self.output_dir, f"coordinates_{self.output_stem}.csv")
             df.to_csv(out_path, index=False)
             logger.info(
-                f"[{self.output_stem}] Coordinates dataframe saved to '{out_path}'."
+                f"[{self.output_stem}] Coordinates dataframe saved to '{out_path}'.\n-----"
+                "--------------------------------------------------------------------------"
             )
 
         return df
@@ -515,9 +548,11 @@ class BasePipeline:
 
         if found:
             df.loc[unnamed, self.name_col] = df.loc[unnamed, self.code_col].map(found)
-            logger.info(
-                f"[{self.output_stem}] Recovered {len(found)}/{len(missing_codes)} missing "
-                f"EGE name(s) from other temporal resolutions:\n{sorted(found.values())}"
+            self._log_step_result(
+                "Load & dedupe - recovered names",
+                matched=len(found),
+                total=len(missing_codes),
+                note=f"from other temporal resolutions: {sorted(found.values())}",
             )
 
     def _fuzzy_match_core(
@@ -578,13 +613,7 @@ class BasePipeline:
             if f"osm.{col}" not in df.columns:
                 df[f"osm.{col}"] = None
 
-        ppdb_final = df["ppdb.lat"].notna().sum()
-        gem_final = df["gem.lat"].notna().sum()
-        osm_final = df["osm.lat"].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] NameMatcher: {ppdb_final} via ppdb (PPM/OSMPP) total, "
-            f"{gem_final} via GEM total, {osm_final} via OSM."
-        )
+        self._log_step_result("Fuzzy-matched by name", df=df)
 
         # 4. Storing the fuzzy matching df
         if self.output_dir and not df_fuzzy_results.empty:
@@ -612,27 +641,30 @@ class BasePipeline:
 
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with sibling matches).
+
+        Raises:
+            RuntimeError: If "sibling"-related columns have been populated before this step.
         """
-        df["sibling.lat"] = None
-        df["sibling.lon"] = None
-        df["sibling.match_source"] = None
+        if df["sibling.lat"].notna().any():
+            raise RuntimeError(
+                "Sibling matching has not yet occurred, but columns like 'sibling.lat' are "
+                "already populated with apparent matches. Something has gone wrong!"
+            )
 
-        interim_lat, interim_lon = self._interim_coords(df)
-
-        has_group_key = plant_group_keys.map(
+        has_group = plant_group_keys.map(
             lambda k: isinstance(k, str) and bool(k.strip())
         )
-        already_matched = interim_lat.notna()
+
+        matched_lat, matched_lon = self._matched_coords(df)
+        already_matched = matched_lat.notna()
 
         sibling_lookup = (
             pd.DataFrame(
                 {
-                    "_key": plant_group_keys[already_matched & has_group_key],
-                    "_lat": interim_lat[already_matched & has_group_key],
-                    "_lon": interim_lon[already_matched & has_group_key],
-                    "_name": df.loc[
-                        already_matched & has_group_key, self.sysop_name_col
-                    ],
+                    "_key": plant_group_keys[already_matched & has_group],
+                    "_lat": matched_lat[already_matched & has_group],
+                    "_lon": matched_lon[already_matched & has_group],
+                    "_name": df.loc[already_matched & has_group, self.sysop_name_col],
                 }
             )
             .dropna(subset=["_key"])
@@ -640,7 +672,7 @@ class BasePipeline:
             .set_index("_key")
         )
 
-        needs_sibling = ~already_matched & has_group_key
+        needs_sibling = ~already_matched & has_group
         for idx in df.index[needs_sibling]:
             key = plant_group_keys.at[idx]
             if key in sibling_lookup.index:
@@ -649,16 +681,76 @@ class BasePipeline:
                 df.at[idx, "sibling.lon"] = sib["_lon"]
                 df.at[idx, "sibling.match_source"] = f"sibling_of:{sib['_name']}"
 
-        sibling_matched_count = df["sibling.lat"].notna().sum()
-        logger.info(
-            f"[{self.output_stem}] Sibling-unit fallback: {sibling_matched_count} "
-            f"additional units matched via a co-located sibling unit."
-        )
+        self._log_step_result("Matched by sibling group", df=df)
         return df
 
     # ------------------------------------------------------------------
     # GENERAL HELPER METHODS
     # ------------------------------------------------------------------
+    def _log_step_result(
+        self,
+        step: str,
+        df: pd.DataFrame | None = None,
+        matched: int | None = None,
+        total: int | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Log one pipeline step's outcome in the format shared by every step.
+
+        Two ways to call it, depending on what the step reports:
+        1. provide ``df`` for a step that adds coordinate matches: all is derived from it,
+        2. provide ``matched``(opt with own ``total``) for a step that reports something else
+            (e.e. number of units enriched, names recovered)
+
+        Steps report the CUMULATIVE count. Their own contribution goes in "+N".
+
+        Args:
+            step (str): Short step label (e.g. "fuzzy name match").
+            df (pd.DataFrame | None): Working df (for coordinate-matching). Defaults to None.
+            matched (int | None): Explicit count (for other steps). Defaults to None.
+            total (int | None): What ``matched`` is measured against. Defaults to None,
+                in which case the pipeline's EGE count is used (``self.unique_targets``).
+            note (str | None): Free-text added information. Defaults to None.
+
+        Raises:
+            ValueError: If neither ``df`` nor ``matched`` is given or both are.
+        """
+        # Option 1. Derive params (matched = # matches, delta = # new, counts = # per loc)
+        delta, counts = None, None
+        if df is not None and matched is None:
+            matched = int(self._matched_coords(df)[0].notna().sum())
+            delta = matched - self._matched_so_far
+            self._matched_so_far = matched
+
+            ms_counts: dict[str, int] = {
+                ms: int(df.get(f"{ms}.lat", pd.Series(dtype=float)).notna().sum())
+                for ms in SORTED_MATCH_SOURCES
+            }
+            counts = ", ".join(f"{k} {v}" for k, v in ms_counts.items() if v)
+
+        # Option 2. Params provided directly, nothing to derive
+        elif df is None and matched is not None:
+            pass
+
+        else:
+            raise ValueError(f"Logging '{step}' requires either `df` or `matched`!")
+
+        total = self.unique_targets if total is None else total
+        share = f"{matched / total * 100:>3.0f}%" if total else "  -"
+
+        details = []
+        if delta is not None:
+            details.append(f"+{delta:>3}")
+        if counts:
+            details.append(counts)
+        if note:
+            details.append(note)
+
+        logger.info(
+            f"[{self.output_stem}] {step:<32}{matched:>4}/{total:<4} ({share})"
+            + (f"   {' | '.join(details)}" if details else "")
+        )
+
     def _other_tres_dirs(self) -> list[Path]:
         """Find the equivalents of the input directory for other temporal resolutions.
 
@@ -688,19 +780,6 @@ class BasePipeline:
         return other_dirs
 
     @staticmethod
-    def _still_unmatched(df: pd.DataFrame) -> pd.Series:
-        """Check which rows / EGEs have no match from any coordinate finding source yet.
-
-        Args:
-            df (pd.DataFrame): Df to parse for identified (PPDB/GEM/OSM) coordinate matches.
-
-        Returns:
-            pd.Series: Series of unmatched rows.
-        """
-        lat_cols = [col for col in df.columns if col.endswith(".lat")]
-        return df[lat_cols].isna().all(axis=1)
-
-    @staticmethod
     def _write_candidate_into_df(
         df: pd.DataFrame,
         idx: int,
@@ -723,20 +802,6 @@ class BasePipeline:
 
         df.at[idx, f"{candidate.source}.match_score"] = match_score
         df.at[idx, f"{candidate.source}.match_source"] = match_source
-
-    @staticmethod
-    def _interim_coords(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-        """Best-so-far lat/lon from exact-ID + fuzzy matches, before sibling fallback.
-
-        Args:
-            df (pd.DataFrame): DataFrame containing exact-ID + fuzzy matches.
-
-        Returns:
-            tuple[pd.Series, pd.Series]: Best-so-far lat and lon coordinates.
-        """
-        lat = df["gem.lat"].combine_first(df["ppdb.lat"]).combine_first(df["osm.lat"])
-        lon = df["gem.lon"].combine_first(df["ppdb.lon"]).combine_first(df["osm.lon"])
-        return lat, lon
 
     def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatcher) -> None:
         """Add alternative names to matcher. Overwritable by child pipeline (i.e. entsoe).

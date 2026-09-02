@@ -214,12 +214,12 @@ class TestDefaultPipelineHelpers:
                 "gem.lon": [None, None],
                 "osm.lat": [None, None],
                 "osm.lon": [None, None],
+                "sibling.lat": [None, None],
+                "sibling.lon": [None, None],
             }
         )
         plant_group_key = pd.Series(["group:x", "group:x"])
         result = eia_pipeline._sibling_fallback_core(df, plant_group_key)
         assert result.loc[1, "sibling.lat"] == 40.0
         assert result.loc[1, "sibling.lon"] == -90.0
-        assert pd.isna(
-            result.loc[0, "sibling.lat"]
-        )  # already matched, no fallback needed
+        assert pd.isna(result.loc[0, "sibling.lat"])  # already matched, sibling unreq
