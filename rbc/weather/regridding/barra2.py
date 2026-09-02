@@ -111,16 +111,11 @@ class Barra2Regridder(GridRegridder):
         height_level: dict[str, list[tuple[int, xr.DataArray]]] = {}
 
         for f in files:
-            # The short code is read from the filename (matching the wildcard
-            # in the glob pattern above) and used to rename the file's one
-            # variable -- BARRA2's content name always matches this already
-            # (confirmed, unlike ICON-DREAM), but sourcing identity from the
-            # filename consistently, rather than file contents, keeps both
-            # regridders on the same pattern.
+            # The short code is read from the filename and used to select
+            # the real data variable directly, dropping any auxiliary
+            # variable a file might also carry (e.g. "time_bnds").
             code = f.name.removeprefix(prefix).removesuffix(suffix)
-            ds = xr.open_dataset(f, chunks={})
-            (var_name,) = ds.data_vars
-            ds = ds.rename({str(var_name): code})
+            ds = xr.open_dataset(f, chunks={})[[code]]
             match = _LEVEL_CODE_RE.match(code)
             if match is None:
                 single_level.append(ds)

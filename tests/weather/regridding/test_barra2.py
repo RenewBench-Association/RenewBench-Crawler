@@ -147,6 +147,38 @@ class TestLoadSourceChunk:
         assert "tas_plev" not in result.data_vars
         assert "tas_height" not in result.data_vars
 
+    def test_ignores_auxiliary_time_bnds_variable(self, base_args: dict) -> None:
+        """A file with an extra "time_bnds" variable doesn't crash or leak it through.
+
+        Confirmed on real data: time-averaged quantities like "clt" (total
+        cloud cover) carry a CF-convention "time_bnds" variable alongside the
+        real one, unlike the purely-instantaneous variables this module was
+        first verified against -- a plain `(var_name,) = ds.data_vars` unpack
+        breaks the moment a file has more than one variable.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        config = MODEL_CONFIG["C2"]
+        source_dir = raw_data_dir(
+            raw_dir, config["raw_folder"], config["temporal_res_folder"]
+        )
+        source_dir.mkdir(parents=True, exist_ok=True)
+        ds = xr.Dataset(
+            {
+                "clt": (("time", "lat", "lon"), [[[50.0]]]),
+                "time_bnds": (("time", "bnds"), [[0.0, 1.0]]),
+            }
+        )
+        ds.to_netcdf(Path(source_dir, "barra2_C2_1hr_202501_clt.nc"))
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"))
+
+        assert "clt" in result.data_vars
+        assert "time_bnds" not in result.data_vars
+
     def test_digit_suffixed_single_level_variables_are_not_misclassified(
         self, base_args: dict
     ) -> None:
