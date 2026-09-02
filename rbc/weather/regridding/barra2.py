@@ -85,14 +85,14 @@ class Barra2Regridder(GridRegridder):
         """Open, consolidate, and merge every raw BARRA2 file for one task.
 
         Pressure-level and height-level files each carry one variable per
-        level (e.g. "..._ta950.nc" contains just "ta950") -- confirmed on
-        real sample data. Both are consolidated into one stacked variable
-        per base code (level/height dims respectively, per the weather Zarr
+        level (e.g. "..._ta950.nc" contains just "ta950"). Both are
+        consolidated into one stacked variable per base code
+        (level/height dims respectively, per the weather Zarr
         contract's naming) before merging with single-level variables. Named
         "<base>_plev"/"<base>_height" during consolidation so
         _variable_mapping() can map pressure- and height-level variants of
         the same base code (e.g. "ta") to distinct
-        canonical names, rather than colliding under one name.
+        canonical names.
 
         Args:
             task (tuple): (year, month) task identifier.
@@ -107,8 +107,8 @@ class Barra2Regridder(GridRegridder):
         files = sorted(self.source_dir.glob(f"{prefix}*{suffix}"))
 
         single_level = []
-        pressure_level: dict[str, list[tuple[int, xr.DataArray]]] = {}
-        height_level: dict[str, list[tuple[int, xr.DataArray]]] = {}
+        pressure_level: dict[str, list[tuple[float, xr.DataArray]]] = {}
+        height_level: dict[str, list[tuple[float, xr.DataArray]]] = {}
 
         for f in files:
             # The short code is read from the filename and used to select
@@ -118,9 +118,11 @@ class Barra2Regridder(GridRegridder):
             ds = xr.open_dataset(f, chunks={})[[code]]
             match = _LEVEL_CODE_RE.match(code)
             if match is None:
-                single_level.append(ds)
+                single_level.append(
+                    ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
+                )
                 continue
-            base, level_str, is_height = match.groups()
+            base, _, is_height = match.groups()
             # A regex match alone isn't enough: some single-level variable
             # names coincidentally end in digits (e.g. "BWD03", "omega500")
             # without being real per-level files, only route to the
@@ -130,9 +132,24 @@ class Barra2Regridder(GridRegridder):
                 not is_height and base in _PRESSURE_LEVEL_BASES
             )
             if not is_known_level_var:
-                single_level.append(ds)
+                single_level.append(
+                    ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
+                )
                 continue
-            level = int(level_str)
+            # The level value comes from the file's own scalar
+            # "pressure"/"height" coordinate, not the filename -- confirmed
+            # on real data the two always agree, but the file's own value is
+            # the authoritative one, and using it needs no caveat in STAC
+            # metadata (a filename-inferred value would). That coordinate is
+            # then dropped: kept as a loose scalar rather than consolidated
+            # into this method's own level/height dimension, it would
+            # conflict once different variables have different level
+            # coverage (confirmed on real data: "ta" has levels [1000, 950]
+            # but "ua" only has [1000], so a shared "pressure" coordinate
+            # named the same across both raises a MergeError).
+            level_coord = "height" if is_height else "pressure"
+            level = float(ds[level_coord].item())
+            ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
             target = height_level if is_height else pressure_level
             target.setdefault(base, []).append((level, ds[code]))
 
@@ -161,7 +178,11 @@ class Barra2Regridder(GridRegridder):
                 ),
             )
 
-        return xr.merge([*single_level, xr.Dataset(merged_vars)], compat="no_conflicts")
+        return xr.merge(
+            [*single_level, xr.Dataset(merged_vars)],
+            compat="no_conflicts",
+            join="outer",
+        )
 
     def _grid_metadata_path(self) -> Path | None:
         """BARRA2 is regional lat-lon with no separate grid definition file.

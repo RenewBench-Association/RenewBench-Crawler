@@ -1,5 +1,5 @@
-raw_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/raw/weather/
-dst_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/processed/weather/healpix/
+raw_data_base_dir: /lsdf/raw/weather/
+dst_data_base_dir: /lsdf/processed/weather/healpix/
 healpix_min_level: 0
 healpix_max_level:
   era5: 8

@@ -42,7 +42,12 @@ def base_args(tmp_path: Path) -> dict:
 
 
 def _write_var_file(
-    raw_dir: Path, filename: str, var_name: str, value: float, model: str = "C2"
+    raw_dir: Path,
+    filename: str,
+    var_name: str,
+    value: float,
+    model: str = "C2",
+    extra_coords: dict | None = None,
 ) -> None:
     """Write a minimal single-variable NetCDF file, matching real BARRA2 layout.
 
@@ -56,13 +61,16 @@ def _write_var_file(
         var_name (str): The single data variable's name.
         value (float): A scalar value to fill the variable with.
         model (str): BARRA2 model variant. Defaults to "C2".
+        extra_coords (dict | None): Additional scalar coordinates to attach,
+            e.g. {"pressure": 950.0} -- mimics real BARRA2 files, which carry
+            their own per-file scalar "pressure"/"height" coordinate.
     """
     config = MODEL_CONFIG[model]
     source_dir = raw_data_dir(
         raw_dir, config["raw_folder"], config["temporal_res_folder"]
     )
     source_dir.mkdir(parents=True, exist_ok=True)
-    ds = xr.Dataset({var_name: (("lat", "lon"), [[value]])})
+    ds = xr.Dataset({var_name: (("lat", "lon"), [[value]])}, coords=extra_coords or {})
     ds.to_netcdf(Path(source_dir, filename))
 
 
@@ -100,9 +108,27 @@ class TestLoadSourceChunk:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
         """
         raw_dir = base_args["raw_dir"]
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta1000.nc", "ta1000", 1.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta950.nc", "ta950", 2.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta975.nc", "ta975", 3.0)
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta1000.nc",
+            "ta1000",
+            1.0,
+            extra_coords={"pressure": 1000.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta950.nc",
+            "ta950",
+            2.0,
+            extra_coords={"pressure": 950.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta975.nc",
+            "ta975",
+            3.0,
+            extra_coords={"pressure": 975.0},
+        )
 
         rg = Barra2Regridder(model="C2", **base_args)
         result = rg._load_source_chunk((2025, "01"))
@@ -120,8 +146,20 @@ class TestLoadSourceChunk:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
         """
         raw_dir = base_args["raw_dir"]
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta100m.nc", "ta100m", 20.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta50m.nc", "ta50m", 10.0)
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta100m.nc",
+            "ta100m",
+            20.0,
+            extra_coords={"height": 100.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta50m.nc",
+            "ta50m",
+            10.0,
+            extra_coords={"height": 50.0},
+        )
 
         rg = Barra2Regridder(model="C2", **base_args)
         result = rg._load_source_chunk((2025, "01"))
@@ -179,6 +217,77 @@ class TestLoadSourceChunk:
         assert "clt" in result.data_vars
         assert "time_bnds" not in result.data_vars
 
+    def test_drops_raw_pressure_coord_to_avoid_cross_variable_conflicts(
+        self, base_args: dict
+    ) -> None:
+        """Real per-file scalar "pressure" coords are dropped, not merged.
+
+        Confirmed on real BARRA2 data: each pressure-level file carries its
+        own scalar "pressure" coordinate matching its own level (e.g.
+        "pressure"=950.0 on ta950.nc). xr.merge() requires same-named
+        coordinates to agree, so once two pressure-level variables have
+        different level coverage (here: "ta" has [1000, 950], "ua" only has
+        [1000]), their differently-shaped "pressure" coordinates conflict
+        and raise a MergeError unless dropped first.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta1000.nc",
+            "ta1000",
+            1.0,
+            extra_coords={"pressure": 1000.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta950.nc",
+            "ta950",
+            2.0,
+            extra_coords={"pressure": 950.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ua1000.nc",
+            "ua1000",
+            3.0,
+            extra_coords={"pressure": 1000.0},
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"))  # must not raise MergeError
+
+        assert "pressure" not in result.coords
+        assert set(result.data_vars) == {"ta_plev", "ua_plev"}
+
+    def test_level_value_comes_from_content_not_filename(self, base_args: dict) -> None:
+        """The level/height coordinate value is read from the file, not parsed from its name.
+
+        Deliberately mismatched here (filename says "ta950", file's own
+        "pressure" coordinate says 900.0) to prove which one wins -- the
+        file's own recorded value is authoritative, since it needs no
+        filename-inferred-value caveat in STAC metadata the way a
+        filename-parsed value would.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta950.nc",
+            "ta950",
+            1.0,
+            extra_coords={"pressure": 900.0},
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"))
+
+        assert list(result["level"].values) == [900.0]
+
     def test_digit_suffixed_single_level_variables_are_not_misclassified(
         self, base_args: dict
     ) -> None:
@@ -212,8 +321,20 @@ class TestLoadSourceChunk:
         """
         raw_dir = base_args["raw_dir"]
         _write_var_file(raw_dir, "barra2_C2_1hr_202501_tas.nc", "tas", 5.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta950.nc", "ta950", 2.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_ta50m.nc", "ta50m", 10.0)
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta950.nc",
+            "ta950",
+            2.0,
+            extra_coords={"pressure": 950.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta50m.nc",
+            "ta50m",
+            10.0,
+            extra_coords={"height": 50.0},
+        )
 
         rg = Barra2Regridder(model="C2", **base_args)
         result = rg._load_source_chunk((2025, "01"))
