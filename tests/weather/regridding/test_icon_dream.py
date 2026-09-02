@@ -33,6 +33,7 @@ def base_args(tmp_path: Path) -> dict:
         "raw_dir": raw_dir,
         "source_name": "icon_dream_global",
         "weights_cache_dir": Path(tmp_path, "weights_cache"),
+        "checkpoint_path": Path(tmp_path, "status.pickle"),
         "min_level": 4,
         "max_level": 7,
         # Empty (no filter) by default so _load_source_chunk() takes its

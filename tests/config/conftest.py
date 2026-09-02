@@ -59,11 +59,8 @@ def source_configs(tmp_path: Path) -> dict:
             "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
         },
         "regrid_healpix": {
-            "paths": {
-                "raw_data_base_dir": str(Path(tmp_path, "raw_weather")),
-                "weights_cache_dir": str(Path(tmp_path, "weights_cache")),
-                "dst_data_base_dir": str(Path(tmp_path, "processed_weather")),
-            },
+            "raw_data_base_dir": str(Path(tmp_path, "raw_weather")),
+            "dst_data_base_dir": str(Path(tmp_path, "processed_weather")),
             "healpix_min_level": 4,
             "healpix_max_level": {
                 "era5": 7,

@@ -16,13 +16,13 @@ from tqdm.dask import TqdmCallback
 class HealpixZarrWriter:
     """Writes regridded HEALPix pyramids into per-(model, time_res, level) Zarr stores.
 
-    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr" -- one fully
+    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr". One fully
     independent Zarr store per (model_name, time_res, level), not one shared
     store with internal groups. Surface, pressure-level, height-level, and
     model-level variables all coexist as differently-shaped variables within
     the same store (distinguished by their own dimensions, e.g. [time, cell]
     vs. [time, level, cell]), per the contract's "separation... as standard
-    in other Zarr stores" clause -- not separate stores or groups.
+    in other Zarr stores" clause.
 
     Every write uses `consolidated=False`: carried over from the shared-store
     design this replaced, where it avoided a whole-tree metadata rewrite on
@@ -154,6 +154,38 @@ class HealpixZarrWriter:
             pyramid (dict[int, xr.Dataset]): The pyramid just written.
         """
         return None
+
+    def checkpoint_path(self, model_name: str, time_res: str) -> Path:
+        """Return the checkpoint file path for one (model_name, time_res) combination.
+
+        Checkpointing tracks what a `GridRegridder` has actually finished
+        writing to this destination store, so it lives alongside the Zarr
+        stores it corresponds to.
+
+        Args:
+            model_name (str): Contract "model_name".
+            time_res (str): "1h" or "20min".
+
+        Returns:
+            Path: "<base_dir>/<model_name>/<time_res>/status.pickle".
+        """
+        return Path(self.base_dir, model_name, time_res, "status.pickle")
+
+    def weights_cache_dir(self, model_name: str) -> Path:
+        """Return the ESMF weight-cache directory for one model_name.
+
+        Keyed by model_name only, because weights depend solely on
+        horizontal grid geometry (grid-doctor's own cache key is derived from
+        the actual coordinate arrays), which is identical across temporal
+        resolutions of the same physical grid.
+
+        Args:
+            model_name (str): Contract "model_name".
+
+        Returns:
+            Path: "<base_dir>/<model_name>/weights_cache/".
+        """
+        return Path(self.base_dir, model_name, "weights_cache")
 
     def _store_path(self, model_name: str, time_res: str, level: int) -> Path:
         """Return the Zarr store path for one (model_name, time_res, level).

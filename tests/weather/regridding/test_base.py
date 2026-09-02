@@ -104,6 +104,7 @@ def base_args(tmp_path: Path) -> dict:
         "raw_dir": raw_dir,
         "source_name": "test_source",
         "weights_cache_dir": Path(tmp_path, "weights_cache", "nested"),
+        "checkpoint_path": Path(tmp_path, "status.pickle"),
         "min_level": 4,
         "max_level": 7,
         "variables": ["var_a"],
@@ -135,8 +136,24 @@ class TestInit:
         assert rg.variables == ["var_a"]
         assert rg.dry_run is False
         assert rg.resume is True
-        assert rg.checkpoint_path == Path(rg.raw_dir, "regrid_status.pickle")
+        assert rg.checkpoint_path == base_args["checkpoint_path"]
         assert rg.weights_cache_dir.is_dir()
+
+    def test_checkpoint_path_parent_directory_is_created(self, base_args: dict) -> None:
+        """A nested, not-yet-existing checkpoint_path's parent dir is created.
+
+        Mirrors weights_cache_dir's own mkdir(parents=True) behavior, since
+        checkpoint_path is now caller-supplied (normally
+        HealpixZarrWriter.checkpoint_path()) rather than derived from raw_dir.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        base_args["checkpoint_path"] = Path(
+            base_args["checkpoint_path"].parent, "nested", "status.pickle"
+        )
+        rg = _ConcreteRegridder(**base_args)
+        assert rg.checkpoint_path.parent.is_dir()
 
     def test_raw_dir_missing_raises(self, tmp_path: Path, base_args: dict) -> None:
         """Missing raw_dir raises FileNotFoundError.
@@ -181,7 +198,7 @@ class TestInit:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         saved = {(2025, 1): 1}
-        checkpoint_path = Path(base_args["raw_dir"], "regrid_status.pickle")
+        checkpoint_path = base_args["checkpoint_path"]
         with open(checkpoint_path, "wb") as f:
             pickle.dump(saved, f)
 
@@ -195,7 +212,7 @@ class TestInit:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         saved = {(2025, 1): 1}
-        checkpoint_path = Path(base_args["raw_dir"], "regrid_status.pickle")
+        checkpoint_path = base_args["checkpoint_path"]
         with open(checkpoint_path, "wb") as f:
             pickle.dump(saved, f)
 
@@ -209,7 +226,7 @@ class TestInit:
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        checkpoint_path = Path(base_args["raw_dir"], "regrid_status.pickle")
+        checkpoint_path = base_args["checkpoint_path"]
         checkpoint_path.write_bytes(b"not-valid-pickle-data")
 
         rg = _ConcreteRegridder(**base_args)

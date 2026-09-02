@@ -80,6 +80,70 @@ def writer(tmp_path: Path) -> HealpixZarrWriter:
 
 
 # ----------------------------------
+# HealpixZarrWriter.checkpoint_path
+# ----------------------------------
+class TestCheckpointPath:
+    """Tests for HealpixZarrWriter.checkpoint_path()."""
+
+    def test_returns_model_and_time_res_specific_path(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Returns "<base_dir>/<model_name>/<time_res>/status.pickle".
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        path = writer.checkpoint_path("barra2_c2", "1h")
+        assert path == Path(writer.base_dir, "barra2_c2", "1h", "status.pickle")
+
+    def test_different_model_or_time_res_gives_different_path(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Distinct (model_name, time_res) combinations never collide.
+
+        Directly guards against the bug this replaced: a single checkpoint
+        file shared across every model variant, keyed only by (year, month),
+        would wrongly mark one variant's tasks done just because another
+        variant with the same raw_dir had already been regridded.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        r2 = writer.checkpoint_path("barra2_r2", "1h")
+        c2 = writer.checkpoint_path("barra2_c2", "1h")
+        c2_20min = writer.checkpoint_path("barra2_c2", "20min")
+        assert len({r2, c2, c2_20min}) == 3
+
+
+# ----------------------------------
+# HealpixZarrWriter.weights_cache_dir
+# ----------------------------------
+class TestWeightsCacheDir:
+    """Tests for HealpixZarrWriter.weights_cache_dir()."""
+
+    def test_returns_model_specific_path(self, writer: HealpixZarrWriter) -> None:
+        """Returns "<base_dir>/<model_name>/weights_cache/".
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        path = writer.weights_cache_dir("barra2_c2")
+        assert path == Path(writer.base_dir, "barra2_c2", "weights_cache")
+
+    def test_different_models_get_different_paths(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Different models never share a weights_cache_dir.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        assert writer.weights_cache_dir("barra2_c2") != writer.weights_cache_dir(
+            "barra2_r2"
+        )
+
+
+# ----------------------------------
 # HealpixZarrWriter._normalize_dim_order
 # ----------------------------------
 class TestNormalizeDimOrder:

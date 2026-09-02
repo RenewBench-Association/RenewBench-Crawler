@@ -1,8 +1,6 @@
-paths:
-  raw_data_base_dir: /lsdf/raw/weather/
-  weights_cache_dir: /lsdf/processed/weather/healpix/weights_cache/
-  dst_data_base_dir: /lsdf/processed/weather/healpix/
-healpix_min_level: 4
+raw_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/raw/weather/
+dst_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/processed/weather/healpix/
+healpix_min_level: 0
 healpix_max_level:
   era5: 8
   barra2_r2: 9

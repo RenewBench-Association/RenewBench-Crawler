@@ -173,24 +173,23 @@ def main() -> None:
 
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
     cfg = load_config(source=SOURCE, overrides=overrides)
-    setup_logging(output_dir=cfg.paths.dst_data_base_dir)
+    setup_logging(output_dir=cfg.dst_data_base_dir)
     logger.info(f"Flags for the '{SOURCE}' regrid:\n{args}")
     logger.info(f"Config for the '{SOURCE}' regrid:\n{cfg}")
 
     min_level = args.healpix_min_level or cfg.healpix_min_level
     max_level_overrides = _parse_max_level_overrides(args.healpix_max_level)
 
-    writer = HealpixZarrWriter(
-        base_dir=cfg.paths.dst_data_base_dir, min_level=min_level
-    )
+    writer = HealpixZarrWriter(base_dir=cfg.dst_data_base_dir, min_level=min_level)
 
     for name in args.sources:
         model_name = _MODEL_NAME[name]
         time_res = _TIME_RES[name]
         regridder = REGRIDDER_CLASSES[name](
-            raw_dir=cfg.paths.raw_data_base_dir,
+            raw_dir=cfg.raw_data_base_dir,
             source_name=name,
-            weights_cache_dir=cfg.paths.weights_cache_dir,
+            weights_cache_dir=writer.weights_cache_dir(model_name),
+            checkpoint_path=writer.checkpoint_path(model_name, time_res),
             min_level=min_level,
             max_level=max_level_overrides.get(name, cfg.healpix_max_level[name]),
             variables=args.variables or (cfg.variables or {}).get(name) or [],

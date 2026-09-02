@@ -51,6 +51,7 @@ def base_args(tmp_path: Path) -> dict:
         "raw_dir": raw_dir,
         "source_name": "era5",
         "weights_cache_dir": Path(tmp_path, "weights_cache"),
+        "checkpoint_path": Path(tmp_path, "status.pickle"),
         "min_level": 4,
         "max_level": 7,
         "variables": ["2m_temperature"],

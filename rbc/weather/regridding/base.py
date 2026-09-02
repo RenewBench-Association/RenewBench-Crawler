@@ -41,7 +41,7 @@ class GridRegridder(ABC):
             and skip yielding data.
         resume (bool): If True, load an existing checkpoint on init.
         checkpoint (dict): Dict tracking regrid status per task tuple (1=done).
-        checkpoint_path (Path): Path to the checkpoint file for resuming.
+        checkpoint_path (Path): Path to the checkpoint file for resuming regridding.
     """
 
     def __init__(
@@ -49,6 +49,7 @@ class GridRegridder(ABC):
         raw_dir: Path,
         source_name: str,
         weights_cache_dir: Path,
+        checkpoint_path: Path,
         min_level: int,
         max_level: int,
         variables: list[str],
@@ -65,6 +66,10 @@ class GridRegridder(ABC):
                 per-source subdirectory name in the combined store.
             weights_cache_dir (Path): Directory for grid-doctor's cached ESMF
                 weight files.
+            checkpoint_path (Path): Path to the checkpoint file. Normally
+                `HealpixZarrWriter.checkpoint_path(model_name, time_res)`, so
+                it lives alongside the Zarr store this source/model variant
+                actually writes into.
             min_level (int): Coarsest HEALPix pyramid level to retain.
             max_level (int): Finest HEALPix pyramid level to compute directly
                 from native data.
@@ -104,7 +109,8 @@ class GridRegridder(ABC):
         self.dry_run = dry_run
         self.resume = resume
 
-        self.checkpoint_path = Path(self.raw_dir, "regrid_status.pickle")
+        self.checkpoint_path = Path(checkpoint_path)
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint: dict = self._load_checkpoint()
 
     def regrid(self) -> Iterator[tuple[tuple, dict[int, xr.Dataset]]]:

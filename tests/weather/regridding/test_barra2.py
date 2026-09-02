@@ -32,6 +32,7 @@ def base_args(tmp_path: Path) -> dict:
         "raw_dir": raw_dir,
         "source_name": "barra2_c2",
         "weights_cache_dir": Path(tmp_path, "weights_cache"),
+        "checkpoint_path": Path(tmp_path, "status.pickle"),
         "min_level": 4,
         "max_level": 10,
         "variables": ["temperature"],
@@ -46,8 +47,7 @@ def _write_var_file(
     """Write a minimal single-variable NetCDF file, matching real BARRA2 layout.
 
     Writes under raw_data_dir(raw_dir, ...) -- utils.py's shared convention,
-    the same one the regridder itself resolves from raw_dir; no year
-    subdirectory, since year is already embedded in the filename.
+    the same one the regridder itself resolves from raw_dir.
 
     Args:
         raw_dir (Path): Regridder's raw_dir (base dir shared by every model

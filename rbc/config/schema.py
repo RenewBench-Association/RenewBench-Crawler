@@ -311,46 +311,14 @@ class Barra2Config(PathValidation, BaseModel):
     paths: Paths
 
 
-class RegridPaths(BaseModel):
-    """Filesystem paths used by the HEALPix regridding pipeline.
-
-    Attributes:
-        raw_data_base_dir (Path): Shared root all sources' already-downloaded
-            raw data lives under, e.g. "/lsdf/raw/weather/". Passed straight
-            through, unmodified, to every GridRegridder -- each one resolves
-            its own "<raw_data_base_dir>/<raw_folder>/<temporal_res_folder>/"
-            directory via rbc.weather.utils.raw_data_dir(), the same shared
-            convention every WeatherDownloader itself writes into (raw_folder
-            and temporal_res_folder come from that source's own MODEL_CONFIG
-            in its mappings.py). No source needs a year subdirectory -- year
-            is already embedded in each raw filename.
-        weights_cache_dir (Path): Where grid-doctor's ESMF weight files are cached.
-        dst_data_base_dir (Path): Shared root the regridded HEALPix output
-            lives under. Per the weather Zarr contract, each
-            (model_name, time_res, level) combination gets its own
-            independent Zarr store at
-            "<dst_data_base_dir>/<model_name>/<time_res>/level_<N>.zarr" --
-            not one shared store with internal groups.
-    """
-
-    raw_data_base_dir: Path
-    weights_cache_dir: Path
-    dst_data_base_dir: Path
-
-
 class RegridHealpixConfig(BaseModel):
     """Configuration schema for the HEALPix regridding pipeline.
 
-    Deliberately skips `PathValidation`: every `*_raw_dir` must already contain
-    data from that source's own downloader, so auto-creating a missing one
-    (`PathValidation`'s behavior for every other schema's `paths`) would mask
-    a real error instead of failing fast — `GridRegridder.__init__` already
-    raises `FileNotFoundError` for a missing raw_dir; `weights_cache_dir` and
-    `dst_data_base_dir` are created on demand by the code that writes to them.
-
     Attributes:
         source (Literal): Name of the data source.
-        paths (RegridPaths): Paths pydantic model for paths.
+        raw_data_base_dir (Path): Shared root for all sources' raw data.
+        dst_data_base_dir (Path): Shared root for the regridded HEALPix
+            output, weight cache, and checkpoint files.
         healpix_min_level (int): Shared coarsest HEALPix level across sources.
         healpix_max_level (dict[str, int]): Finest HEALPix level per source.
         variables (dict[str, list[str]] | None): Per-source variable override;
@@ -358,7 +326,8 @@ class RegridHealpixConfig(BaseModel):
     """
 
     source: Literal["regrid_healpix"] = "regrid_healpix"
-    paths: RegridPaths
+    raw_data_base_dir: Path
+    dst_data_base_dir: Path
     healpix_min_level: int
     healpix_max_level: dict[str, int]
     variables: dict[str, list[str]] | None = None
