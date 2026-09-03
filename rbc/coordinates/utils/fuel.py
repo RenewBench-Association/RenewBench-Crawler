@@ -9,6 +9,11 @@ from functools import lru_cache
 from rbc.coordinates.utils.values import normalize_name
 
 FUEL_UNKNOWN: frozenset[str] = frozenset({"unknown", "none", "missing"})
+# Umbrella terms as fallback for inconsistencies (e.g. locs do not have types like "peat")
+# - COMBUSTION = fuel types that all describe burning something
+FUEL_COMBUSTION_FAMILY: frozenset[str] = frozenset(
+    {"coal", "peat", "oil", "gas", "biomass", "bioenergy", "waste", "thermal"}
+)
 
 # todo: are these synonym definitions all appropriate or are some (waste/storage) too much?
 FUEL_TOKEN_SYNONYMS: dict[str, str] = {
@@ -40,6 +45,7 @@ def classify_fueltype_match(sysop_type: str | None, loc_type: str | None) -> str
             ``"unknown"``    — one or both are missing or defined as unknown.
             ``"exact"``      — both normalize to an identical token sets.
             ``"compatible"`` — at least one token in both sets is identical.
+            ``"family"``     — not identical/overlapping, but of the same family.
             ``"mismatch"``   — clearly different fuel types.
     """
     # build tokens to compare
@@ -62,6 +68,12 @@ def classify_fueltype_match(sysop_type: str | None, loc_type: str | None) -> str
 
     if sysop_fuel_toks & FUEL_UNKNOWN or loc_fuel_toks & FUEL_UNKNOWN:
         return "unknown"  # e.g. {'none'} vs {'gas'}
+
+    if (
+        sysop_fuel_toks & FUEL_COMBUSTION_FAMILY
+        and loc_fuel_toks & FUEL_COMBUSTION_FAMILY
+    ):
+        return "family"  # e.g. {'peat'} vs {'bioenergy'}
 
     return "mismatch"  # e.g. {'fossil', 'oil'} vs {'offshore', 'wind'}
 

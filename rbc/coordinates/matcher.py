@@ -177,10 +177,10 @@ class NameMatcher:
         target_variants = self._generate_target_variants(target_name)
         target_wts = [self.tok.weighted_tokenize(v) for v in target_variants]
 
-        # full match collection: MatchCandidate, score, target tok&weights, candidate
-        # WeightedTokens
+        # Match collections consisting of [candidate, score]
         all_matches: list[tuple[MatchCandidate, float]] = []
-        winning_matches: list[tuple[MatchCandidate, float]] = []  # winner collection
+        winning_matches: list[tuple[MatchCandidate, float]] = []  # exact/compatible
+        fallback_matches: list[tuple[MatchCandidate, float]] = []  # unknown/family
 
         # --- Approach 1: Exact matches via candidate_index lookup (fast path)
         for variant in target_variants:
@@ -194,7 +194,10 @@ class NameMatcher:
 
                     all_matches.append((candidate, debug_score))
                     if score >= self.threshold:
-                        winning_matches.append((candidate, score))
+                        if bonus > 0.0:
+                            winning_matches.append((candidate, score))
+                        else:
+                            fallback_matches.append((candidate, score))
 
             # if a variant has been matched, stop 'descending' down the list
             if winning_matches:
@@ -220,14 +223,16 @@ class NameMatcher:
                         candidate_wt,
                         fuzz_ratio_floor=self.fuzz_ratio_threshold,
                     )
-
                     is_match, bonus = _compare_fuel(target_fueltype, candidate.fueltype)
                     true_score = true_score + bonus if is_match else 0.0
                     debug_score += bonus
 
                     all_matches.append((candidate, debug_score))
                     if true_score >= self.weighted_threshold:
-                        winning_matches.append((candidate, true_score))
+                        if bonus > 0.0:
+                            winning_matches.append((candidate, true_score))
+                        else:
+                            fallback_matches.append((candidate, true_score))
 
                 # if a variant has been matched, stop descending
                 if winning_matches:
@@ -237,6 +242,10 @@ class NameMatcher:
         # 1. Sort matches:
         # winners: first by score (highest first), then by adapter (most reliable first)
         winning_matches.sort(
+            key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].source, 0)),
+            reverse=True,
+        )
+        fallback_matches.sort(
             key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].source, 0)),
             reverse=True,
         )
@@ -263,13 +272,15 @@ class NameMatcher:
         # 4. Get matched candidate with the best score
         if winning_matches:
             best_candidate, best_score = winning_matches[0]
+        elif fallback_matches:
+            best_candidate, best_score = fallback_matches[0]
         elif top_matches:
             best_candidate, best_score = top_matches[0]
         else:
             best_candidate, best_score = None, 0.0
 
         return MatchResult(
-            matched=True if winning_matches else False,
+            matched=bool(winning_matches or fallback_matches),
             candidate=best_candidate,
             score=best_score,
             target_variants=target_variants,
@@ -446,7 +457,7 @@ def _compare_fuel(target_fuel: str | None, cand_fuel: str | None) -> tuple[bool,
     level = classify_fueltype_match(target_fuel, cand_fuel)
     if level == "mismatch":
         return False, 0.0
-    elif level == "unknown":
+    elif level in ("unknown", "family"):
         return True, 0.0
 
     return True, 5.0  # bonus for "exact" or "compatible"

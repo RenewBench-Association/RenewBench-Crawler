@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from rbc.coordinates.utils.fuel import (
+    FUEL_COMBUSTION_FAMILY,
     FUEL_STOPWORDS,
     FUEL_TOKEN_SYNONYMS,
     FUEL_UNKNOWN,
@@ -30,6 +31,20 @@ class TestGlobalParameters:
             key (str): Parametrized key of the FUEL_TOKEN_SYNONYMS mapping.
         """
         assert re.fullmatch(r"[a-z]+", key)
+
+    @pytest.mark.parametrize("member", sorted(FUEL_COMBUSTION_FAMILY))
+    def test_family_members_are_producible_tokens(self, member: str) -> None:
+        """Failure path: A family member tokenization can never emit is dead config.
+
+        The family is compared against tokenized labels, so a multi-word or hyphenated
+        member would never be found. It must also survive its own synonym mapping --
+        listing "lignite" would be dead, since that is rewritten to "coal" first.
+
+        Args:
+            member (str): Parametrized member of the FUEL_COMBUSTION_FAMILY set.
+        """
+        assert re.fullmatch(r"[a-z]+", member)
+        assert _tokenize_fuel(member) == (member,)
 
     @pytest.mark.parametrize("value", sorted(set(FUEL_TOKEN_SYNONYMS.values())))
     def test_synonym_values_are_single_tokens(self, value: str) -> None:
@@ -60,51 +75,98 @@ class TestClassifyFueltypeMatch:
     """Tests for the utility function classify_fueltype_match."""
 
     @pytest.mark.parametrize(
-        "sysop_type, loc_type, expected_output",
+        "sysop_type, loc_type",
         [
-            # --- exact: identical token sets (after normalization/synonyms) ---
-            ("wind", "Wind", "exact"),
-            ("coal", "Lignite", "exact"),
-            ("gas", "LNG", "exact"),
-            ("hydro", "Hydroelectric", "exact"),
-            # --- compatible: sets overlap without being identical ---
-            ("gas", "fossil gas: gas, fossil liquids: heavy fuel oil", "compatible"),
-            ("fossil gas", "natural gas", "compatible"),
-            # --- mismatch: no overlap at all ---
-            ("wind", "solar", "mismatch"),
-            ("nuclear", "coal", "mismatch"),
-            ("hydro", "bioenergy: agricultural waste (solids)", "mismatch"),
+            ("wind", "Wind"),
+            ("coal", "Lignite"),
+            ("gas", "LNG"),
+            ("hydro", "Hydroelectric"),
         ],
+        ids=["wind", "coal", "gas", "hydro"],
     )
-    def test(self, sysop_type: str, loc_type: str, expected_output: str) -> None:
-        """Happy + failure paths: Overlapping labels agree, disjoint ones are rejected.
+    def test_exact_is_match(self, sysop_type: str, loc_type: str) -> None:
+        """Happy path: All exact label matches are classified as expected ("exact").
+
+        This ensures normalization works and synonyms translation is applied.
 
         Args:
             sysop_type (str): Fuel type of the operator's EGE.
             loc_type (str): Fuel type of the locator's EGE.
-            expected_output (str): Expected compatibility level.
         """
-        assert classify_fueltype_match(sysop_type, loc_type) == expected_output
+        assert classify_fueltype_match(sysop_type, loc_type) == "exact"
 
     @pytest.mark.parametrize(
-        "loc_type",
+        "sysop_type, loc_type",
         [
-            "bioenergy: refuse (landfill gas)",
-            "bioenergy: agricultural waste (solids)",
-            "bioenergy: wood & other biomass (solids)",
+            ("gas", "fossil gas: gas, fossil liquids: heavy fuel oil"),
+            ("fossil gas", "natural gas"),
+            ("thermal (coal/gas/oil/waste/biomass)", "bioenergy (landfill gas)"),
+            ("thermal (coal/gas/oil/waste/biomass)", "bioenergy: agri waste (solids)"),
+            ("thermal (coal/gas/oil/waste/biomass)", "fossil fuel: diesel oil"),
         ],
+        ids=["gas1", "gas2", "gas3", "waste", "oil"],
     )
-    def test_broad_sysop_matches_specific_loc(self, loc_type: str) -> None:
-        """Happy path: A multi-word sysop label can match with specific locator labels.
-
-        These three are the real ONS/Brazil rejections that motivated moving from
-        substring containment to token-set overlap.
+    def test_compatible_is_match(self, sysop_type: str, loc_type: str) -> None:
+        """Happy path: All overlapping label are classified as expected ("compatible").
 
         Args:
+            sysop_type (str): Fuel type of the operator's EGE.
             loc_type (str): Fuel type of the locator's EGE.
         """
-        sysop_type = "thermal (coal/gas/oil/waste/biomass)"
         assert classify_fueltype_match(sysop_type, loc_type) == "compatible"
+
+    @pytest.mark.parametrize(
+        "sysop_type, loc_type",
+        [
+            ("peat", "lignite"),
+            ("peat", "Solid Biomass"),
+            ("peat", "bioenergy: wood & other biomass (solids), other: other"),
+            ("peat", "oil"),
+            ("peat", "fossil liquids: diesel"),
+            ("thermal (coal/gas/oil/waste/biomass)", "bioenergy: paper mill wastes"),
+        ],
+        ids=["lignite", "solid_biomass", "wood", "oil", "diesel", "wastes"],
+    )
+    def test_family_is_match(self, sysop_type: str, loc_type: str) -> None:
+        """Happy path: Two labels that both burn something are never vetoed outright.
+
+        No locators use "peat" at all -- Ireland's peat plants appear as diesel,
+        fuel oil, lignite or biomass depending on the curator -- so a strict veto rejects
+        matches whose coordinates are correct. These seven pairs are the real ONS/ENTSO-E
+        rejections the family level was introduced for.
+
+        Args:
+            sysop_type (str): Fuel type of the operator's EGE.
+            loc_type (str): Fuel type of the locator's EGE.
+        """
+        assert classify_fueltype_match(sysop_type, loc_type) == "family"
+
+    @pytest.mark.parametrize(
+        "sysop_type, loc_type",
+        [
+            ("thermal (coal/gas/oil/waste/biomass)", "solar"),
+            ("hydroelectric", "solar"),
+            ("wind", "solar"),
+            ("thermal (coal/gas/oil/waste/biomass)", "wind"),
+            ("wind", "fossil gas: natural gas"),
+            ("hydroelectric", "oil"),
+            ("hydroelectric", "fossil"),
+            ("solar", "hydro"),
+            ("nuclear", "coal"),
+        ],
+    )
+    def test_family_not_too_broad(self, sysop_type: str, loc_type: str) -> None:
+        """Regression pin: Only combustion types share a family -- everything else is vetoed.
+
+        Wind, solar, hydro and nuclear stay distinct from each other and from the family.
+        This is what stops the family level from admitting name matches with distinctly
+        different fuel types. If any of these ever returns "family", the umbrella is too wide.
+
+        Args:
+            sysop_type (str): Fuel type of the operator's EGE.
+            loc_type (str): Fuel type of the locator's EGE.
+        """
+        assert classify_fueltype_match(sysop_type, loc_type) == "mismatch"
 
     @pytest.mark.parametrize(
         "sysop_type, loc_type",
@@ -120,8 +182,10 @@ class TestClassifyFueltypeMatch:
             ("unknown gas", "wind"),  # marker present, no real overlap
         ],
     )
-    def test_unknown_types(self, sysop_type: str | None, loc_type: str | None) -> None:
-        """Failure path: Missing or unknown-only labels classify as "unknown", not a match.
+    def test_unknown_is_match(
+        self, sysop_type: str | None, loc_type: str | None
+    ) -> None:
+        """Happy path: Missing or unknown-only labels classify as "unknown", not a match.
 
         "unknown" must not be reported as "exact" just because both sides say it, and it
         must never be counted as evidence of overlap.
@@ -153,6 +217,24 @@ class TestClassifyFueltypeMatch:
             expected_output (str): Expected compatibility level.
         """
         assert classify_fueltype_match(sysop_type, loc_type) == expected_output
+
+    @pytest.mark.parametrize(
+        "sysop_type, loc_type",
+        [
+            ("wind", "solar"),
+            ("nuclear", "coal"),
+            ("hydro", "bioenergy: agricultural waste (solids)"),
+        ],
+        ids=["wind_v_solar", "nuclear_v_coal", "hydro_v_bioenergy"],
+    )
+    def test_mismatch_is_no_match(self, sysop_type: str, loc_type: str) -> None:
+        """Failure path: All labels that don't match are classified as expected ("mismatch").
+
+        Args:
+            sysop_type (str): Fuel type of the operator's EGE.
+            loc_type (str): Fuel type of the locator's EGE.
+        """
+        assert classify_fueltype_match(sysop_type, loc_type) == "mismatch"
 
 
 # ----------------------------------
