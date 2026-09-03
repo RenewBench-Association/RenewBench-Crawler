@@ -187,7 +187,9 @@ class NameMatcher:
             if variant in candidate_index:
                 for candidate in candidate_index[variant]:
                     score = 100.0
-                    score = _adjust_score(score, target_fueltype, candidate.fueltype)
+
+                    is_match, bonus = _compare_fuel(target_fueltype, candidate.fueltype)
+                    score = score + bonus if is_match else 0.0
 
                     all_matches.append((candidate, score))
                     if score >= self.threshold:
@@ -217,12 +219,10 @@ class NameMatcher:
                         candidate_wt,
                         fuzz_ratio_floor=self.fuzz_ratio_threshold,
                     )
-                    true_score = _adjust_score(
-                        true_score, target_fueltype, candidate.fueltype
-                    )
-                    debug_score = _adjust_score(
-                        debug_score, target_fueltype, candidate.fueltype
-                    )
+
+                    is_match, bonus = _compare_fuel(target_fueltype, candidate.fueltype)
+                    true_score = true_score + bonus if is_match else 0.0
+                    debug_score += bonus
 
                     all_matches.append((candidate, debug_score))
                     if true_score >= self.weighted_threshold:
@@ -429,28 +429,23 @@ class NameMatcher:
         return variants
 
 
-def _adjust_score(
-    score: float, target_fuel: str | None, cand_fuel: str | None
-) -> float:
-    """Adjust score for a given candidate depending on whether the fuel types match.
+def _compare_fuel(target_fuel: str | None, cand_fuel: str | None) -> tuple[bool, float]:
+    """Whether the fuel types are classified as a match, and the bonus a positive match earns.
 
     Get fuel type match level with the classify_fueltype_match helper, define handling
     based on the classification str.
 
     Args:
-        score (float): The score to adjust.
-        target_fuel (str | None): The target's fuel type. Defaults to None.
-        cand_fuel (str | None): The candidate's fuel type. Defaults to None.
+        target_fuel (str | None): The target's fuel type
+        cand_fuel (str | None): The candidate's fuel type
 
     Returns:
-        float: The adjusted score.
+        tuple[bool, float]: Whether the fuel types match, and the score bonus to add.
     """
     level = classify_fueltype_match(target_fuel, cand_fuel)
-    if level == "mismatch":  # redefine to 0
-        return 0.0
-    elif level == "unknown":  # leave score unchanged
-        return score
+    if level == "mismatch":
+        return False, 0.0
+    elif level == "unknown":
+        return True, 0.0
 
-    # bonus for correct match ("exact" or "compatible")
-    score += 5.0
-    return score
+    return True, 5.0  # bonus for "exact" or "compatible"
