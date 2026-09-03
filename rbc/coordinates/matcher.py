@@ -186,12 +186,13 @@ class NameMatcher:
         for variant in target_variants:
             if variant in candidate_index:
                 for candidate in candidate_index[variant]:
-                    score = 100.0
+                    score, debug_score = 100.0, 100.0
 
                     is_match, bonus = _compare_fuel(target_fueltype, candidate.fueltype)
                     score = score + bonus if is_match else 0.0
+                    debug_score += bonus
 
-                    all_matches.append((candidate, score))
+                    all_matches.append((candidate, debug_score))
                     if score >= self.threshold:
                         winning_matches.append((candidate, score))
 
