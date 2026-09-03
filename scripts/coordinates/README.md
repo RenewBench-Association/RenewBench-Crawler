@@ -152,10 +152,33 @@ Optional arguments are:
 - `--update`: Re-fetch OSM data from the overpass API (even if it was done for the same data
   before).
 
+A successful run returns several new files:
+- a `coordinates_....csv` with the matched coordinates
+- a `fuzzy_matching_...csv` with a larger list of all identified potential candidate
+  matches in fuzzy name matching and reasons for not matching - helpful for debugging
+- a `map_coordinates.html` map overview of all identified target locations.
+
 > [!WARNING]
 >
 > This can only be run one source at a time. The current implementation is only developed
 > for ENTSOE and will only work for CSV files (not f.e. REI's JSONs)!
+
+### Comparing different coordinate finding runs
+
+As described before, numerous strategies were implemented for matching. If a method is
+removed or changed, a stringent comparison is helpful to identify what impact this had on
+the outputs. To compare two runs of the same system operator, use the `compare_runs` script:
+```bash
+$ python -m scripts.coordinates.compare_runs -s <SOURCE>
+```
+
+Optional arguments are:
+
+- `-b`: The directory of the first/"before" run. Per default, a folder
+  `<dst_dir_raw>/coordinates/archive` will be searched for the most recent CSV files.
+- `-a`: The directory of the second/"after" run. Per default, the CSVs in the folder
+  `<dst_dir_raw>/coordinates/` will used (direct output location for `coordinate_locator`).
+- `--details`: The number of changed EGEs to list. Defaults to 10.
 
 
 # Ensuring up-to-date OSM parsing
