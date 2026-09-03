@@ -41,20 +41,22 @@ BROWSERS = ["safari", "google-chrome", "chrome"]  # browsers that display withou
 # ---------------------------------------------------------------------------
 # Define marker color by `match_source` value (created by running a pipeline).
 _MATCH_SOURCE_COLORS: dict[str, str] = {
-    # ppdb (PPM/OSMPP) matches, most to least confident
-    "ppdb_direct": "green",  # exact EIC hit in ppdb
-    "ppdb_parent_direct": "lightgreen",  # parent EIC → direct ppdb hit
-    "ppdb_parent_entsoe_id": "darkgreen",  # fuzzy-resolved parent EIC → ppdb hit
-    "ppdb_fuzzy": "cadetblue",  # fuzzy name/fuel match in ppdb
     # GEM (Global Energy Monitor) matches, most to least confident
     "gem_direct": "purple",  # exact EIC hit in GEM
     "gem_parent_direct": "darkpurple",  # parent EIC → direct GEM hit
     "gem_parent_entsoe_id": "pink",  # fuzzy-resolved parent EIC → GEM hit
     "gem_fuzzy": "beige",  # fuzzy name/fuel match in GEM
+    # ppdb (PPM/OSMPP) matches, most to least confident
+    "ppdb_direct": "green",  # exact EIC hit in ppdb
+    "ppdb_parent_direct": "lightgreen",  # parent EIC → direct ppdb hit
+    "ppdb_parent_entsoe_id": "darkgreen",  # fuzzy-resolved parent EIC → ppdb hit
+    "ppdb_fuzzy": "cadetblue",  # fuzzy name/fuel match in ppdb
     # OSM (Overpass) matches
     "osm_fuzzy": "darkblue",
     # coordinates borrowed from a sibling unit
-    "sibling_unit": "orange",
+    "gem_sibling": "coral",
+    "ppdb_sibling": "orange",
+    "osm_sibling": "tan",
     # no coordinates found (won't normally be plotted)
     "unmatched": "red",
 }

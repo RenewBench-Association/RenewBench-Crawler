@@ -18,7 +18,6 @@ from pprint import pformat
 from typing import cast
 
 import country_converter as coco
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -465,12 +464,9 @@ class BasePipeline:
         """
         df["lat"], df["lon"] = self._matched_coords(df)
 
-        derived_source = pd.Series(
-            np.select(
-                [df["sibling.lat"].notna()], ["sibling_unit"], default="unmatched"
-            ),
-            index=df.index,
-        )
+        # get sibling from its match_source's "<loc>_sibling_of:<donor>" as "<loc>_sibling"
+        sibling_source = df["sibling.match_source"].str.split("_of:").str[0]
+        derived_source = sibling_source.fillna("unmatched")
 
         df["match_source"] = (
             df["ppdb.match_source"]
@@ -658,6 +654,11 @@ class BasePipeline:
         matched_lat, matched_lon = self._matched_coords(df)
         already_matched = matched_lat.notna()
 
+        # define which locator each donor's coordinates came from
+        donor_locator = pd.Series(None, index=df.index, dtype=object)
+        for locator in reversed(SORTED_LOCATORS):  # most reliable takes precedence
+            donor_locator = donor_locator.mask(df[f"{locator}.lat"].notna(), locator)
+
         sibling_lookup = (
             pd.DataFrame(
                 {
@@ -665,6 +666,7 @@ class BasePipeline:
                     "_lat": matched_lat[already_matched & has_group],
                     "_lon": matched_lon[already_matched & has_group],
                     "_name": df.loc[already_matched & has_group, self.sysop_name_col],
+                    "_locator": donor_locator[already_matched & has_group],
                 }
             )
             .dropna(subset=["_key"])
@@ -679,7 +681,9 @@ class BasePipeline:
                 sib = sibling_lookup.loc[key]
                 df.at[idx, "sibling.lat"] = sib["_lat"]
                 df.at[idx, "sibling.lon"] = sib["_lon"]
-                df.at[idx, "sibling.match_source"] = f"sibling_of:{sib['_name']}"
+                df.at[idx, "sibling.match_source"] = (
+                    f"{sib['_locator']}_sibling_of:{sib['_name']}"
+                )
 
         self._log_step_result("Matched by sibling group", df=df)
         return df
