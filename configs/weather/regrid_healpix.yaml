@@ -1,5 +1,5 @@
-raw_data_base_dir: /lsdf/raw/weather/
-dst_data_base_dir: /lsdf/processed/weather/healpix/
+raw_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/raw/weather/
+dst_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/processed/weather/healpix/
 healpix_min_level: 0
 healpix_max_level:
   era5: 8
@@ -8,3 +8,6 @@ healpix_max_level:
   barra2_c2_20min: 11
   icon_dream_global: 9
   icon_dream_eu: 10
+compressor: zlib
+compression_level: 1
+shuffle: true

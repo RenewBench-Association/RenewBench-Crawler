@@ -44,6 +44,14 @@ VARIABLE_MAPPING = {
     "w": "vertical_velocity",
 }
 
+# cfgrib names that come from pressure-level ("_pl_") files -- everything
+# else in VARIABLE_MAPPING comes from single-level ("_sl_") files. Used to
+# pick which file a requested canonical variable lives in, since (unlike
+# BARRA2/ICON-DREAM) several variables share one ERA5 file.
+_PRESSURE_LEVEL_CFGRIB_NAMES = {"z", "t", "u", "v", "q", "w"}
+
+_CANONICAL_TO_CFGRIB = {v: k for k, v in VARIABLE_MAPPING.items()}
+
 
 class Era5Regridder(GridRegridder):
     """HEALPix regridder for ERA5 reanalysis data.
@@ -71,44 +79,85 @@ class Era5Regridder(GridRegridder):
             MODEL_CONFIG["temporal_res_folder"],
         )
 
-    def _load_source_chunk(self, task: tuple) -> xr.Dataset:
-        """Open and merge every single/pressure-level file for one task.
+    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
+        """Open the raw ERA5 file for one task, selecting just one variable.
+
+        Unlike BARRA2/ICON-DREAM, several ERA5 variables share one file per
+        (year, month, level_type), so the file itself can't be picked by
+        variable alone -- this opens the one file (sl or pl, whichever
+        contains the requested variable) and immediately narrows to just
+        that cfgrib name before anything else. Everything opens with
+        chunks={} (dask-lazy): confirmed that xarray's backend arrays stay
+        lazy per-variable regardless of how many variables share a file, so
+        the other variables in that file are never actually read from disk
+        as long as nothing else touches them.
 
         Single-level files carry two cfgrib hypercubes: flat-time analysis
         variables, and (time, step) forecast-structured accumulated/extreme
-        variables (confirmed on real sample data), the latter is flattened
-        via valid_time. Forecast-cycle valid times spill past calendar-month
-        boundaries, so the merged result is trimmed to the exact month;
-        otherwise a few edge hours would carry NaN analysis variables in the
-        store, not because of missing real-world data but as a merge
-        artifact.
+        variables (confirmed on real sample data), the latter flattened via
+        valid_time. Forecast-cycle valid times spill past calendar-month
+        boundaries, so the result is trimmed to the exact month.
 
-        Everything opens with chunks={} (dask-lazy) -- confirmed by spike
-        that merging real single/pressure-level data eagerly gets OOM-killed,
-        since the (time, step) flattening forces an outer-join on mismatched
-        time indices across the full global grid.
+        Args:
+            task (tuple): (year, month) task identifier.
+            variable (str): Canonical variable name to load.
+
+        Returns:
+            xr.Dataset: Single-variable dataset for this task, in the native
+                cfgrib variable name.
+        """
+        year, month = task
+        cfgrib_name = _CANONICAL_TO_CFGRIB[variable]
+        level_type = "pl" if cfgrib_name in _PRESSURE_LEVEL_CFGRIB_NAMES else "sl"
+        files = sorted(self.source_dir.glob(f"era5_{year}_{month}_{level_type}_*.grib"))
+        if not files:
+            raise FileNotFoundError(
+                f"No '{level_type}' file found for {year}-{month} in '{self.source_dir}' "
+                f"(needed for '{variable}')."
+            )
+        f = files[0]
+
+        if level_type == "pl":
+            ds = self._open_pressure_level(f)
+            return self._trim_to_month(ds[[cfgrib_name]], year, month)
+
+        for hypercube in self._open_single_level(f):
+            if cfgrib_name in hypercube.data_vars:
+                return self._trim_to_month(hypercube[[cfgrib_name]], year, month)
+        raise ValueError(
+            f"'{cfgrib_name}' (canonical: '{variable}') not found in '{f}'."
+        )
+
+    def _discover_variables(self, task: tuple) -> list[str]:
+        """Return every canonical ERA5 variable actually downloaded for one task.
+
+        Unlike BARRA2/ICON-DREAM this isn't filename-only: several variables
+        share one file, and the filename's own CDS-style codes diverge from
+        cfgrib's decoded names (the same kind of divergence VARIABLE_MAPPING
+        exists to bridge), so the sl/pl files are opened (lazily -- cheap,
+        no bulk data read) to see what cfgrib actually decoded.
 
         Args:
             task (tuple): (year, month) task identifier.
 
         Returns:
-            xr.Dataset: Merged dataset for this task, in native variable names.
+            list[str]: Canonical variable names found for this task.
         """
         year, month = task
-        files = sorted(self.source_dir.glob(f"era5_{year}_{month}_sl_*.grib")) + sorted(
-            self.source_dir.glob(f"era5_{year}_{month}_pl_*.grib")
-        )
-        datasets = [
-            sub_ds
-            for f in files
-            for sub_ds in (
-                self._open_single_level(f)
-                if "_sl_" in f.name
-                else [self._open_pressure_level(f)]
+        found: list[str] = []
+        for f in sorted(self.source_dir.glob(f"era5_{year}_{month}_pl_*.grib")):
+            ds = self._open_pressure_level(f)
+            found.extend(
+                VARIABLE_MAPPING[v] for v in ds.data_vars if v in VARIABLE_MAPPING
             )
-        ]
-        merged = xr.merge(datasets)
-        return self._trim_to_month(merged, year, month)
+        for f in sorted(self.source_dir.glob(f"era5_{year}_{month}_sl_*.grib")):
+            for hypercube in self._open_single_level(f):
+                found.extend(
+                    VARIABLE_MAPPING[v]
+                    for v in hypercube.data_vars
+                    if v in VARIABLE_MAPPING
+                )
+        return found
 
     def _open_pressure_level(self, path: Path) -> xr.Dataset:
         """Open a pressure-level file, renaming its level dim to match the contract.

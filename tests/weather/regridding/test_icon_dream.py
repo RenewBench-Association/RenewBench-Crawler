@@ -36,10 +36,6 @@ def base_args(tmp_path: Path) -> dict:
         "checkpoint_path": Path(tmp_path, "status.pickle"),
         "min_level": 4,
         "max_level": 7,
-        # Empty (no filter) by default so _load_source_chunk() takes its
-        # glob-everything branch, matching most of these tests' setup of one
-        # or more arbitrary files -- tests of the variables-set, exact-path
-        # branch set their own "variables" explicitly.
         "variables": [],
         "years": [2025],
         "months": ["01"],
@@ -161,7 +157,7 @@ class TestLoadSourceChunk:
             "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
             return_value=[_hypercube("totally_unrelated_cfgrib_name")],
         ):
-            result = rg._load_source_chunk((2025, "01"))
+            result = rg._load_source_chunk((2025, "01"), "2m_temperature")
 
         assert "T_2M" in result.data_vars
         assert "totally_unrelated_cfgrib_name" not in result.data_vars
@@ -182,7 +178,7 @@ class TestLoadSourceChunk:
             "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
             return_value=[_hypercube("t2m")],
         ):
-            result = rg._load_source_chunk((2025, "01"))
+            result = rg._load_source_chunk((2025, "01"), "2m_temperature")
 
         assert "step" not in result.dims
         assert "values" not in result.dims
@@ -211,7 +207,7 @@ class TestLoadSourceChunk:
             "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
             return_value=[_hypercube("t", with_level=True)],
         ):
-            result = rg._load_source_chunk((2025, "01"))
+            result = rg._load_source_chunk((2025, "01"), "temperature")
 
         assert "model_level" in result["T"].dims
         assert "generalVerticalLayer" not in result.dims
@@ -219,8 +215,12 @@ class TestLoadSourceChunk:
         assert list(result["model_level"].values) == [111.0, 112.0]
         assert "cell" in result["T"].dims
 
-    def test_merges_multiple_files(self, base_args: dict) -> None:
-        """Single-level and model-level files merge into one Dataset.
+    def test_merges_multiple_hypercubes_from_one_file(self, base_args: dict) -> None:
+        """Several cfgrib hypercubes from one file merge into one Dataset.
+
+        Confirmed real behavior: a single ICON-DREAM file can split into more
+        than one cfgrib hypercube (e.g. distinct step groupings) -- all get
+        renamed to the same DWD code and merged into one combined time series.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
@@ -228,19 +228,35 @@ class TestLoadSourceChunk:
         source_dir = _source_dir(base_args["raw_dir"])
         source_dir.mkdir(parents=True)
         Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
-        Path(source_dir, "ICON-DREAM-Global_202501_T_hourly.grb").touch()
         rg = IconDreamRegridder(model="global", **base_args)
+
+        def _hypercube_at(step_hours: int) -> xr.Dataset:
+            init_time = pd.to_datetime(["2025-01-01T00:00"]).values
+            step = pd.to_timedelta([step_hours], unit="h").values
+            valid_time = init_time[:, None] + step[None, :]
+            return xr.Dataset(
+                {"t2m": (("time", "step", "values"), [[[1.0, 2.0]]])},
+                coords={
+                    "time": init_time,
+                    "step": step,
+                    "valid_time": (("time", "step"), valid_time),
+                },
+            )
 
         with patch(
             "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
-            side_effect=[[_hypercube("t2m")], [_hypercube("t", with_level=True)]],
+            return_value=[_hypercube_at(1), _hypercube_at(2)],
         ):
-            result = rg._load_source_chunk((2025, "01"))
+            result = rg._load_source_chunk((2025, "01"), "2m_temperature")
 
-        assert set(result.data_vars) == {"T_2M", "T"}
+        assert set(result.data_vars) == {"T_2M"}
+        assert result.sizes["time"] == 2
+        assert list(result["time"].values) == list(
+            pd.to_datetime(["2025-01-01T01:00", "2025-01-01T02:00"])
+        )
 
     def test_only_matches_requested_task(self, base_args: dict) -> None:
-        """Files for a different (year, month) aren't globbed.
+        """A different (year, month) resolves to a different exact file path.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
@@ -248,48 +264,17 @@ class TestLoadSourceChunk:
         source_dir = _source_dir(base_args["raw_dir"])
         source_dir.mkdir(parents=True)
         Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
-        Path(source_dir, "ICON-DREAM-Global_202502_T_2M_hourly.grb").touch()
         rg = IconDreamRegridder(model="global", **base_args)
 
         with patch(
             "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
             return_value=[_hypercube("t2m")],
         ) as mock_open:
-            rg._load_source_chunk((2025, "01"))
+            rg._load_source_chunk((2025, "01"), "2m_temperature")
 
         mock_open.assert_called_once_with(
             Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb"), chunks={}
         )
-
-    def test_variables_set_only_opens_requested_files(self, base_args: dict) -> None:
-        """With "variables" set, only that variable's exact file is opened.
-
-        ICON-DREAM is one variable per file, so a requested canonical
-        variable's DWD code and exact path are known upfront -- unrequested
-        files (here, the much larger model-level "T" file) are never even
-        globbed or opened, unlike the no-filter branch.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        source_dir = _source_dir(base_args["raw_dir"])
-        source_dir.mkdir(parents=True)
-        Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
-        Path(source_dir, "ICON-DREAM-Global_202501_T_hourly.grb").touch()
-        rg = IconDreamRegridder(
-            model="global", **{**base_args, "variables": ["2m_temperature"]}
-        )
-
-        with patch(
-            "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
-            return_value=[_hypercube("t2m")],
-        ) as mock_open:
-            result = rg._load_source_chunk((2025, "01"))
-
-        mock_open.assert_called_once_with(
-            Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb"), chunks={}
-        )
-        assert set(result.data_vars) == {"T_2M"}
 
     def test_trims_spillover_past_month_boundary(self, base_args: dict) -> None:
         """Timestamps outside the exact calendar month are dropped.
@@ -320,10 +305,65 @@ class TestLoadSourceChunk:
             "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
             return_value=[spillover_ds],
         ):
-            result = rg._load_source_chunk((2025, "01"))
+            result = rg._load_source_chunk((2025, "01"), "2m_temperature")
 
         # Only the step-3 valid time (2025-01-01T00:00) falls inside January.
         assert list(result["time"].values) == list(pd.to_datetime(["2025-01-01T00:00"]))
+
+
+# ----------------------------------
+# IconDreamRegridder._discover_variables
+# ----------------------------------
+class TestDiscoverVariables:
+    """Tests for IconDreamRegridder._discover_variables()."""
+
+    def test_finds_variables_from_filenames(self, base_args: dict) -> None:
+        """Each file's DWD code (from its filename) maps to a canonical name.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
+        Path(source_dir, "ICON-DREAM-Global_202501_T_hourly.grb").touch()
+        rg = IconDreamRegridder(model="global", **base_args)
+
+        found = rg._discover_variables((2025, "01"))
+
+        assert set(found) == {"2m_temperature", "temperature"}
+
+    def test_unknown_dwd_code_is_ignored(self, base_args: dict) -> None:
+        """A file whose DWD code isn't in the mapping is silently skipped.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
+        Path(source_dir, "ICON-DREAM-Global_202501_TOTALLY_UNKNOWN_hourly.grb").touch()
+        rg = IconDreamRegridder(model="global", **base_args)
+
+        found = rg._discover_variables((2025, "01"))
+
+        assert found == ["2m_temperature"]
+
+    def test_only_matches_requested_task(self, base_args: dict) -> None:
+        """Files for a different (year, month) aren't picked up.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
+        Path(source_dir, "ICON-DREAM-Global_202502_T_hourly.grb").touch()
+        rg = IconDreamRegridder(model="global", **base_args)
+
+        found = rg._discover_variables((2025, "01"))
+
+        assert found == ["2m_temperature"]
 
 
 # ----------------------------------

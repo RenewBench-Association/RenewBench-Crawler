@@ -6,7 +6,7 @@ Schema definitions for different data sources.
 from pathlib import Path
 from typing import Literal, Type
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 # ----------------------------------
@@ -321,8 +321,10 @@ class RegridHealpixConfig(BaseModel):
             output, weight cache, and checkpoint files.
         healpix_min_level (int): Shared coarsest HEALPix level across sources.
         healpix_max_level (dict[str, int]): Finest HEALPix level per source.
-        variables (dict[str, list[str]] | None): Per-source variable override;
-            None uses each regridder's own default.
+        compressor (Literal): Zarr compression codec; "none" writes raw bytes.
+        compression_level (int): Codec level, >= 1 (Blosc treats 0 as "no
+            compression").
+        shuffle (bool): Byte-shuffle filter before compressing, as NetCDF does.
     """
 
     source: Literal["regrid_healpix"] = "regrid_healpix"
@@ -330,7 +332,9 @@ class RegridHealpixConfig(BaseModel):
     dst_data_base_dir: Path
     healpix_min_level: int
     healpix_max_level: dict[str, int]
-    variables: dict[str, list[str]] | None = None
+    compressor: Literal["zlib", "zstd", "none"] = "zlib"
+    compression_level: int = Field(default=1, ge=1)
+    shuffle: bool = True
 
 
 # ----------------------------------

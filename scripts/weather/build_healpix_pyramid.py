@@ -180,7 +180,13 @@ def main() -> None:
     min_level = args.healpix_min_level or cfg.healpix_min_level
     max_level_overrides = _parse_max_level_overrides(args.healpix_max_level)
 
-    writer = HealpixZarrWriter(base_dir=cfg.dst_data_base_dir, min_level=min_level)
+    writer = HealpixZarrWriter(
+        base_dir=cfg.dst_data_base_dir,
+        min_level=min_level,
+        compressor=cfg.compressor,
+        compression_level=cfg.compression_level,
+        shuffle=cfg.shuffle,
+    )
 
     for name in args.sources:
         model_name = _MODEL_NAME[name]
@@ -192,7 +198,7 @@ def main() -> None:
             checkpoint_path=writer.checkpoint_path(model_name, time_res),
             min_level=min_level,
             max_level=max_level_overrides.get(name, cfg.healpix_max_level[name]),
-            variables=args.variables or (cfg.variables or {}).get(name) or [],
+            variables=args.variables or [],
             years=args.years,
             months=args.months,
             dry_run=args.dry_run,
@@ -200,16 +206,20 @@ def main() -> None:
             **_EXTRA_KWARGS.get(name, {}),
         )
 
-        for task, pyramid in regridder.regrid():
+        # regrid() yields one (year, month, variable) key + single-variable
+        # pyramid at a time.
+        for key, pyramid in regridder.regrid():
             writer.append(
-                model_name=model_name, time_res=time_res, task=task, pyramid=pyramid
+                model_name=model_name,
+                time_res=time_res,
+                task=key,
+                pyramid=pyramid,
+                encoding=regridder.encoding_for(key[-1]),
             )
-            # Only mark done once the write above actually succeeds -- see
-            # GridRegridder.mark_done()'s docstring for why this can't
-            # happen inside regrid() itself.
-            regridder.mark_done(task)
+            # Only mark done once the write above actually succeeds.
+            regridder.mark_done(key)
             writer.emit_stac_item(
-                model_name=model_name, time_res=time_res, task=task, pyramid=pyramid
+                model_name=model_name, time_res=time_res, task=key, pyramid=pyramid
             )
 
 

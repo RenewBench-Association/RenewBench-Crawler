@@ -17,11 +17,15 @@ from tqdm.dask import TqdmCallback
 class GridRegridder(ABC):
     """Abstract base for source-specific HEALPix regridders.
 
-    Subclasses implement `_get_tasks()`, `_load_source_chunk()`,
-    `_grid_metadata_path()`, and `_variable_mapping()`. `regrid()` handles the
-    checkpoint loop, weights, and pyramid construction; override
-    `_regrid_chunk()`/`_regrid_kwargs()` only if a source needs something
-    other than the generic path (e.g. BARRA2's regional coverage).
+    Subclasses implement `_get_tasks()`, `_discover_variables()`,
+    `_load_source_chunk()`, `_grid_metadata_path()`, and `_variable_mapping()`.
+    `regrid()` handles the checkpoint loop, weights, and pyramid construction;
+    override `_regrid_chunk()`/`_regrid_kwargs()` only if a source needs
+    something other than the generic path (e.g. BARRA2's regional coverage).
+
+    One variable is loaded, regridded, and written at a time, so peak memory
+    scales with one variable's footprint regardless of how many were
+    requested together.
 
     Attributes:
         raw_dir (Path): Root of this source's already-downloaded raw files.
@@ -40,7 +44,8 @@ class GridRegridder(ABC):
         dry_run (bool): If True, resolve inputs/weights but skip the actual regrid
             and skip yielding data.
         resume (bool): If True, load an existing checkpoint on init.
-        checkpoint (dict): Dict tracking regrid status per task tuple (1=done).
+        checkpoint (dict): Dict tracking regrid status per `(*task, variable)`
+            key (1=done).
         checkpoint_path (Path): Path to the checkpoint file for resuming regridding.
     """
 
@@ -114,83 +119,123 @@ class GridRegridder(ABC):
         self.checkpoint: dict = self._load_checkpoint()
 
     def regrid(self) -> Iterator[tuple[tuple, dict[int, xr.Dataset]]]:
-        """Regrid all unfinished tasks, yielding a HEALPix pyramid per task.
+        """Regrid all unfinished (task, variable) pairs, one variable at a time.
 
-        Skips checkpointed tasks. If `dry_run`, resolves weights but doesn't
-        regrid or yield. Never writes to the store — the caller must write via
-        `HealpixZarrWriter.append()`, then call `mark_done(task)`.
+        Skips checkpointed (task, variable) keys. Weights are resolved once
+        per task (from whichever variable is loaded first) and reused for
+        every other variable in that task, since they depend only on
+        horizontal grid geometry. If `dry_run`, resolves weights but skips
+        regridding and yielding. The caller writes each yielded pyramid via
+        `HealpixZarrWriter.append()`, then calls `mark_done(key)`.
 
         Yields:
-            tuple[tuple, dict[int, xr.Dataset]]: (task, pyramid) pairs, where
-                pyramid is keyed by HEALPix level from min_level to max_level.
+            tuple[tuple, dict[int, xr.Dataset]]: (key, pyramid) pairs, where
+                key is `(*task, variable)` and pyramid is keyed by HEALPix
+                level from min_level to max_level.
         """
         for task in self._get_tasks():
-            if self.resume and self.checkpoint.get(task, 0) == 1:
-                logger.info(f"Task {task}: previously regridded. Skipping.")
-                continue
+            weights: Path | None = None
+            for variable in self._variables_for_task(task):
+                key = (*task, variable)
+                if self.resume and self.checkpoint.get(key, 0) == 1:
+                    logger.info(f"Task {key}: previously regridded. Skipping.")
+                    continue
 
-            logger.info(f"Task {task}: loading source data...")
-            ds = self._load_source_chunk(task)
-            ds = self._rename_to_canonical(ds)
-            ds = self._filter_variables(ds)
+                logger.info(f"Task {key}: loading source data...")
+                ds = self._load_source_chunk(task, variable)
+                ds = self._rename_to_canonical(ds)
 
-            logger.info(f"Task {task}: resolving HEALPix weights...")
-            weights = self._get_weights(ds)
+                if weights is None:
+                    logger.info(f"Task {task}: resolving HEALPix weights...")
+                    weights = self._get_weights(ds)
 
-            if self.dry_run:
+                if self.dry_run:
+                    logger.info(
+                        f"Task {key}: DRY RUN - resolved inputs and weights, "
+                        "skipping regrid."
+                    )
+                    continue
+
                 logger.info(
-                    f"Task {task}: DRY RUN - resolved inputs and weights, "
-                    "skipping regrid."
+                    f"Task {key}: regridding to level {self.max_level} "
+                    f"(pyramid down to level {self.min_level})..."
                 )
-                continue
-
-            logger.info(
-                f"Task {task}: regridding to level {self.max_level} "
-                f"(pyramid down to level {self.min_level})..."
-            )
-            with TqdmCallback(desc=f"Task {task}"):
-                pyramid = self._regrid_chunk(ds, weights)
-            logger.info(f"Task {task}: regridding complete.")
-            yield task, pyramid
+                with TqdmCallback(desc=f"Task {key}"):
+                    pyramid = self._regrid_chunk(ds, weights)
+                logger.info(f"Task {key}: regridding complete.")
+                yield key, pyramid
 
         logger.info(f"All regridding tasks completed for '{self.source_name}'!")
 
-    def mark_done(self, task: tuple) -> None:
-        """Mark a task done and persist the checkpoint.
+    def mark_done(self, key: tuple) -> None:
+        """Mark a (task, variable) key done and persist the checkpoint.
 
-        Call only after `HealpixZarrWriter.append()` for this task succeeds —
+        Call only after `HealpixZarrWriter.append()` for this key succeeds —
         not inside `regrid()`, so a crash between yield and write can't mark a
-        task done that was never actually written.
+        key done that was never actually written.
 
         Args:
-            task (tuple): The task that was successfully written.
+            key (tuple): The `(*task, variable)` key that was successfully written.
         """
-        self.checkpoint[task] = 1
+        self.checkpoint[key] = 1
         self._save_checkpoint()
 
     def _get_tasks(self) -> list[tuple]:
         """Return (year, month) tasks for every configured year/month.
 
-        Every currently-planned source (ERA5, BARRA2, ICON-DREAM) uses this
-        same task granularity, since weights depend only on horizontal
-        geometry, not on which month is being processed. Override only if a
-        source genuinely needs a different task shape.
+        Every source uses the same task granularity, since weights depend only
+        on horizontal geometry, not on which month is being processed.
+        Override only if a source genuinely needs a different task shape.
 
         Returns:
             list[tuple]: Ordered list of (year, month) tuples.
         """
         return [(year, month) for year in self.years for month in self.months]
 
-    @abstractmethod
-    def _load_source_chunk(self, task: tuple) -> xr.Dataset:
-        """Load and merge the raw source file(s) for a single task.
+    def _variables_for_task(self, task: tuple) -> list[str]:
+        """Return canonical variable names to process for one task.
+
+        Returns `self.variables` if the user requested specific ones;
+        otherwise discovers what's actually available via
+        `_discover_variables()`.
 
         Args:
             task (tuple): Task identifier returned by `_get_tasks()`.
 
         Returns:
-            xr.Dataset: The opened source dataset, in native variable and
-                dimension names.
+            list[str]: Canonical variable names to process for this task.
+        """
+        if self.variables:
+            return self.variables
+        return self._discover_variables(task)
+
+    @abstractmethod
+    def _discover_variables(self, task: tuple) -> list[str]:
+        """Return every canonical variable actually available for one task.
+
+        Filename-only where possible, cheaply enough to leave the real load
+        to `_load_source_chunk()`. Only used when the user didn't request
+        specific variables via `self.variables`.
+
+        Args:
+            task (tuple): Task identifier returned by `_get_tasks()`.
+
+        Returns:
+            list[str]: Canonical variable names found for this task.
+        """
+
+    @abstractmethod
+    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
+        """Load the raw source file(s) for one task, for exactly one variable.
+
+        Args:
+            task (tuple): Task identifier returned by `_get_tasks()`.
+            variable (str): Canonical variable name to load -- one of
+                `_variables_for_task(task)`.
+
+        Returns:
+            xr.Dataset: The opened source dataset for just this variable, in
+                native variable and dimension names.
         """
 
     @abstractmethod
@@ -226,22 +271,6 @@ class GridRegridder(ABC):
         }
         return ds.rename_vars(mapping)
 
-    def _filter_variables(self, ds: xr.Dataset) -> xr.Dataset:
-        """Restrict `ds` to `self.variables`, if any were requested.
-
-        Args:
-            ds (xr.Dataset): Dataset already renamed to canonical variable names.
-
-        Returns:
-            xr.Dataset: `ds` unchanged if `self.variables` is empty (matches
-                today's "no filter configured" behavior); otherwise restricted
-                to whichever of `self.variables` are actually present in `ds`.
-        """
-        if not self.variables:
-            return ds
-        keep = [v for v in self.variables if v in ds.data_vars]
-        return ds[keep]
-
     def _regrid_kwargs(self) -> dict:
         """Extra keyword arguments forwarded to `create_healpix_pyramid()`.
 
@@ -250,6 +279,22 @@ class GridRegridder(ABC):
                 ICON-DREAM. Empty by default.
         """
         return {}
+
+    def encoding_for(self, variable: str) -> dict | None:
+        """Return a `to_zarr()` encoding dict for one canonical variable.
+
+        Passed straight through to `HealpixZarrWriter.append()`. None by
+        default (Zarr's own default dtype/compression apply); override to
+        reuse a source's native on-disk packing (e.g. BARRA2's own
+        int32 + scale_factor/add_offset).
+
+        Args:
+            variable (str): Canonical variable name.
+
+        Returns:
+            dict | None: None by default.
+        """
+        return None
 
     def _get_weights(self, ds: xr.Dataset) -> Path:
         """Compute or load cached HEALPix weights for this source.

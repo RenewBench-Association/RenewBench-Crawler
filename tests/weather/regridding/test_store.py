@@ -1,6 +1,7 @@
 # tests/weather/regridding/test_store.py
 """Tests for rbc.weather.regridding.store: HealpixZarrWriter."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -359,6 +360,194 @@ class TestAppend:
         )
         assert list(hourly["time"].values) == [0, 1, 2]
         assert list(twenty_min["time"].values) == [100, 101]
+
+    def test_encoding_applied_on_first_write(self, writer: HealpixZarrWriter) -> None:
+        """A passed encoding packs the variable, and decodes back correctly.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        pyramid = _make_pyramid([4], start=0, n=3)
+        original = pyramid[4]["T"].values.copy()
+        encoding = {
+            "dtype": "int16",
+            "scale_factor": 0.0001,
+            "add_offset": 0.0,
+            "_FillValue": -32767,
+        }
+
+        writer.append("era5", "1h", (2025, 1), pyramid, encoding=encoding)
+
+        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
+        on_disk = xr.open_zarr(store_path, consolidated=False, mask_and_scale=False)
+        decoded = xr.open_zarr(store_path, consolidated=False)
+
+        assert on_disk["T"].dtype == np.dtype("int16")
+        np.testing.assert_allclose(decoded["T"].values, original, atol=0.0001)
+
+    def test_no_encoding_keeps_default_dtype(self, writer: HealpixZarrWriter) -> None:
+        """Omitting encoding leaves Zarr's own default dtype untouched.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        pyramid = _make_pyramid([4], start=0, n=3)
+        writer.append("era5", "1h", (2025, 1), pyramid)
+
+        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
+        on_disk = xr.open_zarr(store_path, consolidated=False, mask_and_scale=False)
+        assert on_disk["T"].dtype == np.dtype("float64")
+
+    def test_encoding_applied_when_adding_new_sibling_variable(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """A new sibling variable is packed too, independent of existing ones.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        first = _make_pyramid([4], start=0, n=3)
+        writer.append("era5", "1h", (2025, 1), first)  # "T", no encoding
+
+        second = _make_pyramid([4], start=0, n=3)
+        second[4] = second[4].rename_vars({"T": "U"})
+        original_u = second[4]["U"].values.copy()
+        encoding = {
+            "dtype": "int16",
+            "scale_factor": 0.0001,
+            "add_offset": 0.0,
+            "_FillValue": -32767,
+        }
+        writer.append("era5", "1h", (2025, 1), second, encoding=encoding)
+
+        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
+        on_disk = xr.open_zarr(store_path, consolidated=False, mask_and_scale=False)
+        decoded = xr.open_zarr(store_path, consolidated=False)
+
+        assert on_disk["T"].dtype == np.dtype("float64")  # untouched
+        assert on_disk["U"].dtype == np.dtype("int16")
+        np.testing.assert_allclose(decoded["U"].values, original_u, atol=0.0001)
+
+
+# ----------------------------------
+# HealpixZarrWriter — compression
+# ----------------------------------
+def _codecs(store_path: Path, variable: str = "T") -> list[dict]:
+    """Return the codec list Zarr recorded for one variable.
+
+    Args:
+        store_path (Path): A level store path.
+        variable (str): Variable name. Defaults to "T".
+
+    Returns:
+        list[dict]: The "codecs" entries from the variable's zarr.json.
+    """
+    with open(Path(store_path, variable, "zarr.json")) as f:
+        return json.load(f)["codecs"]
+
+
+class TestCompression:
+    """Tests for HealpixZarrWriter's compressor/shuffle codec pipeline."""
+
+    def test_default_is_blosc_zlib_with_shuffle(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """The default pipeline is Blosc zlib-1 + byte shuffle, and round-trips exactly.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test (default settings).
+        """
+        pyramid = _make_pyramid([4], start=0, n=3)
+        original = pyramid[4]["T"].values.copy()
+        writer.append("era5", "1h", (2025, 1), pyramid)
+
+        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
+        codecs = _codecs(store_path)
+        assert [c["name"] for c in codecs] == ["bytes", "blosc"]
+        assert codecs[1]["configuration"]["cname"] == "zlib"
+        assert codecs[1]["configuration"]["clevel"] == 1
+        assert codecs[1]["configuration"]["shuffle"] == "shuffle"
+        np.testing.assert_array_equal(
+            xr.open_zarr(store_path, consolidated=False)["T"].values, original
+        )
+
+    @pytest.mark.parametrize(
+        "compressor, shuffle, expected",
+        [
+            ("zlib", True, ["bytes", "blosc"]),
+            ("zstd", True, ["bytes", "blosc"]),
+            ("zlib", False, ["bytes", "gzip"]),
+            ("zstd", False, ["bytes", "zstd"]),
+            ("none", True, ["bytes"]),
+            ("none", False, ["bytes"]),
+        ],
+    )
+    def test_pipeline_per_setting(
+        self, tmp_path: Path, compressor: str, shuffle: bool, expected: list[str]
+    ) -> None:
+        """Each (compressor, shuffle) choice maps to the right codecs and round-trips.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory.
+            compressor (str): Compressor setting under test.
+            shuffle (bool): Shuffle setting under test.
+            expected (list[str]): Expected codec names in zarr.json.
+        """
+        writer = HealpixZarrWriter(
+            base_dir=Path(tmp_path, "p"),
+            min_level=4,
+            compressor=compressor,
+            shuffle=shuffle,
+        )
+        pyramid = _make_pyramid([4], start=0, n=3)
+        original = pyramid[4]["T"].values.copy()
+        writer.append("era5", "1h", (2025, 1), pyramid)
+
+        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
+        assert [c["name"] for c in _codecs(store_path)] == expected
+        np.testing.assert_array_equal(
+            xr.open_zarr(store_path, consolidated=False)["T"].values, original
+        )
+
+    def test_compression_merges_with_packing_encoding(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Packing (dtype/scale) and the codec pipeline apply together.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        pyramid = _make_pyramid([4], start=0, n=3)
+        encoding = {
+            "dtype": "int16",
+            "scale_factor": 0.0001,
+            "add_offset": 0.0,
+            "_FillValue": -32767,
+        }
+        writer.append("era5", "1h", (2025, 1), pyramid, encoding=encoding)
+
+        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
+        on_disk = xr.open_zarr(store_path, consolidated=False, mask_and_scale=False)
+        assert on_disk["T"].dtype == np.dtype("int16")
+        assert [c["name"] for c in _codecs(store_path)] == ["bytes", "blosc"]
+
+    def test_level_below_one_raises(self, tmp_path: Path) -> None:
+        """Level 0 is rejected, since Blosc would silently write uncompressed.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory.
+        """
+        with pytest.raises(ValueError, match="compression_level must be >= 1"):
+            HealpixZarrWriter(base_dir=tmp_path, min_level=4, compression_level=0)
+
+    def test_unknown_compressor_raises(self, tmp_path: Path) -> None:
+        """An unknown compressor name is rejected.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory.
+        """
+        with pytest.raises(ValueError, match="Unknown compressor"):
+            HealpixZarrWriter(base_dir=tmp_path, min_level=4, compressor="lz4")
 
 
 # ----------------------------------

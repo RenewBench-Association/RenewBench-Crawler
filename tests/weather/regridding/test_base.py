@@ -19,7 +19,9 @@ class _ConcreteRegridder(GridRegridder):
 
     Attributes:
         _tasks (list[tuple]): Task list returned by _get_tasks.
-        _source_ds (xr.Dataset): Dataset returned by _load_source_chunk.
+        _source_ds (xr.Dataset): Dataset returned by _load_source_chunk,
+            regardless of which variable is requested.
+        _discovered (list[str]): Variable list returned by _discover_variables.
         _grid_path (Path | None): Path returned by _grid_metadata_path.
         _mapping (dict[str, str]): Mapping returned by _variable_mapping.
     """
@@ -28,6 +30,7 @@ class _ConcreteRegridder(GridRegridder):
         self,
         tasks: list[tuple] | None = None,
         source_ds: xr.Dataset | None = None,
+        discovered: list[str] | None = None,
         grid_path: Path | None = None,
         mapping: dict[str, str] | None = None,
         **kwargs,
@@ -39,6 +42,8 @@ class _ConcreteRegridder(GridRegridder):
                 Defaults to an empty list when None.
             source_ds (xr.Dataset | None): Dataset returned by
                 _load_source_chunk. Defaults to a tiny synthetic Dataset.
+            discovered (list[str] | None): Variable list returned by
+                _discover_variables. Defaults to an empty list.
             grid_path (Path | None): Path returned by _grid_metadata_path.
             mapping (dict[str, str] | None): Mapping returned by
                 _variable_mapping. Defaults to an empty dict.
@@ -50,6 +55,7 @@ class _ConcreteRegridder(GridRegridder):
             if source_ds is not None
             else xr.Dataset({"foo": ("x", [1, 2, 3])})
         )
+        self._discovered = discovered or []
         self._grid_path = grid_path
         self._mapping = mapping or {}
         super().__init__(**kwargs)
@@ -58,8 +64,12 @@ class _ConcreteRegridder(GridRegridder):
         """Return the pre-defined task list supplied at construction time."""
         return self._tasks
 
-    def _load_source_chunk(self, task: tuple) -> xr.Dataset:
-        """Return the pre-defined source Dataset, regardless of task."""
+    def _discover_variables(self, task: tuple) -> list[str]:
+        """Return the pre-defined discovered-variables list, regardless of task."""
+        return self._discovered
+
+    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
+        """Return the pre-defined source Dataset, regardless of task/variable."""
         return self._source_ds
 
     def _grid_metadata_path(self) -> Path | None:
@@ -74,7 +84,11 @@ class _ConcreteRegridder(GridRegridder):
 class _Incomplete(GridRegridder):
     """Subclass deliberately missing _variable_mapping, for ABC enforcement tests."""
 
-    def _load_source_chunk(self, task: tuple) -> xr.Dataset:
+    def _discover_variables(self, task: tuple) -> list[str]:
+        """Return an empty list."""
+        return []
+
+    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
         """Return an empty Dataset."""
         return xr.Dataset()
 
@@ -197,7 +211,7 @@ class TestInit:
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        saved = {(2025, 1): 1}
+        saved = {(2025, "01", "var_a"): 1}
         checkpoint_path = base_args["checkpoint_path"]
         with open(checkpoint_path, "wb") as f:
             pickle.dump(saved, f)
@@ -211,7 +225,7 @@ class TestInit:
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        saved = {(2025, 1): 1}
+        saved = {(2025, "01", "var_a"): 1}
         checkpoint_path = base_args["checkpoint_path"]
         with open(checkpoint_path, "wb") as f:
             pickle.dump(saved, f)
@@ -276,23 +290,57 @@ class TestGetTasks:
 
 
 # ----------------------------------
+# GridRegridder._variables_for_task
+# ----------------------------------
+class TestVariablesForTask:
+    """Tests for GridRegridder._variables_for_task()."""
+
+    def test_returns_self_variables_when_set(self, base_args: dict) -> None:
+        """self.variables is returned as-is when non-empty, bypassing discovery.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        base_args["variables"] = ["temperature", "surface_pressure"]
+        rg = _ConcreteRegridder(discovered=["should_not_be_used"], **base_args)
+
+        assert rg._variables_for_task((2025, "01")) == [
+            "temperature",
+            "surface_pressure",
+        ]
+
+    def test_falls_back_to_discovery_when_empty(self, base_args: dict) -> None:
+        """An empty self.variables triggers _discover_variables().
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        base_args["variables"] = []
+        rg = _ConcreteRegridder(discovered=["temperature", "humidity"], **base_args)
+
+        assert rg._variables_for_task((2025, "01")) == ["temperature", "humidity"]
+
+
+# ----------------------------------
 # GridRegridder.regrid
 # ----------------------------------
 class TestRegrid:
     """Tests for GridRegridder.regrid().
 
-    Covers task iteration, checkpoint skip/resume, dry_run semantics, and the
-    premature-checkpointing regression (regrid() must never mark tasks done).
+    Covers per-variable task iteration, checkpoint skip/resume keyed by
+    (task, variable), weight reuse across variables in one task, dry_run
+    semantics, and the premature-checkpointing regression (regrid() must
+    never mark keys done itself).
     """
 
-    def test_calls_pipeline_for_each_task(self, base_args: dict) -> None:
-        """_get_weights/_regrid_chunk run once per task, yielding (task, pyramid).
+    def test_calls_pipeline_for_each_task_and_variable(self, base_args: dict) -> None:
+        """_regrid_chunk runs once per (task, variable), yielding (key, pyramid).
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        tasks = [(2025, 1), (2025, 2)]
-        rg = _ConcreteRegridder(tasks=tasks, **base_args)
+        tasks = [(2025, "01"), (2025, "02")]
+        rg = _ConcreteRegridder(tasks=tasks, **base_args)  # variables=["var_a"]
 
         with (
             patch.object(rg, "_get_weights", return_value=Path("weights.nc")) as mock_w,
@@ -302,18 +350,64 @@ class TestRegrid:
 
         assert mock_w.call_count == 2
         assert mock_c.call_count == 2
-        assert [task for task, _ in results] == tasks
+        assert [key for key, _ in results] == [(*t, "var_a") for t in tasks]
         assert all(pyramid == {4: "pyramid"} for _, pyramid in results)
 
-    def test_skips_already_completed_tasks(self, base_args: dict) -> None:
-        """Tasks already marked 1 in checkpoint are skipped when resume=True.
+    def test_processes_every_variable_in_one_task(self, base_args: dict) -> None:
+        """Multiple requested variables are each regridded independently.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        task = (2025, 1)
+        base_args["variables"] = ["temperature", "humidity"]
+        task = (2025, "01")
         rg = _ConcreteRegridder(tasks=[task], **base_args)
-        rg.checkpoint[task] = 1
+
+        with (
+            patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
+            patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}) as mock_c,
+        ):
+            results = list(rg.regrid())
+
+        assert mock_c.call_count == 2
+        assert [key for key, _ in results] == [
+            (2025, "01", "temperature"),
+            (2025, "01", "humidity"),
+        ]
+
+    def test_weights_computed_once_per_task_not_per_variable(
+        self, base_args: dict
+    ) -> None:
+        """_get_weights() is called once per task, reused across its variables.
+
+        Weights depend only on horizontal grid geometry, never on which
+        variable is being regridded, so recomputing per variable would be
+        pure waste.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        base_args["variables"] = ["temperature", "humidity", "surface_pressure"]
+        task = (2025, "01")
+        rg = _ConcreteRegridder(tasks=[task], **base_args)
+
+        with (
+            patch.object(rg, "_get_weights", return_value=Path("weights.nc")) as mock_w,
+            patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}),
+        ):
+            list(rg.regrid())
+
+        mock_w.assert_called_once()
+
+    def test_skips_already_completed_keys(self, base_args: dict) -> None:
+        """A (task, variable) key already marked 1 is skipped when resume=True.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        task = (2025, "01")
+        rg = _ConcreteRegridder(tasks=[task], **base_args)
+        rg.checkpoint[(*task, "var_a")] = 1
 
         with patch.object(rg, "_regrid_chunk") as mock_c:
             results = list(rg.regrid())
@@ -321,18 +415,40 @@ class TestRegrid:
         mock_c.assert_not_called()
         assert results == []
 
-    def test_resume_false_recomputes_even_if_checkpointed(
+    def test_only_unfinished_variables_in_a_task_are_processed(
         self, base_args: dict
     ) -> None:
-        """A checkpointed task is still recomputed when resume=False.
+        """One already-done variable is skipped while a sibling still runs.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        task = (2025, 1)
+        base_args["variables"] = ["temperature", "humidity"]
+        task = (2025, "01")
+        rg = _ConcreteRegridder(tasks=[task], **base_args)
+        rg.checkpoint[(*task, "temperature")] = 1
+
+        with (
+            patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
+            patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}) as mock_c,
+        ):
+            results = list(rg.regrid())
+
+        mock_c.assert_called_once()
+        assert [key for key, _ in results] == [(2025, "01", "humidity")]
+
+    def test_resume_false_recomputes_even_if_checkpointed(
+        self, base_args: dict
+    ) -> None:
+        """A checkpointed key is still recomputed when resume=False.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        task = (2025, "01")
         base_args["resume"] = False
         rg = _ConcreteRegridder(tasks=[task], **base_args)
-        rg.checkpoint[task] = 1  # would be "done" under resume=True
+        rg.checkpoint[(*task, "var_a")] = 1  # would be "done" under resume=True
 
         with (
             patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
@@ -349,7 +465,7 @@ class TestRegrid:
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        task = (2025, 1)
+        task = (2025, "01")
         base_args["dry_run"] = True
         rg = _ConcreteRegridder(tasks=[task], **base_args)
 
@@ -369,7 +485,7 @@ class TestRegrid:
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        task = (2025, 1)
+        task = (2025, "01")
         rg = _ConcreteRegridder(tasks=[task], **base_args)
 
         with (
@@ -406,14 +522,14 @@ class TestMarkDone:
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        task = (2025, 1)
-        rg = _ConcreteRegridder(tasks=[task], **base_args)
-        rg.mark_done(task)
+        key = (2025, "01", "var_a")
+        rg = _ConcreteRegridder(tasks=[(2025, "01")], **base_args)
+        rg.mark_done(key)
 
-        assert rg.checkpoint[task] == 1
+        assert rg.checkpoint[key] == 1
 
-        fresh = _ConcreteRegridder(tasks=[task], **base_args)
-        assert fresh.checkpoint[task] == 1
+        fresh = _ConcreteRegridder(tasks=[(2025, "01")], **base_args)
+        assert fresh.checkpoint[key] == 1
 
     def test_atomic_write_no_tmp_left_behind(self, base_args: dict) -> None:
         """Temporary .tmp file is removed after a successful save.
@@ -422,7 +538,7 @@ class TestMarkDone:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         rg = _ConcreteRegridder(**base_args)
-        rg.mark_done((2025, 1))
+        rg.mark_done((2025, "01", "var_a"))
         assert not rg.checkpoint_path.with_suffix(".tmp").exists()
 
 
@@ -448,57 +564,6 @@ class TestRenameToCanonical:
         assert "T" not in renamed.data_vars
         assert "U" in renamed.data_vars  # untouched, not in mapping
         assert "v_wind" not in renamed.data_vars
-
-
-# ----------------------------------
-# GridRegridder._filter_variables
-# ----------------------------------
-class TestFilterVariables:
-    """Tests for GridRegridder._filter_variables()."""
-
-    def test_restricts_to_requested_variables(self, base_args: dict) -> None:
-        """Only variables named in self.variables survive.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        ds = xr.Dataset({"temperature": ("x", [1, 2, 3]), "u_wind": ("x", [4, 5, 6])})
-        base_args["variables"] = ["temperature"]
-        rg = _ConcreteRegridder(**base_args)
-
-        filtered = rg._filter_variables(ds)
-
-        assert list(filtered.data_vars) == ["temperature"]
-
-    def test_missing_requested_variable_is_silently_skipped(
-        self, base_args: dict
-    ) -> None:
-        """A requested variable absent from ds doesn't raise.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        ds = xr.Dataset({"temperature": ("x", [1, 2, 3])})
-        base_args["variables"] = ["temperature", "does_not_exist"]
-        rg = _ConcreteRegridder(**base_args)
-
-        filtered = rg._filter_variables(ds)
-
-        assert list(filtered.data_vars) == ["temperature"]
-
-    def test_empty_variables_list_means_no_filtering(self, base_args: dict) -> None:
-        """An empty self.variables leaves ds completely unchanged.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        ds = xr.Dataset({"temperature": ("x", [1, 2, 3]), "u_wind": ("x", [4, 5, 6])})
-        base_args["variables"] = []
-        rg = _ConcreteRegridder(**base_args)
-
-        filtered = rg._filter_variables(ds)
-
-        assert set(filtered.data_vars) == {"temperature", "u_wind"}
 
 
 # ----------------------------------
@@ -613,6 +678,22 @@ class TestRegridChunk:
             weights_path=weights,
             source_kind="unstructured",
         )
+
+
+# ----------------------------------
+# GridRegridder.encoding_for
+# ----------------------------------
+class TestEncodingFor:
+    """Tests for GridRegridder.encoding_for()."""
+
+    def test_default_returns_none(self, base_args: dict) -> None:
+        """No explicit encoding by default -- Zarr's own defaults apply.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        rg = _ConcreteRegridder(**base_args)
+        assert rg.encoding_for("var_a") is None
 
 
 # ----------------------------------

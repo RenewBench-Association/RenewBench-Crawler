@@ -185,8 +185,8 @@ class TestOpenPressureLevel:
 class TestLoadSourceChunk:
     """Tests for Era5Regridder._load_source_chunk()."""
 
-    def test_discovers_and_merges_sl_and_pl_files(self, base_args: dict) -> None:
-        """Single/pressure-level files are routed to the right opener, then merged.
+    def test_loads_single_level_variable(self, base_args: dict) -> None:
+        """A single-level canonical variable opens the "sl" file and selects it.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Era5Regridder.
@@ -194,36 +194,57 @@ class TestLoadSourceChunk:
         source_dir = _source_dir(base_args["raw_dir"])
         source_dir.mkdir(parents=True)
         sl_file = Path(source_dir, "era5_2020_04_sl_2t.grib")
-        pl_file = Path(source_dir, "era5_2020_04_pl_1000_t.grib")
         sl_file.touch()
-        pl_file.touch()
 
         rg = Era5Regridder(**base_args)
 
         time = pd.to_datetime(["2020-04-01T00:00", "2020-04-01T01:00"])
-        sl_ds = xr.Dataset({"t2m": ("time", [1.0, 2.0])}, coords={"time": time})
+        sl_ds = xr.Dataset(
+            {"t2m": ("time", [1.0, 2.0]), "msl": ("time", [3.0, 4.0])},
+            coords={"time": time},
+        )
+
+        with patch.object(rg, "_open_single_level", return_value=[sl_ds]) as mock_sl:
+            result = rg._load_source_chunk((2020, "04"), "2m_temperature")
+
+        mock_sl.assert_called_once_with(sl_file)
+        assert set(result.data_vars) == {"t2m"}
+        assert list(result["time"].values) == list(time)
+
+    def test_loads_pressure_level_variable(self, base_args: dict) -> None:
+        """A pressure-level canonical variable opens the "pl" file and selects it.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        pl_file = Path(source_dir, "era5_2020_04_pl_1000_t.grib")
+        pl_file.touch()
+
+        rg = Era5Regridder(**base_args)
+
+        time = pd.to_datetime(["2020-04-01T00:00"])
         pl_ds = xr.Dataset(
-            {"z": (("isobaricInhPa", "time"), [[3.0, 4.0]])},
+            {
+                "z": (("isobaricInhPa", "time"), [[3.0]]),
+                "t": (("isobaricInhPa", "time"), [[5.0]]),
+            },
             coords={"time": time, "isobaricInhPa": [1000.0]},
         )
 
-        with (
-            patch.object(rg, "_open_single_level", return_value=[sl_ds]) as mock_sl,
-            patch(
-                "rbc.weather.regridding.era5.xr.open_dataset", return_value=pl_ds
-            ) as mock_pl,
-        ):
-            result = rg._load_source_chunk((2020, "04"))
+        with patch(
+            "rbc.weather.regridding.era5.xr.open_dataset", return_value=pl_ds
+        ) as mock_pl:
+            result = rg._load_source_chunk((2020, "04"), "geopotential")
 
-        mock_sl.assert_called_once_with(sl_file)
         mock_pl.assert_called_once_with(pl_file, engine="cfgrib", chunks={})
-        assert set(result.data_vars) == {"t2m", "z"}
+        assert set(result.data_vars) == {"z"}
         assert "level" in result["z"].dims
         assert "isobaricInhPa" not in result.dims
-        assert list(result["time"].values) == list(time)
 
     def test_ignores_model_level_files(self, base_args: dict) -> None:
-        """_ml_ files are never globbed or opened, even if present alongside others.
+        """_ml_ files are never globbed or opened alongside the requested "sl" file.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Era5Regridder.
@@ -240,9 +261,88 @@ class TestLoadSourceChunk:
         sl_ds = xr.Dataset({"t2m": ("time", [1.0])}, coords={"time": time})
 
         with patch.object(rg, "_open_single_level", return_value=[sl_ds]) as mock_sl:
-            rg._load_source_chunk((2020, "04"))
+            rg._load_source_chunk((2020, "04"), "2m_temperature")
 
         mock_sl.assert_called_once_with(sl_file)
+
+    def test_raises_when_no_file_found(self, base_args: dict) -> None:
+        """A missing "sl"/"pl" file for the task raises FileNotFoundError.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        rg = Era5Regridder(**base_args)  # source_dir exists but is empty
+
+        with pytest.raises(FileNotFoundError, match="No 'sl' file found"):
+            rg._load_source_chunk((2020, "04"), "2m_temperature")
+
+    def test_raises_when_variable_not_in_any_hypercube(self, base_args: dict) -> None:
+        """A cfgrib name absent from every "sl" hypercube raises ValueError.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        Path(source_dir, "era5_2020_04_sl_2t.grib").touch()
+
+        rg = Era5Regridder(**base_args)
+        time = pd.to_datetime(["2020-04-01T00:00"])
+        sl_ds = xr.Dataset({"msl": ("time", [1.0])}, coords={"time": time})
+
+        with patch.object(rg, "_open_single_level", return_value=[sl_ds]):
+            with pytest.raises(ValueError, match="not found in"):
+                rg._load_source_chunk((2020, "04"), "2m_temperature")
+
+
+# ----------------------------------
+# Era5Regridder._discover_variables
+# ----------------------------------
+class TestDiscoverVariables:
+    """Tests for Era5Regridder._discover_variables()."""
+
+    def test_finds_variables_across_sl_and_pl_files(self, base_args: dict) -> None:
+        """Canonical variables from both "sl" and "pl" files are found.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        Path(source_dir, "era5_2020_04_sl_2t.grib").touch()
+        Path(source_dir, "era5_2020_04_pl_1000_t.grib").touch()
+
+        rg = Era5Regridder(**base_args)
+        time = pd.to_datetime(["2020-04-01T00:00"])
+        sl_ds = xr.Dataset({"t2m": ("time", [1.0])}, coords={"time": time})
+        pl_ds = xr.Dataset(
+            {"z": (("isobaricInhPa", "time"), [[3.0]])},
+            coords={"time": time, "isobaricInhPa": [1000.0]},
+        )
+
+        with (
+            patch.object(rg, "_open_single_level", return_value=[sl_ds]),
+            patch("rbc.weather.regridding.era5.xr.open_dataset", return_value=pl_ds),
+        ):
+            found = rg._discover_variables((2020, "04"))
+
+        assert set(found) == {"2m_temperature", "geopotential"}
+
+    def test_only_matches_requested_task(self, base_args: dict) -> None:
+        """Files for a different (year, month) aren't picked up.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        Path(source_dir, "era5_2020_05_sl_2t.grib").touch()
+
+        rg = Era5Regridder(**base_args)
+
+        found = rg._discover_variables((2020, "04"))
+
+        assert found == []
 
 
 # ----------------------------------

@@ -5,11 +5,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
 from rbc.weather.barra.mappings import MODEL_CONFIG
-from rbc.weather.regridding.barra2 import Barra2Regridder
+from rbc.weather.regridding.barra2 import (
+    Barra2Regridder,
+    _interval_center_shift,
+    _packed_encoding,
+)
 from rbc.weather.utils import raw_data_dir
 
 
@@ -48,6 +53,9 @@ def _write_var_file(
     value: float,
     model: str = "C2",
     extra_coords: dict | None = None,
+    time: list | None = None,
+    cell_methods: str | None = None,
+    packing: dict | None = None,
 ) -> None:
     """Write a minimal single-variable NetCDF file, matching real BARRA2 layout.
 
@@ -64,14 +72,31 @@ def _write_var_file(
         extra_coords (dict | None): Additional scalar coordinates to attach,
             e.g. {"pressure": 950.0} -- mimics real BARRA2 files, which carry
             their own per-file scalar "pressure"/"height" coordinate.
+        time (list | None): Timestamps to add as a "time" dimension. Omitted
+            (the default) writes a plain (lat, lon) file, as most tests need.
+        cell_methods (str | None): "cell_methods" attribute to attach to the
+            variable, e.g. "time: mean (interval: 1 hour)".
+        packing (dict | None): NetCDF `encoding` for the variable, e.g.
+            {"dtype": "int32", "scale_factor": 0.01, "add_offset": 270.0} --
+            mimics real BARRA2 files' own CF integer packing.
     """
     config = MODEL_CONFIG[model]
     source_dir = raw_data_dir(
         raw_dir, config["raw_folder"], config["temporal_res_folder"]
     )
     source_dir.mkdir(parents=True, exist_ok=True)
-    ds = xr.Dataset({var_name: (("lat", "lon"), [[value]])}, coords=extra_coords or {})
-    ds.to_netcdf(Path(source_dir, filename))
+    coords = dict(extra_coords or {})
+    data: tuple
+    if time is not None:
+        coords["time"] = time
+        data = ("time", "lat", "lon"), np.full((len(time), 1, 1), value)
+    else:
+        data = ("lat", "lon"), [[value]]
+    ds = xr.Dataset({var_name: data}, coords=coords)
+    if cell_methods is not None:
+        ds[var_name].attrs["cell_methods"] = cell_methods
+    encoding = {var_name: packing} if packing is not None else None
+    ds.to_netcdf(Path(source_dir, filename), encoding=encoding)
 
 
 # ----------------------------------
@@ -131,7 +156,7 @@ class TestLoadSourceChunk:
         )
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        result = rg._load_source_chunk((2025, "01"), "temperature")
 
         assert "ta_plev" in result.data_vars
         assert "level" in result["ta_plev"].dims
@@ -162,7 +187,7 @@ class TestLoadSourceChunk:
         )
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        result = rg._load_source_chunk((2025, "01"), "temperature_at_height")
 
         assert "ta_height" in result.data_vars
         assert list(result["height"].values) == [50.0, 100.0]
@@ -179,7 +204,7 @@ class TestLoadSourceChunk:
         _write_var_file(raw_dir, "barra2_C2_1hr_202501_tas.nc", "tas", 5.0)
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        result = rg._load_source_chunk((2025, "01"), "1.5m_temperature")
 
         assert "tas" in result.data_vars
         assert "tas_plev" not in result.data_vars
@@ -212,23 +237,20 @@ class TestLoadSourceChunk:
         ds.to_netcdf(Path(source_dir, "barra2_C2_1hr_202501_clt.nc"))
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        result = rg._load_source_chunk((2025, "01"), "total_cloud_cover")
 
         assert "clt" in result.data_vars
         assert "time_bnds" not in result.data_vars
 
-    def test_drops_raw_pressure_coord_to_avoid_cross_variable_conflicts(
-        self, base_args: dict
-    ) -> None:
-        """Real per-file scalar "pressure" coords are dropped, not merged.
+    def test_drops_raw_pressure_coord(self, base_args: dict) -> None:
+        """The real per-file scalar "pressure" coord is dropped, not left in the result.
 
         Confirmed on real BARRA2 data: each pressure-level file carries its
-        own scalar "pressure" coordinate matching its own level (e.g.
-        "pressure"=950.0 on ta950.nc). xr.merge() requires same-named
-        coordinates to agree, so once two pressure-level variables have
-        different level coverage (here: "ta" has [1000, 950], "ua" only has
-        [1000]), their differently-shaped "pressure" coordinates conflict
-        and raise a MergeError unless dropped first.
+        own scalar "pressure" coordinate matching its own level. Left in
+        place, this would conflict the moment another variable with
+        different level coverage needed to coexist in the same store -- kept
+        as a loose scalar coordinate rather than folded into this method's
+        own level dimension, it isn't tied to any one variable.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
@@ -248,19 +270,11 @@ class TestLoadSourceChunk:
             2.0,
             extra_coords={"pressure": 950.0},
         )
-        _write_var_file(
-            raw_dir,
-            "barra2_C2_1hr_202501_ua1000.nc",
-            "ua1000",
-            3.0,
-            extra_coords={"pressure": 1000.0},
-        )
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))  # must not raise MergeError
+        result = rg._load_source_chunk((2025, "01"), "temperature")
 
         assert "pressure" not in result.coords
-        assert set(result.data_vars) == {"ta_plev", "ua_plev"}
 
     def test_level_value_comes_from_content_not_filename(self, base_args: dict) -> None:
         """The level/height coordinate value is read from the file, not parsed from its name.
@@ -284,37 +298,183 @@ class TestLoadSourceChunk:
         )
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        result = rg._load_source_chunk((2025, "01"), "temperature")
 
         assert list(result["level"].values) == [900.0]
 
-    def test_digit_suffixed_single_level_variables_are_not_misclassified(
-        self, base_args: dict
-    ) -> None:
-        """Single-level names that coincidentally end in digits stay single-level.
-
-        BWD03/BWD06 (bulk wind difference over 0-3km/0-6km) and omega500
-        (vertical velocity at a fixed 500 hPa) are real single-level BARRA2
-        variables whose names happen to match the level-code regex -- they
-        must not be merged into fake "_plev" stacks.
+    def test_only_matches_requested_task(self, base_args: dict) -> None:
+        """Files for a different (year, month) aren't picked up.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
         """
         raw_dir = base_args["raw_dir"]
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_BWD03.nc", "BWD03", 1.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_BWD06.nc", "BWD06", 2.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202501_omega500.nc", "omega500", 3.0)
+        _write_var_file(raw_dir, "barra2_C2_1hr_202501_tas.nc", "tas", 5.0)
+        _write_var_file(raw_dir, "barra2_C2_1hr_202502_tas.nc", "tas", 50.0)
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        result = rg._load_source_chunk((2025, "01"), "1.5m_temperature")
 
-        assert {"BWD03", "BWD06", "omega500"}.issubset(result.data_vars)
-        assert "BWD_plev" not in result.data_vars
-        assert "omega_plev" not in result.data_vars
+        assert result["tas"].values.squeeze() == 5.0
 
-    def test_merges_all_kinds_into_one_dataset(self, base_args: dict) -> None:
-        """Single-level, pressure-level, and height-level files all merge.
+    def test_only_matches_requested_variables_base_code(self, base_args: dict) -> None:
+        """A sibling pressure-level variable's files are not pulled in.
+
+        Requesting "temperature" (base "ta") must not also glob-match
+        "ua1000.nc" -- confirmed real risk, since both are pressure-level
+        files under the same directory/prefix.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta1000.nc",
+            "ta1000",
+            1.0,
+            extra_coords={"pressure": 1000.0},
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ua1000.nc",
+            "ua1000",
+            3.0,
+            extra_coords={"pressure": 1000.0},
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"), "temperature")
+
+        assert set(result.data_vars) == {"ta_plev"}
+
+    def test_shifts_interval_statistic_onto_the_point_clock(
+        self, base_args: dict
+    ) -> None:
+        """A "time: mean" variable's half-hour-offset timestamps shift to on-the-hour.
+
+        Confirmed on real BARRA2 R2 data: interval statistics (e.g.
+        "tasmax") are labeled at the interval's center, half an hour ahead
+        of "time: point" variables for the same nominal timestamp.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_tasmax.nc",
+            "tasmax",
+            5.0,
+            time=pd.to_datetime(["2025-01-01T00:30", "2025-01-01T01:30"]),
+            cell_methods="time: maximum (interval: 1 hour)",
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"), "1.5m_maximum_temperature")
+
+        assert list(result["time"].values) == list(
+            pd.to_datetime(["2025-01-01T00:00", "2025-01-01T01:00"])
+        )
+
+    def test_point_variable_is_not_shifted(self, base_args: dict) -> None:
+        """A "time: point" variable's on-the-hour timestamps are left untouched.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_tas.nc",
+            "tas",
+            5.0,
+            time=pd.to_datetime(["2025-01-01T00:00", "2025-01-01T01:00"]),
+            cell_methods="time: point (interval: 1 hour)",
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"), "1.5m_temperature")
+
+        assert list(result["time"].values) == list(
+            pd.to_datetime(["2025-01-01T00:00", "2025-01-01T01:00"])
+        )
+
+    def test_shifts_interval_statistic_pressure_level_files(
+        self, base_args: dict
+    ) -> None:
+        """The interval-center shift also applies to pressure-level variables.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta1000.nc",
+            "ta1000",
+            1.0,
+            extra_coords={"pressure": 1000.0},
+            time=pd.to_datetime(["2025-01-01T00:30"]),
+            cell_methods="time: mean (interval: 1 hour)",
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        result = rg._load_source_chunk((2025, "01"), "temperature")
+
+        assert list(result["time"].values) == list(pd.to_datetime(["2025-01-01T00:00"]))
+
+
+# ----------------------------------
+# _interval_center_shift
+# ----------------------------------
+class TestIntervalCenterShift:
+    """Tests for barra2._interval_center_shift()."""
+
+    def test_point_returns_none(self) -> None:
+        """A "time: point" cell_methods needs no shift."""
+        assert _interval_center_shift("time: point (interval: 1 hour)") is None
+
+    def test_empty_returns_none(self) -> None:
+        """A missing/empty cell_methods needs no shift."""
+        assert _interval_center_shift("") is None
+
+    def test_mean_one_hour_shifts_by_half_hour(self) -> None:
+        """A 1-hour mean/maximum/minimum shifts back by 30 minutes."""
+        assert _interval_center_shift("time: mean (interval: 1 hour)") == -pd.Timedelta(
+            minutes=30
+        )
+
+    def test_maximum_one_hour_shifts_by_half_hour(self) -> None:
+        """A "time: maximum" cell_methods is treated the same as "time: mean"."""
+        assert _interval_center_shift(
+            "time: maximum (interval: 1 hour)"
+        ) == -pd.Timedelta(minutes=30)
+
+    def test_interval_length_is_read_not_assumed(self) -> None:
+        """A different interval length shifts by half of that length, not a fixed 30 min.
+
+        Confirmed necessary: BARRA2 model variants can use different native
+        interval lengths (e.g. the 20-minute product), so the shift must
+        come from the file's own cell_methods, not a hardcoded constant.
+        """
+        assert _interval_center_shift(
+            "time: mean (interval: 20 minute)"
+        ) == -pd.Timedelta(minutes=10)
+
+    def test_missing_interval_returns_none(self) -> None:
+        """A non-point cell_methods without a parseable interval needs no shift."""
+        assert _interval_center_shift("time: mean") is None
+
+
+# ----------------------------------
+# Barra2Regridder._discover_variables
+# ----------------------------------
+class TestDiscoverVariables:
+    """Tests for Barra2Regridder._discover_variables()."""
+
+    def test_finds_single_pressure_and_height_variables(self, base_args: dict) -> None:
+        """Single-level, pressure-level, and height-level files are all discovered.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
@@ -337,9 +497,40 @@ class TestLoadSourceChunk:
         )
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        found = rg._discover_variables((2025, "01"))
 
-        assert set(result.data_vars) == {"tas", "ta_plev", "ta_height"}
+        assert set(found) == {
+            "1.5m_temperature",
+            "temperature",
+            "temperature_at_height",
+        }
+
+    def test_digit_suffixed_single_level_variables_are_not_misclassified(
+        self, base_args: dict
+    ) -> None:
+        """Single-level names that coincidentally end in digits stay single-level.
+
+        BWD03/BWD06 (bulk wind difference over 0-3km/0-6km) and omega500
+        (vertical velocity at a fixed 500 hPa) are real single-level BARRA2
+        variables whose names happen to match the level-code regex -- they
+        must not be classified as fake "_plev" stacks.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(raw_dir, "barra2_C2_1hr_202501_BWD03.nc", "BWD03", 1.0)
+        _write_var_file(raw_dir, "barra2_C2_1hr_202501_BWD06.nc", "BWD06", 2.0)
+        _write_var_file(raw_dir, "barra2_C2_1hr_202501_omega500.nc", "omega500", 3.0)
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        found = rg._discover_variables((2025, "01"))
+
+        assert set(found) == {
+            "bulk_wind_difference_0_3km",
+            "bulk_wind_difference_0_6km",
+            "vertical_velocity_500hpa",
+        }
 
     def test_only_matches_requested_task(self, base_args: dict) -> None:
         """Files for a different (year, month) aren't picked up.
@@ -349,12 +540,12 @@ class TestLoadSourceChunk:
         """
         raw_dir = base_args["raw_dir"]
         _write_var_file(raw_dir, "barra2_C2_1hr_202501_tas.nc", "tas", 5.0)
-        _write_var_file(raw_dir, "barra2_C2_1hr_202502_tas.nc", "tas", 50.0)
+        _write_var_file(raw_dir, "barra2_C2_1hr_202502_clt.nc", "clt", 50.0)
 
         rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"))
+        found = rg._discover_variables((2025, "01"))
 
-        assert result["tas"].values.squeeze() == 5.0
+        assert found == ["1.5m_temperature"]
 
 
 # ----------------------------------
@@ -443,3 +634,143 @@ class TestVariableMapping:
         rg = Barra2Regridder(model="C2", **base_args)
         mapping = rg._variable_mapping()
         assert mapping["ta_plev"] == mapping["ta"] == "temperature"
+
+
+# ----------------------------------
+# _packed_encoding
+# ----------------------------------
+class TestPackedEncoding:
+    """Tests for barra2._packed_encoding()."""
+
+    def test_extracts_packing_fields(self) -> None:
+        """A CF-packed encoding yields dtype/scale_factor/add_offset/_FillValue."""
+        encoding = {
+            "dtype": "int32",
+            "scale_factor": 0.001953125,
+            "add_offset": 270.125,
+            "_FillValue": -2147483647,
+            "zlib": True,  # not part of the packing itself -- must be dropped
+        }
+        assert _packed_encoding(encoding) == {
+            "dtype": "int32",
+            "scale_factor": 0.001953125,
+            "add_offset": 270.125,
+            "_FillValue": -2147483647,
+        }
+
+    def test_missing_scale_factor_returns_none(self) -> None:
+        """An encoding without scale_factor isn't CF-packed -- returns None."""
+        assert _packed_encoding({"dtype": "float64", "zlib": True}) is None
+
+    def test_missing_add_offset_defaults_to_zero(self) -> None:
+        """A packed encoding without add_offset (pure scaling) defaults to 0.0."""
+        result = _packed_encoding({"dtype": "int16", "scale_factor": 0.01})
+        assert result is not None
+        assert result["add_offset"] == 0.0
+
+
+# ----------------------------------
+# Barra2Regridder.encoding_for
+# ----------------------------------
+class TestEncodingFor:
+    """Tests for Barra2Regridder.encoding_for()."""
+
+    def test_none_before_variable_is_loaded(self, base_args: dict) -> None:
+        """Returns None for a variable that hasn't been loaded yet.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        rg = Barra2Regridder(model="C2", **base_args)
+        assert rg.encoding_for("1.5m_temperature") is None
+
+    def test_captures_single_level_packing(self, base_args: dict) -> None:
+        """A single-level variable's own packing is captured after loading.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_tas.nc",
+            "tas",
+            5.0,
+            packing={
+                "dtype": "int32",
+                "scale_factor": 0.000244140625,
+                "add_offset": 267.0,
+                "_FillValue": -2147483647,
+            },
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        rg._load_source_chunk((2025, "01"), "1.5m_temperature")
+
+        assert rg.encoding_for("1.5m_temperature") == {
+            "dtype": np.dtype("int32"),
+            "scale_factor": 0.000244140625,
+            "add_offset": 267.0,
+            "_FillValue": -2147483647,
+        }
+
+    def test_captures_packing_for_consolidated_level_variable(
+        self, base_args: dict
+    ) -> None:
+        """A pressure-level variable's packing comes from its first level file.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta950.nc",
+            "ta950",
+            1.0,
+            extra_coords={"pressure": 950.0},
+            packing={
+                "dtype": "int32",
+                "scale_factor": 0.001953125,
+                "add_offset": 268.0,
+                "_FillValue": -2147483647,
+            },
+        )
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_1hr_202501_ta1000.nc",
+            "ta1000",
+            2.0,
+            extra_coords={"pressure": 1000.0},
+            packing={
+                "dtype": "int32",
+                "scale_factor": 0.001953125,
+                "add_offset": 270.0,
+                "_FillValue": -2147483647,
+            },
+        )
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        rg._load_source_chunk((2025, "01"), "temperature")
+
+        result = rg.encoding_for("temperature")
+        assert result is not None
+        assert result["scale_factor"] == 0.001953125
+        assert result["add_offset"] in (
+            268.0,
+            270.0,
+        )  # either level file is safe to reuse
+
+    def test_none_when_source_is_not_packed(self, base_args: dict) -> None:
+        """A variable written without CF packing yields no encoding.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(raw_dir, "barra2_C2_1hr_202501_tas.nc", "tas", 5.0)
+
+        rg = Barra2Regridder(model="C2", **base_args)
+        rg._load_source_chunk((2025, "01"), "1.5m_temperature")
+
+        assert rg.encoding_for("1.5m_temperature") is None

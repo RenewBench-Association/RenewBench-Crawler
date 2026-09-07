@@ -62,82 +62,93 @@ class IconDreamRegridder(GridRegridder):
             self.model_config["temporal_res_folder"],
         )
 
-    def _load_source_chunk(self, task: tuple) -> xr.Dataset:
-        """Open, flatten, and merge every raw ICON-DREAM file for one task.
+    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
+        """Open and flatten the raw ICON-DREAM file for one task and variable.
 
-        Every ICON-DREAM GRIB file (single- and model-level alike) carries a
-        (time, step) forecast structure -- confirmed on real sample data,
-        unlike ERA5 where only single-level files split this way -- so every
-        opened hypercube is flattened via valid_time. Forecast cycles spill
-        past calendar-month boundaries the same way ERA5's do, so the merged
-        result is trimmed to the exact month.
+        The file's exact path is built directly from the variable's DWD code
+        -- the same filename the downloader itself writes -- since
+        ICON-DREAM is genuinely one variable per file. Every ICON-DREAM GRIB
+        file (single- and model-level alike) carries a (time, step) forecast
+        structure -- confirmed on real sample data, unlike ERA5 where only
+        single-level files split this way -- so the opened hypercube is
+        flattened via valid_time. Forecast cycles spill past calendar-month
+        boundaries the same way ERA5's do, so the result is trimmed to the
+        exact month.
 
-        Each file's one variable is renamed to its DWD short code, read
+        The file's one variable is renamed to its DWD short code, read
         directly from the filename (the downloader's own naming embeds it
         verbatim: "{label}_{year}{month}_{dwd_code}_hourly.grb") rather than
         from cfgrib's decoded variable name, which diverges from it (e.g.
         "T_2M" decodes as "t2m") -- this is what lets _variable_mapping()
         reuse icon_dream/mappings.py's own short-code table directly.
 
-        When self.variables is set, each requested canonical variable's exact
-        file path is built directly from its DWD code -- the same filename
-        the downloader itself writes -- rather than globbing and opening
-        every file in the month, since ICON-DREAM is genuinely one variable
-        per file with no level-file-splitting. This avoids loading
-        unrequested (and possibly large, e.g. model-level) files at all.
-        With no variables filter, every file for the month is globbed and
+        Args:
+            task (tuple): (year, month) task identifier.
+            variable (str): Canonical variable name to load.
+
+        Returns:
+            xr.Dataset: Dataset for this task/variable, in the DWD short-code
+                variable name, with the "values" dim renamed to "cell".
+        """
+        year, month = task
+        label = self.model_config["label"]
+        dwd_code = VARIABLE_TO_SHORT_PARAM[variable]
+        f = Path(self.source_dir, f"{label}_{year}{month}_{dwd_code}_hourly.grb")
+
+        datasets = []
+        for ds in cfgrib.open_datasets(f, chunks={}):
+            if "step" in ds.dims:
+                ds = (
+                    ds.stack(_flat=("time", "step"))
+                    .swap_dims({"_flat": "valid_time"})
+                    .drop_vars(["time", "step", "_flat"])
+                    .rename({"valid_time": "time"})
+                )
+            (var_name,) = ds.data_vars
+            # "generalVerticalLayer" only appears on model-level files
+            # (e.g. "T", not "T_2M") -- rename() would raise if asked to
+            # rename a name absent from a given file, hence the check.
+            # Unlike "values" (a bare dim, no coordinate), it's also a
+            # coordinate variable, so rename() is used (not rename_dims())
+            # to keep the dimension and its coordinate values in sync.
+            renames: dict[str, str] = {str(var_name): dwd_code, "values": "cell"}
+            if "generalVerticalLayer" in ds.dims:
+                renames["generalVerticalLayer"] = "model_level"
+            datasets.append(ds.rename(renames))
+
+        # join="outer" explicit: a single file can split into multiple
+        # cfgrib hypercubes with genuinely different time coverage (e.g.
+        # distinct step groupings), the same real divergence BARRA2's own
+        # merge fix was made explicit for. compat="no_conflicts" explicit:
+        # keeps requiring overlapping values to agree, rather than silently
+        # picking one (xarray's own upcoming "override" default).
+        merged = xr.merge(datasets, join="outer", compat="no_conflicts")
+        return self._trim_to_month(merged, year, month)
+
+    def _discover_variables(self, task: tuple) -> list[str]:
+        """Return every canonical ICON-DREAM variable actually downloaded for one task.
+
+        Filename-only: the DWD code is read straight from each filename and
+        mapped to a canonical name via `_SHORT_TO_CANONICAL` -- no files are
         opened.
 
         Args:
             task (tuple): (year, month) task identifier.
 
         Returns:
-            xr.Dataset: Merged dataset for this task, in DWD short-code
-                variable names, with the "values" dim renamed to "cell".
+            list[str]: Canonical variable names found for this task.
         """
         year, month = task
         label = self.model_config["label"]
         prefix = f"{label}_{year}{month}_"
         suffix = "_hourly.grb"
-
-        if self.variables:
-            codes = sorted(
-                {
-                    VARIABLE_TO_SHORT_PARAM[v]
-                    for v in self.variables
-                    if v in VARIABLE_TO_SHORT_PARAM
-                }
-            )
-            files = [Path(self.source_dir, f"{prefix}{code}{suffix}") for code in codes]
-            files = [f for f in files if f.exists()]
-        else:
-            files = sorted(self.source_dir.glob(f"{prefix}*{suffix}"))
-
-        datasets = []
-        for f in files:
+        found = []
+        for f in sorted(self.source_dir.glob(f"{prefix}*{suffix}")):
             dwd_code = f.name.removeprefix(prefix).removesuffix(suffix)
-            for ds in cfgrib.open_datasets(f, chunks={}):
-                if "step" in ds.dims:
-                    ds = (
-                        ds.stack(_flat=("time", "step"))
-                        .swap_dims({"_flat": "valid_time"})
-                        .drop_vars(["time", "step", "_flat"])
-                        .rename({"valid_time": "time"})
-                    )
-                (var_name,) = ds.data_vars
-                # "generalVerticalLayer" only appears on model-level files
-                # (e.g. "T", not "T_2M") -- rename() would raise if asked to
-                # rename a name absent from a given file, hence the check.
-                # Unlike "values" (a bare dim, no coordinate), it's also a
-                # coordinate variable, so rename() is used (not rename_dims())
-                # to keep the dimension and its coordinate values in sync.
-                renames: dict[str, str] = {str(var_name): dwd_code, "values": "cell"}
-                if "generalVerticalLayer" in ds.dims:
-                    renames["generalVerticalLayer"] = "model_level"
-                datasets.append(ds.rename(renames))
-
-        merged = xr.merge(datasets)
-        return self._trim_to_month(merged, year, month)
+            canonical = _SHORT_TO_CANONICAL.get(dwd_code)
+            if canonical:
+                found.append(canonical)
+        return found
 
     def _trim_to_month(self, ds: xr.Dataset, year: int, month: str) -> xr.Dataset:
         """Drop timestamps outside the exact calendar month.

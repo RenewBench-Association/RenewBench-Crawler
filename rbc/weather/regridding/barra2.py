@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from rbc.weather.barra.mappings import MODEL_CONFIG, VARIABLE_TO_SHORT_PARAM
@@ -41,6 +42,87 @@ _PRESSURE_LEVEL_BASES = ("ta", "ua", "va", "hus", "wa", "zg")
 # letters, then digits, then an optional trailing "m" for height (metres).
 _LEVEL_CODE_RE = re.compile(r"^([a-zA-Z]+)(\d+)(m?)$")
 
+# Extracts the averaging/extremum window from a CF "cell_methods" attribute,
+# e.g. "time: mean (interval: 1 hour)" -> ("1", "hour").
+_CELL_METHODS_INTERVAL_RE = re.compile(r"interval:\s*(\d+)\s*(hour|minute)s?")
+
+
+def _interval_center_shift(cell_methods: str) -> pd.Timedelta | None:
+    """Return the shift that moves an interval statistic's timestamp onto BARRA2's clock.
+
+    Confirmed on real data: BARRA2 labels interval statistics (e.g.
+    "time: mean (interval: 1 hour)") at the interval's center -- half an
+    hour ahead of "time: point" (instantaneous) variables for the same
+    nominal timestamp. The interval length is read from `cell_methods`
+    itself rather than assumed, so this stays correct for any interval
+    length or BARRA2 model variant.
+
+    Args:
+        cell_methods (str): The variable's own `cell_methods` attribute.
+
+    Returns:
+        pd.Timedelta | None: Negative shift to add to `time`, or None if
+            `cell_methods` doesn't mark an interval statistic.
+    """
+    if "time: point" in cell_methods:
+        return None
+    match = _CELL_METHODS_INTERVAL_RE.search(cell_methods)
+    if match is None:
+        return None
+    value, unit = match.groups()
+    return -pd.Timedelta(**{f"{unit}s": int(value)}) / 2
+
+
+def _packed_encoding(encoding: dict) -> dict | None:
+    """Extract a reusable CF integer-packing encoding from a raw file's own encoding.
+
+    BARRA2's own files pack physical values into scaled int32 (scale_factor
+    + add_offset), which is far more compact than the float64 xarray decodes
+    them into -- reusing it directly for the regridded output avoids
+    reinventing packing parameters, and is safe since int32's range leaves
+    enormous headroom relative to any real value shift regridding could
+    introduce (confirmed on real data: representable range hundreds of
+    times wider than the actual value spread).
+
+    Args:
+        encoding (dict): A decoded DataArray's own `.encoding`, as populated
+            by `xr.open_dataset()`.
+
+    Returns:
+        dict | None: {"dtype", "scale_factor", "add_offset", "_FillValue"},
+            or None if `encoding` isn't CF-packed this way.
+    """
+    if "scale_factor" not in encoding:
+        return None
+    return {
+        "dtype": encoding["dtype"],
+        "scale_factor": encoding["scale_factor"],
+        "add_offset": encoding.get("add_offset", 0.0),
+        "_FillValue": encoding.get("_FillValue"),
+    }
+
+
+def _canonical_to_native(variable: str) -> tuple[str, str]:
+    """Map a canonical variable name back to its BARRA2 base short code and kind.
+
+    Args:
+        variable (str): Canonical variable name.
+
+    Returns:
+        tuple[str, str]: (base_code, kind), where kind is "single",
+            "pressure", or "height".
+
+    Raises:
+        ValueError: If `variable` isn't a known BARRA2 canonical name.
+    """
+    for base, canonical in _HEIGHT_BASE_TO_CANONICAL.items():
+        if canonical == variable:
+            return base, "height"
+    for code, canonical in _SHORT_TO_CANONICAL.items():
+        if canonical == variable:
+            return code, "pressure" if code in _PRESSURE_LEVEL_BASES else "single"
+    raise ValueError(f"Unknown BARRA2 canonical variable: {variable!r}")
+
 
 class Barra2Regridder(GridRegridder):
     """HEALPix regridder for BARRA2 reanalysis data.
@@ -71,6 +153,11 @@ class Barra2Regridder(GridRegridder):
         self.model = model
         self.model_config = MODEL_CONFIG[model]
         self.temporal_res = self.model_config["temporal_res"]
+        # Populated by _load_source_chunk() as each variable's raw file(s)
+        # are opened; read back by encoding_for(). One file's packing is
+        # reused for every level of a consolidated pressure-/height-level
+        # variable -- see _packed_encoding()'s docstring for why that's safe.
+        self._native_encodings: dict[str, dict | None] = {}
         super().__init__(**kwargs)
         # Computed once here (raw_dir only exists after super().__init__()),
         # rather than on every _load_source_chunk() call -- invariant for the
@@ -81,61 +168,61 @@ class Barra2Regridder(GridRegridder):
             self.model_config["temporal_res_folder"],
         )
 
-    def _load_source_chunk(self, task: tuple) -> xr.Dataset:
-        """Open, consolidate, and merge every raw BARRA2 file for one task.
+    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
+        """Open and consolidate the raw BARRA2 file(s) for one task and variable.
 
-        Pressure-level and height-level files each carry one variable per
-        level (e.g. "..._ta950.nc" contains just "ta950"). Both are
-        consolidated into one stacked variable per base code
-        (level/height dims respectively, per the weather Zarr
-        contract's naming) before merging with single-level variables. Named
-        "<base>_plev"/"<base>_height" during consolidation so
-        _variable_mapping() can map pressure- and height-level variants of
-        the same base code (e.g. "ta") to distinct
-        canonical names.
+        A single-level variable is one file. A pressure-/height-level
+        variable is one file per level (e.g. "..._ta950.nc" contains just
+        "ta950"), consolidated here into one variable with a level/height
+        dimension (per the weather Zarr contract's naming). Named
+        "<base>_plev"/"<base>_height" so _variable_mapping() can map
+        pressure- and height-level variants of the same base code (e.g. "ta")
+        to distinct canonical names.
+
+        Interval-statistic variables (e.g. "tasmax") have their timestamps
+        shifted from the interval's center onto the same on-the-hour clock
+        "time: point" variables use (see `_interval_center_shift()`), so
+        every BARRA2 variable shares one "time" axis in the output store.
 
         Args:
             task (tuple): (year, month) task identifier.
+            variable (str): Canonical variable name to load.
 
         Returns:
-            xr.Dataset: Merged dataset for this task, in intermediate
-                (disambiguated) variable names.
+            xr.Dataset: Single-variable dataset, in intermediate
+                (disambiguated) variable name.
         """
         year, month = task
+        base, kind = _canonical_to_native(variable)
         prefix = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_"
         suffix = ".nc"
-        files = sorted(self.source_dir.glob(f"{prefix}*{suffix}"))
 
-        single_level = []
-        pressure_level: dict[str, list[tuple[float, xr.DataArray]]] = {}
-        height_level: dict[str, list[tuple[float, xr.DataArray]]] = {}
+        if kind == "single":
+            f = Path(self.source_dir, f"{prefix}{base}{suffix}")
+            ds = xr.open_dataset(f, chunks={})[[base]]
+            self._native_encodings[variable] = _packed_encoding(ds[base].encoding)
+            shift = _interval_center_shift(ds[base].attrs.get("cell_methods", ""))
+            ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
+            if shift is not None:
+                ds = ds.assign_coords(time=ds["time"] + shift)
+            return ds
 
-        for f in files:
-            # The short code is read from the filename and used to select
-            # the real data variable directly, dropping any auxiliary
-            # variable a file might also carry (e.g. "time_bnds").
+        # Pressure-/height-level: one file per level, and the level set
+        # itself isn't known ahead of time, so glob by base then filter with
+        # an anchored regex -- e.g. base "ta" must not also match "tas", a
+        # different, single-level variable that happens to start the same way.
+        level_coord = "height" if kind == "height" else "pressure"
+        code_pattern = (
+            re.compile(rf"^{re.escape(base)}(\d+)m$")
+            if kind == "height"
+            else re.compile(rf"^{re.escape(base)}(\d+)$")
+        )
+        level_das: list[tuple[float, xr.DataArray]] = []
+        for f in sorted(self.source_dir.glob(f"{prefix}{base}*{suffix}")):
             code = f.name.removeprefix(prefix).removesuffix(suffix)
+            if not code_pattern.match(code):
+                continue
             ds = xr.open_dataset(f, chunks={})[[code]]
-            match = _LEVEL_CODE_RE.match(code)
-            if match is None:
-                single_level.append(
-                    ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
-                )
-                continue
-            base, _, is_height = match.groups()
-            # A regex match alone isn't enough: some single-level variable
-            # names coincidentally end in digits (e.g. "BWD03", "omega500")
-            # without being real per-level files, only route to the
-            # pressure/height buckets when the base code is one we actually
-            # know has level variants.
-            is_known_level_var = (is_height and base in _HEIGHT_BASE_TO_CANONICAL) or (
-                not is_height and base in _PRESSURE_LEVEL_BASES
-            )
-            if not is_known_level_var:
-                single_level.append(
-                    ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
-                )
-                continue
             # The level value comes from the file's own scalar
             # "pressure"/"height" coordinate, not the filename -- confirmed
             # on real data the two always agree, but the file's own value is
@@ -147,42 +234,74 @@ class Barra2Regridder(GridRegridder):
             # coverage (confirmed on real data: "ta" has levels [1000, 950]
             # but "ua" only has [1000], so a shared "pressure" coordinate
             # named the same across both raises a MergeError).
-            level_coord = "height" if is_height else "pressure"
             level = float(ds[level_coord].item())
+            if variable not in self._native_encodings:
+                # scale_factor is identical across a variable's level files
+                # (confirmed on real data); add_offset differs per level,
+                # but any one file's is safe to reuse for the whole
+                # consolidated variable -- see _packed_encoding()'s
+                # docstring. Only the first level file's is kept.
+                self._native_encodings[variable] = _packed_encoding(ds[code].encoding)
+            shift = _interval_center_shift(ds[code].attrs.get("cell_methods", ""))
             ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
-            target = height_level if is_height else pressure_level
-            target.setdefault(base, []).append((level, ds[code]))
+            if shift is not None:
+                ds = ds.assign_coords(time=ds["time"] + shift)
+            level_das.append((level, ds[code]))
 
         # Level coordinate values are cast to float64 to match the dtype raw
         # source files themselves use for physical coordinates (confirmed
         # against real ERA5/BARRA2 data: lat/lon and ERA5's own pressure-level
         # coordinate are all float64 natively) -- these would otherwise come
-        # out int64, since they're built here from plain Python ints.
-        merged_vars: dict[str, xr.DataArray] = {}
-        for base, level_das in pressure_level.items():
-            level_das.sort(key=lambda pair: pair[0], reverse=True)
-            levels, das = zip(*level_das)
-            merged_vars[f"{base}_plev"] = xr.concat(
-                das,
-                dim=xr.DataArray(
-                    np.asarray(levels, dtype=np.float64), dims="level", name="level"
-                ),
-            )
-        for base, level_das in height_level.items():
-            level_das.sort(key=lambda pair: pair[0])
-            levels, das = zip(*level_das)
-            merged_vars[f"{base}_height"] = xr.concat(
-                das,
-                dim=xr.DataArray(
-                    np.asarray(levels, dtype=np.float64), dims="height", name="height"
-                ),
-            )
-
-        return xr.merge(
-            [*single_level, xr.Dataset(merged_vars)],
-            compat="no_conflicts",
-            join="outer",
+        # out int64, since they're built here from plain Python floats/ints.
+        level_das.sort(key=lambda pair: pair[0], reverse=(kind == "pressure"))
+        levels, das = zip(*level_das)
+        dim_name = "level" if kind == "pressure" else "height"
+        stacked = xr.concat(
+            das,
+            dim=xr.DataArray(
+                np.asarray(levels, dtype=np.float64), dims=dim_name, name=dim_name
+            ),
         )
+        native_name = f"{base}_{'plev' if kind == 'pressure' else 'height'}"
+        return xr.Dataset({native_name: stacked})
+
+    def _discover_variables(self, task: tuple) -> list[str]:
+        """Return every canonical BARRA2 variable actually downloaded for one task.
+
+        Filename-only: classifies each file's code the same way
+        `_load_source_chunk()` does, then maps to a canonical name via
+        `_variable_mapping()` -- no files are opened.
+
+        Args:
+            task (tuple): (year, month) task identifier.
+
+        Returns:
+            list[str]: Canonical variable names found for this task.
+        """
+        year, month = task
+        prefix = f"barra2_{self.model}_{self.temporal_res}_{year}{month}_"
+        suffix = ".nc"
+        mapping = self._variable_mapping()
+        found: set[str] = set()
+        for f in sorted(self.source_dir.glob(f"{prefix}*{suffix}")):
+            code = f.name.removeprefix(prefix).removesuffix(suffix)
+            match = _LEVEL_CODE_RE.match(code)
+            if match is None:
+                native_key = code
+            else:
+                base, _, is_height = match.groups()
+                is_known_level_var = (
+                    is_height and base in _HEIGHT_BASE_TO_CANONICAL
+                ) or (not is_height and base in _PRESSURE_LEVEL_BASES)
+                native_key = (
+                    f"{base}_{'height' if is_height else 'plev'}"
+                    if is_known_level_var
+                    else code
+                )
+            canonical = mapping.get(native_key)
+            if canonical:
+                found.add(canonical)
+        return sorted(found)
 
     def _grid_metadata_path(self) -> Path | None:
         """BARRA2 is regional lat-lon with no separate grid definition file.
@@ -225,3 +344,16 @@ class Barra2Regridder(GridRegridder):
             if base in _SHORT_TO_CANONICAL:
                 mapping[f"{base}_plev"] = _SHORT_TO_CANONICAL[base]
         return mapping
+
+    def encoding_for(self, variable: str) -> dict | None:
+        """Return the raw file's own packed-int encoding, captured while loading.
+
+        Args:
+            variable (str): Canonical variable name.
+
+        Returns:
+            dict | None: Captured by `_load_source_chunk()`; None if that
+                hasn't run yet for this variable, or the source wasn't
+                CF-packed.
+        """
+        return self._native_encodings.get(variable)

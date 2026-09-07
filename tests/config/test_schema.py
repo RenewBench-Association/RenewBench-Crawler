@@ -151,3 +151,37 @@ def test_config_with_access_rejects_placeholders(
 
     with pytest.raises(ValidationError):
         schema.model_validate(bad_cfg_dict)
+
+
+def test_regrid_healpix_compression_defaults(source_configs: dict) -> None:
+    """The regrid schema defaults to zlib level 1 with shuffle.
+
+    Args:
+        source_configs (dict): Dictionary of all source configurations.
+    """
+    schema = SCHEMA_REGISTRY["regrid_healpix"]
+    cfg = schema.model_validate(source_configs["regrid_healpix"])
+
+    assert cfg.compressor == "zlib"
+    assert cfg.compression_level == 1
+    assert cfg.shuffle is True
+
+
+@pytest.mark.parametrize(
+    "override",
+    [{"compression_level": 0}, {"compressor": "lz4"}],
+    ids=["level_zero", "unknown_compressor"],
+)
+def test_regrid_healpix_rejects_bad_compression(
+    source_configs: dict, override: dict
+) -> None:
+    """Level 0 (Blosc: no compression) and unknown compressors are rejected.
+
+    Args:
+        source_configs (dict): Dictionary of all source configurations.
+        override (dict): Invalid compression field to merge in.
+    """
+    schema = SCHEMA_REGISTRY["regrid_healpix"]
+
+    with pytest.raises(ValidationError):
+        schema.model_validate({**source_configs["regrid_healpix"], **override})

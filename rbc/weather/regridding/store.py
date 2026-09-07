@@ -11,33 +11,41 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 from tqdm.dask import TqdmCallback
+from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 
 
 class HealpixZarrWriter:
     """Writes regridded HEALPix pyramids into per-(model, time_res, level) Zarr stores.
 
-    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr". One fully
-    independent Zarr store per (model_name, time_res, level), not one shared
-    store with internal groups. Surface, pressure-level, height-level, and
-    model-level variables all coexist as differently-shaped variables within
-    the same store (distinguished by their own dimensions, e.g. [time, cell]
-    vs. [time, level, cell]), per the contract's "separation... as standard
-    in other Zarr stores" clause.
+    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr" -- one
+    independent Zarr store per (model_name, time_res, level). Surface,
+    pressure-level, height-level, and model-level variables coexist as
+    differently-shaped variables within the same store (distinguished by
+    their own dimensions, e.g. [time, cell] vs. [time, level, cell]), per
+    the contract's "separation... as standard in other Zarr stores" clause.
 
-    Every write uses `consolidated=False`: carried over from the shared-store
-    design this replaced, where it avoided a whole-tree metadata rewrite on
-    every append; less critical now that each store is independent, but kept
-    for consistency, and because Zarr itself still flags consolidated
-    metadata as not yet part of the v3 spec.
+    Every write uses `consolidated=False`, since Zarr itself still flags
+    consolidated metadata as not yet part of the v3 spec. Compression is one
+    writer-wide codec pipeline (see `_build_compressors()`), applied on
+    every variable's first write.
 
     Attributes:
         base_dir (Path): Root directory the per-(model, time_res, level)
             Zarr stores are written under.
         min_level (int): Shared coarsest HEALPix level, validated against
             every incoming pyramid.
+        compressors (tuple | None): Zarr codec pipeline applied on every
+            variable's first write; None writes raw bytes.
     """
 
-    def __init__(self, base_dir: Path, min_level: int) -> None:
+    def __init__(
+        self,
+        base_dir: Path,
+        min_level: int,
+        compressor: str = "zlib",
+        compression_level: int = 1,
+        shuffle: bool = True,
+    ) -> None:
         """Initializes the instance.
 
         Args:
@@ -45,9 +53,60 @@ class HealpixZarrWriter:
                 level) Zarr stores. `to_zarr` creates the full nested path
                 on first write.
             min_level (int): Shared coarsest HEALPix level across sources.
+            compressor (str): "zlib", "zstd", or "none". Defaults to "zlib".
+            compression_level (int): Codec level, >= 1 -- Blosc treats 0 as
+                "no compression". Defaults to 1.
+            shuffle (bool): Byte-shuffle before compressing, the filter NetCDF
+                itself uses (measured ~1.4x smaller on packed int32). Ignored
+                for "none". Defaults to True.
+
+        Raises:
+            ValueError: If `compressor` is unknown or `compression_level` < 1.
         """
         self.base_dir = Path(base_dir)
         self.min_level = min_level
+        self.compressors = self._build_compressors(
+            compressor, compression_level, shuffle
+        )
+
+    @staticmethod
+    def _build_compressors(compressor: str, level: int, shuffle: bool) -> tuple | None:
+        """Build the Zarr codec pipeline for one (compressor, level, shuffle) choice.
+
+        Shuffle isn't a standalone Zarr v3 codec, so shuffled pipelines go
+        through Blosc (which bundles it with zlib/zstd); unshuffled ones use
+        the plain Gzip/Zstd codecs. Measured on real BARRA2 data: shuffle is
+        what makes packed int32 compress well (the level barely matters),
+        and Blosc's zstd needs a higher level than zlib to match it.
+
+        Args:
+            compressor (str): "zlib", "zstd", or "none".
+            level (int): Codec level, >= 1.
+            shuffle (bool): Whether to byte-shuffle before compressing.
+
+        Returns:
+            tuple | None: Codecs for `to_zarr()`'s "compressors" encoding;
+                None for "none".
+
+        Raises:
+            ValueError: If `compressor` is unknown or `level` < 1.
+        """
+        if compressor == "none":
+            return None
+        if compressor not in ("zlib", "zstd"):
+            raise ValueError(
+                f"Unknown compressor {compressor!r}; expected 'zlib', 'zstd' or 'none'."
+            )
+        if level < 1:
+            raise ValueError(
+                f"compression_level must be >= 1, got {level} (Blosc treats 0 as "
+                "no compression)."
+            )
+        if shuffle:
+            return (BloscCodec(cname=compressor, clevel=level, shuffle="shuffle"),)
+        if compressor == "zlib":
+            return (GzipCodec(level=level),)
+        return (ZstdCodec(level=level),)
 
     def append(
         self,
@@ -55,12 +114,24 @@ class HealpixZarrWriter:
         time_res: str,
         task: tuple,
         pyramid: dict[int, xr.Dataset],
+        encoding: dict | None = None,
     ) -> None:
-        """Write or grow each level's store for one task's pyramid.
+        """Write or grow each level's store for one task's single-variable pyramid.
 
-        First write per (model_name, time_res, level) uses `mode="w"`; later
-        writes append along time. Not fully crash-atomic — call
-        `GridRegridder.mark_done()` only after this returns successfully.
+        Each `ds` in `pyramid` carries exactly one data variable. Three
+        cases per level: no store yet -> `mode="w"` creates it; variable
+        already in the store -> new timestamps appended via `mode="a",
+        append_dim="time"`; new variable -> added via plain `mode="a"` (no
+        `append_dim`), only when its time range exactly matches the store's
+        existing one.
+
+        `encoding` (e.g. from `GridRegridder.encoding_for()`) is merged with
+        this writer's compression pipeline, and only applies when a variable
+        is written for the first time -- appending new timestamps to an
+        existing variable writes into its already-fixed on-disk schema.
+
+        Not fully crash-atomic — call `GridRegridder.mark_done()` only after
+        this returns successfully.
 
         Args:
             model_name (str): Contract "model_name" (e.g. "barra2_c2" --
@@ -70,12 +141,18 @@ class HealpixZarrWriter:
             task (tuple): Task identifier, used only for logging/errors here.
             pyramid (dict[int, xr.Dataset]): HEALPix pyramid to write, keyed
                 by level.
+            encoding (dict | None): Packing encoding for this pyramid's one
+                variable (e.g. `{"dtype": "int32", "scale_factor": ...}`),
+                applied only on that variable's first write. None packs
+                nothing; compression still applies.
 
         Raises:
             ValueError: If the pyramid is missing the shared `min_level`; if
                 an existing store's `healpix_level`/`healpix_order` don't
-                match the incoming data; or if any incoming timestamp is
-                already present.
+                match the incoming data; if any incoming timestamp for an
+                already-present variable is already written; or if a new
+                variable's time range doesn't exactly match the store's
+                existing one.
         """
         if self.min_level not in pyramid:
             raise ValueError(
@@ -86,30 +163,63 @@ class HealpixZarrWriter:
         task_start = time.time()
         for level, ds in pyramid.items():
             ds = self._normalize_dim_order(ds)
+            (variable,) = ds.data_vars
             store_path = self._store_path(model_name, time_res, level)
             level_start = time.time()
+            zarr_encoding = {
+                variable: {**(encoding or {}), "compressors": self.compressors}
+            }
 
             if self._store_exists(store_path):
-                self._validate_consistency(store_path, ds)
+                existing = xr.open_zarr(store_path, consolidated=False)
+                self._validate_consistency(store_path, ds, existing=existing)
                 incoming_times = set(pd.to_datetime(ds["time"].values))
-                overlap = (
-                    self.already_written(model_name, time_res, level) & incoming_times
-                )
-                if overlap:
-                    raise ValueError(
-                        f"'{store_path}', task {task}: {len(overlap)} incoming "
-                        f"timestamp(s) already present in the store (e.g. "
-                        f"{sorted(overlap)[0]}). Refusing to append duplicates."
+                existing_times = set(pd.to_datetime(existing["time"].values))
+
+                if variable in existing.data_vars:
+                    overlap = existing_times & incoming_times
+                    if overlap:
+                        raise ValueError(
+                            f"'{store_path}', task {task}: {len(overlap)} incoming "
+                            f"timestamp(s) for '{variable}' already present in the "
+                            f"store (e.g. {sorted(overlap)[0]}). Refusing to append "
+                            "duplicates."
+                        )
+                    logger.info(
+                        f"{store_path}: appending '{variable}' for task {task}..."
                     )
-                logger.info(f"{store_path}: appending task {task}...")
-                with TqdmCallback(desc=str(store_path)):
-                    ds.to_zarr(
-                        store_path, mode="a", append_dim="time", consolidated=False
+                    with TqdmCallback(desc=str(store_path)):
+                        ds.to_zarr(
+                            store_path, mode="a", append_dim="time", consolidated=False
+                        )
+                else:
+                    if incoming_times != existing_times:
+                        raise ValueError(
+                            f"'{store_path}': cannot add new variable '{variable}' "
+                            f"for task {task} -- its time range doesn't exactly "
+                            "match the store's existing time range. Adding a "
+                            "variable retroactively for a different time range "
+                            "than what's already in the store isn't supported yet "
+                            f"-- regrid '{variable}' for the same months as the "
+                            "store's other variables."
+                        )
+                    logger.info(
+                        f"{store_path}: adding new variable '{variable}' for task "
+                        f"{task}..."
                     )
+                    with TqdmCallback(desc=str(store_path)):
+                        ds.to_zarr(
+                            store_path,
+                            mode="a",
+                            consolidated=False,
+                            encoding=zarr_encoding,
+                        )
             else:
                 logger.info(f"{store_path}: creating store for task {task}...")
                 with TqdmCallback(desc=str(store_path)):
-                    ds.to_zarr(store_path, mode="w", consolidated=False)
+                    ds.to_zarr(
+                        store_path, mode="w", consolidated=False, encoding=zarr_encoding
+                    )
 
             logger.info(
                 f"{store_path}: write finished ({time.time() - level_start:.1f}s)."
@@ -230,17 +340,21 @@ class HealpixZarrWriter:
         """
         return Path(store_path, "zarr.json").exists()
 
-    def _validate_consistency(self, store_path: Path, ds: xr.Dataset) -> None:
+    def _validate_consistency(
+        self, store_path: Path, ds: xr.Dataset, existing: xr.Dataset
+    ) -> None:
         """Validate an incoming Dataset's HEALPix attrs against an existing store.
 
         Args:
-            store_path (Path): Path from `_store_path()`.
+            store_path (Path): Path from `_store_path()`, used only for the
+                error message.
             ds (xr.Dataset): Incoming Dataset about to be appended.
+            existing (xr.Dataset): The store's current contents, already
+                opened by the caller (avoids opening it twice).
 
         Raises:
             ValueError: If `healpix_level` or `healpix_order` don't match.
         """
-        existing = xr.open_zarr(store_path, consolidated=False)
         for attr in ("healpix_level", "healpix_order"):
             existing_value = existing.attrs.get(attr)
             new_value = ds.attrs.get(attr)
