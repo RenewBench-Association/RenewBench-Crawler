@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
+from loguru import logger
 
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
@@ -14,14 +15,11 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class LocatorAdapter:
-    """Column-mapping config that lets one candidate builder serve any source.
+    """Column-mapping config that lets one candidate builder serve any locator source.
 
     Replaces hardcoded candidate building per locator source with a single generic builder
     (see ``NameMatcher._build_candidates``).
     """
-
-    # todo: Several attributes are not necessary, as the MatchCandidate elements they
-    #  feed are not used anywhere. These are: "other_names_col"
 
     source: str  # locator name 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     reliability: int  # reliability score for name matching (the higher, the better!)
@@ -89,16 +87,21 @@ LOCATOR_RELIABILITY: dict[str, int] = {
 
 @dataclass
 class MatchCandidate:
-    """A single matching candidate from a locator source."""
+    """A single target EGE candidate from a locator source.
 
-    # todo: Several attributes are never used. Decide whether to keep or remove! They include:
-    #  "other_names"
+    One MatchCandidate = one name variant of a physical EGE. If an EGE has:
+    - a single name: there is one MatchCandidate for it (`primary_name`=`name`)
+    - multiple names (primary name + any `other_names`): each has their own MatchCandidate
+        - only `name`, `norm_name`, `wt_string` reflect THIS variant.
+        - all other parameters are defined identically
+    """
 
-    name: str
-    norm_name: str = field(metadata={"internal": True})  # actually tokenized & rejoined
-    wt_string: str = field(metadata={"internal": True})  # cand WeightedTokens.as_str
+    name: str  # name of THIS variant
+    primary_name: str  # authoritative name of the EGE
+    norm_name: str = field(metadata={"internal": True})  # tok str of THIS variant
+    wt_string: str = field(metadata={"internal": True})  # WeightedTokens str of THIS
     source: str = field(metadata={"internal": True})  # 'ppdb' (= ppm/osmpp)/'gem'/'osm'
-    source_id: str | None
+    source_id: str
     fueltype: str | None
     capacity: str | None
     status: str | None
@@ -106,53 +109,105 @@ class MatchCandidate:
     lat: float | None
     lon: float | None
     country: str | None
-    other_names: str = field(default="", metadata={"internal": True})  # ,-sep alt names
     extras: dict = field(default_factory=dict, metadata={"internal": True})  # more data
+
+    @property
+    def ege_key(self) -> tuple[str, str]:
+        """Identity of the locator's physical EGE (shared across variants).
+
+        Returns:
+            tuple[str, str]: Identity key for the physical EGE.
+        """
+        return self.source, self.source_id
 
     @classmethod
     def from_row(
-        cls, row: pd.Series, adapter: LocatorAdapter, tok: NameTokenizer | None = None
-    ) -> "MatchCandidate | None":
-        """Build a matching candidate from a locator row, using the adapter's column mapping.
+        cls, row: pd.Series, loc: LocatorAdapter, tok: NameTokenizer | None = None
+    ) -> list["MatchCandidate"]:
+        """Builds one MatchCandidate per name variant (primary + other_names).
+
+        Uses the provided locator row and the adapter's column mapping to get the relevant
+        information. Uses the tokenizer for name normalization (req for later processing).
 
         Args:
             row (pd.Series): Row of a dataframe.
-            adapter (LocatorAdapter): Adapter of the locator.
+            loc (LocatorAdapter): Adapter of the locator.
             tok (NameTokenizer): NameTokenizer for name normalization, if required.
 
         Returns:
-            MatchCandidate | None: MatchCandidate if the row has a name, otherwise None.
+            list[MatchCandidate]: List of MatchCandidates for the row with primary-name
+                candidate first, then one per other_name. Empty list if no primary name.
         """
-        name = strip_str(row[adapter.name_col])
-        if name is None:
-            return None
+        primary_name = strip_str(row[loc.name_col])
+        if primary_name is None:
+            return []
 
-        # tokenize name for better cross-language matching (expands abbreviated terms)
-        tokenized_name = " ".join(tok.tokenize(name)) if tok is not None else name
-        wt_name = tok.weighted_tokenize(name).as_str() if tok is not None else ""
+        source_id = strip_str(row.get(loc.id_col))
+        if source_id is None:
+            logger.warning(
+                f"Skipping {loc.source} row with missing {loc.id_col} for "
+                f"{primary_name}"
+            )
+            return []
 
-        other_names = ""
-        if adapter.other_names_col:
-            other_names = strip_str(row.get(adapter.other_names_col)) or ""
+        other_names = row.get(loc.other_names_col, "")
+        if not isinstance(other_names, str):  # GEM's other_names can be NAType objects
+            other_names = ""
 
-        extras = {c: strip_str(row.get(c)) for c in adapter.extra_cols}
+        name_variants: list[str] = [primary_name] + [
+            n for n in (strip_str(n) for n in other_names.split(",")) if n is not None
+        ]
 
-        return cls(
-            name=name,
-            norm_name=tokenized_name,
-            wt_string=wt_name,
-            source=adapter.source,
-            source_id=strip_str(row.get(adapter.id_col)),
-            fueltype=strip_str(row[adapter.fueltype_col]),
-            capacity=strip_str(row.get(adapter.capacity_col)),
-            status=strip_str(row.get(adapter.status_col)),
-            url=strip_str(row.get(adapter.url_col)),
-            lat=float(row[adapter.lat_col]),
-            lon=float(row[adapter.lon_col]),
-            country=strip_str(row.get(adapter.country_col)),
-            other_names=other_names,
-            extras=extras,
-        )
+        source = loc.source
+        fueltype = strip_str(row[loc.fueltype_col])
+        capacity = strip_str(row.get(loc.capacity_col))
+        status = strip_str(row.get(loc.status_col))
+        url = strip_str(row.get(loc.url_col))
+        lat = float(row[loc.lat_col])
+        lon = float(row[loc.lon_col])
+        country = strip_str(row.get(loc.country_col))
+        extras = {c: strip_str(row.get(c)) for c in loc.extra_cols}
+
+        candidates: list[MatchCandidate] = []
+        for name in name_variants:
+            tok_name = " ".join(tok.tokenize(name)) if tok is not None else name
+            wt_name = tok.weighted_tokenize(name).as_str() if tok is not None else ""
+            candidates.append(
+                cls(
+                    name=name,
+                    norm_name=tok_name,
+                    wt_string=wt_name,
+                    primary_name=primary_name,
+                    source=source,
+                    source_id=source_id,
+                    fueltype=fueltype,
+                    capacity=capacity,
+                    status=status,
+                    url=url,
+                    lat=lat,
+                    lon=lon,
+                    country=country,
+                    extras=extras,
+                )
+            )
+
+        return candidates
+
+    @classmethod
+    def primary_from_row(
+        cls, row: pd.Series, loc: LocatorAdapter
+    ) -> "MatchCandidate | None":
+        """Get the primary match candidate from a locator row with the adapter's col mapping.
+
+        Args:
+            row (pd.Series): Row of a dataframe.
+            loc (LocatorAdapter): Adapter of the locator.
+
+        Returns:
+            MatchCandidate | None: MatchCandidate if the row has a primary name, else None.
+        """
+        candidates = cls.from_row(row, loc)
+        return candidates[0] if candidates else None
 
     def to_dict(self) -> dict[str, object]:
         """Maps candidate attribute values to column names to add to the output DataFrame.
@@ -163,12 +218,21 @@ class MatchCandidate:
         Returns:
             dict[str, object]: Dictionary of column headers and their values
         """
-        cols = {
-            f"{self.source}.{f.name}": val
-            for f in fields(self)
-            if not f.metadata.get("internal")
-            and (val := getattr(self, f.name)) is not None
-        }
+        cols: dict[str, object] = {}
+        for f in fields(self):
+            if f.metadata.get("internal") or f.name == "primary_name":
+                continue
+
+            val = getattr(self, f.name)
+            if val is None:
+                continue
+
+            cols[f"{self.source}.{f.name}"] = val
+            if f.name == "name":
+                cols[f"{self.source}.primary_name"] = (
+                    self.primary_name if self.primary_name != self.name else None
+                )
+
         extras = {
             f"{self.source}.{key.removeprefix('OSM_')}": val
             for key, val in self.extras.items()
@@ -218,7 +282,9 @@ class MatchResult:
                 cand_dict = {
                     "candidate." + k.split(f"{locator}.")[-1]: v
                     for k, v in cand.to_dict().items()
-                    if k.startswith(f"{locator}.") and not any(map(str.isupper, k))
+                    if k.startswith(f"{locator}.")
+                    and not any(map(str.isupper, k))
+                    and not k.endswith(".country")
                 }
                 list_of_dicts.append(
                     {

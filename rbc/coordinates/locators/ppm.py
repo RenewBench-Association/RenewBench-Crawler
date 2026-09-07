@@ -140,4 +140,4 @@ class PPMLocator:
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
-        return MatchCandidate.from_row(row, adapter=PPDB_ADAPTER)
+        return MatchCandidate.primary_from_row(row, loc=PPDB_ADAPTER)

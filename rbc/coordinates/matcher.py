@@ -176,6 +176,7 @@ class NameMatcher:
         candidate_index = self._candidate_index
         target_variants = self._generate_target_variants(target_name)
         target_wts = [self.tok.weighted_tokenize(v) for v in target_variants]
+        target_wts = [wt for wt in target_wts if wt is not None]
 
         # Match collections consisting of [candidate, score]
         all_matches: list[tuple[MatchCandidate, float]] = []
@@ -252,17 +253,15 @@ class NameMatcher:
         # all: only by score (highest first)
         all_matches.sort(key=lambda x: x[1], reverse=True)
 
-        # 2. keep best score per candidate variants (if same normalized name, same score)
-        best_per_candidate: dict[int, tuple[MatchCandidate, float]] = {}
+        # 2. find the best score per EGE from all variants (one per unique normalized name)
+        best_per_ege: dict[tuple[str, str], tuple[MatchCandidate, float]] = {}
         for cand, score in all_matches:
-            prev = best_per_candidate.get(id(cand))
+            prev = best_per_ege.get(cand.ege_key)
             if prev is None or score > prev[1]:
-                best_per_candidate[id(cand)] = (cand, score)
+                best_per_ege[cand.ege_key] = (cand, score)
 
         # 3. Get top matches as top-10 of all that score above the relevant threshold
-        all_matches = sorted(
-            best_per_candidate.values(), key=lambda x: x[1], reverse=True
-        )
+        all_matches = sorted(best_per_ege.values(), key=lambda x: x[1], reverse=True)
         top_matches = [
             (cand, score)
             for cand, score in all_matches[:5]
@@ -316,7 +315,7 @@ class NameMatcher:
 
         logger.info(
             f"NameMatcher: Built candidate lookup for '{self.target_country}' with "
-            f"{len(candidates)} total candidates, of which {len(index)} are unique."
+            f"{len(candidates)} candidate variants that have {len(index)} unique names."
         )
         return index
 
@@ -360,9 +359,7 @@ class NameMatcher:
 
         candidates = []
         for _, row in df.iterrows():
-            candidate = MatchCandidate.from_row(row, adapter, self.tok)
-            if candidate is not None:
-                candidates.append(candidate)
+            candidates.extend(MatchCandidate.from_row(row, adapter, self.tok))
 
         return candidates
 

@@ -6,16 +6,63 @@ from typing import cast
 
 import pandas as pd
 import pytest
+from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.match_schema import GEM_ADAPTER, OSM_ADAPTER, PPDB_ADAPTER
+from rbc.coordinates.match_schema import (
+    GEM_ADAPTER,
+    OSM_ADAPTER,
+    PPDB_ADAPTER,
+    MatchCandidate,
+)
 from rbc.coordinates.matcher import NameMatcher
 
 
 # ----------------------------------
 # Fixtures
 # ----------------------------------
+@pytest.fixture
+def gem_df() -> pd.DataFrame:
+    """Synthetic GEM candidate row exercising the other_names column.
+
+    Returns:
+        pd.DataFrame: A single Estonian row with a comma-joined other_names
+            value, to verify GEM_ADAPTER's other_names_col handling.
+    """
+    return pd.DataFrame(
+        [
+            {
+                "plant_name": "Auvere",
+                "other_names": "Auvere Elektrijaam, Auvere EJ",
+                "Country": "Estonia",
+                "Fueltype": "Oil",
+                "lat": 59.01,
+                "lon": 27.01,
+                "gem_unit_id": "gem-1",
+            },
+            {
+                "plant_name": "Mauá 3 power plant",
+                "other_names": "",
+                "Country": "Brazil",
+                "Fueltype": "hydro",
+                "lat": -1.9,
+                "lon": -59.4,
+                "gem_unit_id": "gem-maua-3",
+            },
+            {
+                "plant_name": "Mauá 6 power plant",
+                "other_names": "",
+                "Country": "Brazil",
+                "Fueltype": "hydro",
+                "lat": -2.9,
+                "lon": -59.4,
+                "gem_unit_id": "gem-maua-6",
+            },
+        ]
+    )
+
+
 @pytest.fixture
 def ppdb_df() -> pd.DataFrame:
     """Synthetic ppdb (here: PPM) candidate rows exercising the country/coordinate filters.
@@ -55,29 +102,6 @@ def ppdb_df() -> pd.DataFrame:
                 "id": "ppdb-ppm-3",
                 "EIC": None,
             },
-        ]
-    )
-
-
-@pytest.fixture
-def gem_df() -> pd.DataFrame:
-    """Synthetic GEM candidate row exercising the other_names column.
-
-    Returns:
-        pd.DataFrame: A single Estonian row with a comma-joined other_names
-            value, to verify GEM_ADAPTER's other_names_col handling.
-    """
-    return pd.DataFrame(
-        [
-            {
-                "plant_name": "Auvere",
-                "other_names": "Auvere Elektrijaam, Auvere EJ",
-                "Country": "Estonia",
-                "Fueltype": "Oil",
-                "lat": 59.01,
-                "lon": 27.01,
-                "gem_unit_id": "gem-1",
-            }
         ]
     )
 
@@ -135,6 +159,27 @@ def matcher(
 class TestAdapters:
     """Tests for the coordinate / location finding source Adapter classes."""
 
+    def test_gem_adapter(self, matcher: NameMatcher) -> None:
+        """Happy path for GEM_ADAPTER, where other_names are made their own candidates.
+
+        Args:
+            matcher (NameMatcher): Matcher scoped to Estonia from the `matcher` fixture.
+        """
+        candidates = matcher._build_candidates(GEM_ADAPTER)
+        assert len(candidates) == 3
+        assert all(c.ege_key == ("gem", "gem-1") for c in candidates)
+        assert all(c.primary_name == "Auvere" for c in candidates)
+        assert [c.name for c in candidates] == [
+            "Auvere",
+            "Auvere Elektrijaam",
+            "Auvere EJ",
+        ]
+        assert [c.norm_name for c in candidates] == [
+            "auvere",
+            "auvere elektrijaam",
+            "auvere ej",
+        ]
+
     def test_ppdb_adapter(self, matcher: NameMatcher) -> None:
         """Happy path for PPDB_ADAPTER with country and coordinate filters.
 
@@ -150,9 +195,7 @@ class TestAdapters:
         assert c.source_id == "ppdb-ppm-1"
         assert c.country == "Estonia"
 
-    def test_ppdb_adapter_country_filter_follows_target(
-        self, ppdb_df: pd.DataFrame
-    ) -> None:
+    def test_ppdb_adapter_filter_target_country(self, ppdb_df: pd.DataFrame) -> None:
         """Happy path: PPDB_ADAPTER keeps the row matching the matcher's own country.
 
         The same fixture yields the Estonian row for an Estonian matcher (above) and the
@@ -171,26 +214,11 @@ class TestAdapters:
         assert candidates[0].source_id == "ppdb-ppm-2"
         assert candidates[0].country == "Germany"
 
-    def test_gem_adapter(self, matcher: NameMatcher) -> None:
-        """Happy path for GEM_ADAPTER with its other_names_col handling.
-
-        Args:
-            matcher (NameMatcher): Matcher scoped to Estonia, from the
-                `matcher` fixture.
-        """
-        candidates = matcher._build_candidates(GEM_ADAPTER)
-        assert len(candidates) == 1
-        c = candidates[0]
-        assert c.source == "gem"
-        assert c.source_id == "gem-1"
-        assert c.other_names == "Auvere Elektrijaam, Auvere EJ"
-
     def test_osm_adapter(self, matcher: NameMatcher) -> None:
         """Happy path for OSM_ADAPTER with no country column.
 
         Args:
-            matcher (NameMatcher): Matcher scoped to Estonia, from the
-                `matcher` fixture.
+            matcher (NameMatcher): Matcher scoped to Estonia from the `matcher` fixture.
         """
         candidates = matcher._build_candidates(OSM_ADAPTER)
         assert len(candidates) == 1
@@ -200,6 +228,65 @@ class TestAdapters:
         assert c.country is None
 
 
+class TestMatchCandidateConstruction:
+    """Tests for MatchCandidate's factory methods (`from_row`, `primary_from_row`).
+
+    Happy path for `from_row` is already indirectly covered by TestAdapters.
+    """
+
+    def test_from_row_no_name_returns_empty(self, gem_df: pd.DataFrame) -> None:
+        """Failure path: from_row returns [] when the row has no primary name.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using first row = Estonia).
+        """
+        row = gem_df.iloc[0].copy()
+        row["plant_name"] = None
+        assert MatchCandidate.from_row(row, loc=GEM_ADAPTER) == []
+
+    def test_from_row_missing_source_id_skipped(self, gem_df: pd.DataFrame) -> None:
+        """Failure path: from_row skips and warns for a row whose source_id is missing.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using first row = Estonia).
+        """
+        captured_logs: list[dict] = []
+        sink_id = logger.add(
+            lambda msg: captured_logs.append(msg.record), level="WARNING"
+        )
+        try:
+            row = gem_df.iloc[0].copy()
+            row["gem_unit_id"] = None
+            assert MatchCandidate.from_row(row, loc=GEM_ADAPTER) == []
+            assert len(captured_logs) == 1
+            assert "missing gem_unit_id" in captured_logs[0]["message"]
+            assert "Auvere" in captured_logs[0]["message"]
+        finally:
+            logger.remove(sink_id)
+
+    def test_primary_from_row(self, gem_df: pd.DataFrame) -> None:
+        """Happy path: primary_from_row returns only the primary variant.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using first row = Estonia).
+        """
+        candidate = MatchCandidate.primary_from_row(gem_df.iloc[0], loc=GEM_ADAPTER)
+        assert candidate is not None
+        assert candidate.name == "Auvere"
+        assert candidate.primary_name == "Auvere"
+        assert candidate.source_id == "gem-1"
+
+    def test_primary_from_row_no_name_returns_none(self, gem_df: pd.DataFrame) -> None:
+        """Failure path: primary_from_row returns None when the row has no name.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using first row = Estonia).
+        """
+        row = gem_df.iloc[0].copy()
+        row["plant_name"] = None
+        assert MatchCandidate.primary_from_row(row, loc=GEM_ADAPTER) is None
+
+
 class TestNameMatcherCachedProperties:
     """Tests for NameMatcher cached properties."""
 
@@ -207,7 +294,7 @@ class TestNameMatcherCachedProperties:
         """Happy path: candidates based on all sources and cached property builds only once.
 
         Args:
-            matcher (NameMatcher): Matcher scoped to Estonia, from the `matcher` fixture.
+            matcher (NameMatcher): Matcher scoped to Estonia from the `matcher` fixture.
         """
         index = matcher._candidate_index
         all_candidates = [c for candidates in index.values() for c in candidates]
@@ -227,40 +314,7 @@ class TestNameMatcherCachedProperties:
 class TestNameMatcherTargetVariants:
     """Tests for ordered target_variants (built: _generate_target_variants, used: match)."""
 
-    @pytest.fixture
-    def unit_matcher(self) -> NameMatcher:
-        """Returns a matcher over two units of one plant, differing only by unit number.
-
-        Returns:
-            NameMatcher: Matcher scoped to Brazil with "Mauá 3" and "Mauá 6" candidates.
-        """
-        gem_df = pd.DataFrame(
-            [
-                {
-                    "plant_name": name,
-                    "gem_unit_id": unit_id,
-                    "Country": "Brazil",
-                    "Fueltype": "hydro",
-                    "lat": lat,
-                    "lon": -59.4,
-                    "Status": "operating",
-                    "wiki_url": "",
-                    "other_names": "",
-                }
-                for unit_id, name, lat in [
-                    ("gem-maua-3", "Mauá 3 power plant", -1.9),
-                    ("gem-maua-6", "Mauá 6 power plant", -2.9),
-                ]
-            ]
-        )
-        return NameMatcher(
-            country="Brazil",
-            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
-        )
-
-    def test_match_stops_at_first_fitting_target(
-        self, unit_matcher: NameMatcher
-    ) -> None:
+    def test_match_stop_at_fitting_target(self, gem_df: pd.DataFrame) -> None:
         """Happy path: The unit number decides between two units of the same plant.
 
         _generate_target_variants also returns a unit-stripped variant ("maua"), which scores
@@ -268,9 +322,13 @@ class TestNameMatcherTargetVariants:
         first variant that wins -- here the full name.
 
         Args:
-            unit_matcher (NameMatcher): Matcher over "Mauá 3" and "Mauá 6".
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using 2nd & 3rd rows = Brazil).
         """
-        result = unit_matcher.match("Mauá Bloco 6", target_fueltype="hydro")
+        matcher = NameMatcher(
+            country="Brazil",
+            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+        )
+        result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
 
         assert result.matched
         assert result.candidate is not None
@@ -280,18 +338,20 @@ class TestNameMatcherTargetVariants:
         scores = {cand.source_id: score for cand, score in result.top_matches}
         assert scores["gem-maua-6"] > scores["gem-maua-3"]
 
-    def test_match_checks_against_all_candidates(
-        self, unit_matcher: NameMatcher
-    ) -> None:
+    def test_match_check_all_candidates(self, gem_df: pd.DataFrame) -> None:
         """Happy path: Target variant matching never stops mid-candidate-loop.
 
         Loop is broken ONLY when the full _candidate_index has been checked to find the
         best match for a target variant.
 
         Args:
-            unit_matcher (NameMatcher): Matcher over "Mauá 3" and "Mauá 6".
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using 2nd & 3rd rows = Brazil).
         """
-        result = unit_matcher.match("Mauá Bloco 6", target_fueltype="hydro")
+        matcher = NameMatcher(
+            country="Brazil",
+            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+        )
+        result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
         assert len(result.top_matches) == 2
 
 

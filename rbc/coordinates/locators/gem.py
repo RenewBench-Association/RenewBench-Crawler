@@ -293,6 +293,7 @@ class GEMLocator:
             if self.cache_dir and self.cache_path:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
                 self.df.to_parquet(self.cache_path, index=False)
+                self.df.to_csv(self.cache_path.with_suffix(".csv"), index=False)
                 logger.info(f"GEMLocator: Combined data stored to '{self.cache_path}'")
             else:
                 logger.info(
@@ -471,4 +472,4 @@ class GEMLocator:
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
-        return MatchCandidate.from_row(row, adapter=GEM_ADAPTER)
+        return MatchCandidate.primary_from_row(row, loc=GEM_ADAPTER)
