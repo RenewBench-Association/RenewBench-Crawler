@@ -103,8 +103,9 @@ class TestClassifyFueltypeMatch:
             ("bioenergy", "bioenergy (landfill gas)"),
             ("industrial waste", "bioenergy: agri waste (solids)"),
             ("diesel oil", "fossil fuel: diesel oil"),
+            ("industrial waste", "bioenergy: paper mill wastes"),
         ],
-        ids=["gas1", "gas2", "gas3", "waste", "oil"],
+        ids=["gas1", "gas2", "gas3", "waste", "oil", "waste_plural"],
     )
     def test_compatible_is_match(self, sysop_type: str, loc_type: str) -> None:
         """Happy path: All overlapping label are classified as expected ("compatible").
@@ -123,16 +124,15 @@ class TestClassifyFueltypeMatch:
             ("peat", "bioenergy: wood & other biomass (solids), other: other"),
             ("peat", "oil"),
             ("peat", "fossil liquids: diesel"),
-            ("industrial waste", "bioenergy: paper mill wastes"),
         ],
-        ids=["lignite", "solid_biomass", "wood", "oil", "diesel", "wastes"],
+        ids=["lignite", "solid_biomass", "wood", "oil", "diesel"],
     )
     def test_family_is_match(self, sysop_type: str, loc_type: str) -> None:
         """Happy path: Two labels that both burn something are never vetoed outright.
 
         No locators use "peat" at all -- Ireland's peat plants appear as diesel,
         fuel oil, lignite or biomass depending on the curator -- so a strict veto rejects
-        matches whose coordinates are correct. These are the real ONS/ENTSO-E rejections
+        matches whose coordinates are correct. These are the real ENTSO-E rejections
         the family level was introduced for.
 
         Args:

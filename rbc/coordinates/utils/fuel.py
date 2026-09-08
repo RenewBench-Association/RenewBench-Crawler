@@ -20,6 +20,7 @@ FUEL_TOKEN_SYNONYMS: dict[str, str] = {
     "diesel": "oil",
     "lignite": "coal",
     "lng": "gas",
+    "wastes": "waste",
     "product": "waste",
     "landfill": "waste",
     "battery": "storage",
