@@ -29,6 +29,7 @@ from rbc.coordinates.match_schema import (
 )
 from rbc.coordinates.utils.country import normalize_operator_country_name
 from rbc.coordinates.utils.fuel import classify_fueltype_match
+from rbc.coordinates.utils.region import classify_region_match
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
@@ -85,7 +86,7 @@ class NameMatcher:
 
     def __init__(
         self,
-        country: str | None = None,
+        country: str,
         gem_locator: GEMLocator | None = None,
         ppdb_locator: PPMLocator | OSMPPLocator | None = None,
         osm_df: pd.DataFrame | None = None,
@@ -95,8 +96,8 @@ class NameMatcher:
         """Initialize the name matcher.
 
         Args:
-            country (str | None): Target country name for hard filtering (prevents
-                cross-country matches). Defaults to None.
+            country (str): Target country name for hard filtering (prevents cross-country
+                matches).
             gem_locator (GEMLocator | None): GEM locator instance for GEM candidates.
                 Defaults to None.
             ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
@@ -148,6 +149,7 @@ class NameMatcher:
         self,
         target_name: str,
         target_fueltype: str | None = None,
+        target_region: str | None = None,
     ) -> MatchResult:
         """Find the best match for a target EGE name across all candidate data sources.
 
@@ -158,6 +160,7 @@ class NameMatcher:
         Args:
             target_name (str): The target name to match.
             target_fueltype (str | None): Target fuel type for validation. Defaults to None.
+            target_region (str | None): Target region for validation. Defaults to None.
 
         Returns:
             MatchResult with matched candidate or None if no match found.
@@ -189,13 +192,23 @@ class NameMatcher:
                 for candidate in candidate_index[variant]:
                     score, debug_score = 100.0, 100.0
 
-                    is_match, bonus = _compare_fuel(target_fueltype, candidate.fueltype)
-                    score = score + bonus if is_match else 0.0
-                    debug_score += bonus
+                    is_f_match, f_bonus = _compare_fuel(
+                        target_fueltype, candidate.fueltype
+                    )
+                    score = score + f_bonus if is_f_match else 0.0
+                    debug_score += f_bonus
+
+                    is_r_match, r_bonus = _compare_region(
+                        self.target_country,
+                        target_region,
+                        (candidate.lat, candidate.lon),
+                    )
+                    score = score + r_bonus if is_r_match else 0.0
+                    debug_score += r_bonus
 
                     all_matches.append((candidate, debug_score))
                     if score >= self.threshold:
-                        if bonus > 0.0:
+                        if f_bonus > 0.0:
                             winning_matches.append((candidate, score))
                         else:
                             fallback_matches.append((candidate, score))
@@ -224,13 +237,23 @@ class NameMatcher:
                         candidate_wt,
                         fuzz_ratio_floor=self.fuzz_ratio_threshold,
                     )
-                    is_match, bonus = _compare_fuel(target_fueltype, candidate.fueltype)
-                    true_score = true_score + bonus if is_match else 0.0
-                    debug_score += bonus
+                    is_f_match, f_bonus = _compare_fuel(
+                        target_fueltype, candidate.fueltype
+                    )
+                    true_score = true_score + f_bonus if is_f_match else 0.0
+                    debug_score += f_bonus
+
+                    is_r_match, r_bonus = _compare_region(
+                        self.target_country,
+                        target_region,
+                        (candidate.lat, candidate.lon),
+                    )
+                    true_score = true_score + r_bonus if is_r_match else 0.0
+                    debug_score += r_bonus
 
                     all_matches.append((candidate, debug_score))
                     if true_score >= self.weighted_threshold:
-                        if bonus > 0.0:
+                        if f_bonus > 0.0:
                             winning_matches.append((candidate, true_score))
                         else:
                             fallback_matches.append((candidate, true_score))
@@ -458,3 +481,28 @@ def _compare_fuel(target_fuel: str | None, cand_fuel: str | None) -> tuple[bool,
         return True, 0.0
 
     return True, 5.0  # bonus for "exact" or "compatible"
+
+
+def _compare_region(
+    country: str, target_region: str | None, cand_coord: tuple[float, float]
+) -> tuple[bool, float]:
+    """Whether the candidate coordinate lies within the target region or not.
+
+    Args:
+        country (str): The target / candidate country name.
+        target_region (str | None): The target region.
+        cand_coord (tuple[float, float]): The candidate coordinate (lat, lon).
+
+    Returns:
+        tuple[bool, float]: Whether it's in the region, and the score bonus to add.
+    """
+    level = classify_region_match(country, target_region, cand_coord)
+    if level == "unknown":  # the most common case! Most have no region info...
+        return True, 0.0
+
+    if level == "mismatch":
+        return False, 0.0
+    elif level == "within_bounds":
+        return True, 0.0
+
+    return True, 5.0  # bonus for "within_borders"

@@ -29,6 +29,7 @@ from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.match_schema import LOCATOR_RELIABILITY, MatchCandidate
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
+from rbc.coordinates.utils.region import classify_region_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
@@ -101,6 +102,7 @@ class BasePipeline:
             "_step_load_and_dedupe",
             "_step_prepare_matching",
             *self.STEPS,
+            "_step_validate_region",
             "_step_finalize",
         ]
 
@@ -140,6 +142,7 @@ class BasePipeline:
             self.fuel_col = OPERATOR_METADATA[self.operator].get("fuel_col")
             self.fuel_sub_col = OPERATOR_METADATA[self.operator].get("fuel_subtype_col")
             self.fuel_mapping = OPERATOR_METADATA[self.operator].get("fuel_mapping", {})
+            self.region_col = OPERATOR_METADATA[self.operator].get("region_col")
 
             if self.name_col == "":
                 raise MissingDataError(
@@ -235,8 +238,13 @@ class BasePipeline:
 
     @property
     def sysop_fuel_sub_col(self) -> str | None:
-        """Name of the SysOp's fuel subtype column, if existent ('nom_tipocombustivel')."""
+        """Name of the SysOp's fuel subtype col, if existent (e.g. 'nom_tipocombustivel')."""
         return f"sysop.{self.fuel_sub_col}" if self.fuel_sub_col else None
+
+    @property
+    def sysop_region_col(self) -> str | None:
+        """Name of the SysOp's region column, if existent (e.g. 'nom_estado')."""
+        return f"sysop.{self.region_col}" if self.region_col else None
 
     @staticmethod
     def _create_match_method_columns(df: pd.DataFrame) -> None:
@@ -272,6 +280,27 @@ class BasePipeline:
             (df[f"{s}.lon"] for s in SORTED_MATCH_SOURCES),
         )
         return lat, lon
+
+    @staticmethod
+    def _matched_field(df: pd.DataFrame, field: str) -> pd.Series:
+        """Best `field` value from the most reliable locator that actually matched each row.
+
+        Args:
+            df (pd.DataFrame): The working dataFrame of SysOp (target EGE) data.
+            field (str): The target field to check for matches (e.g. 'sysop.fuel').
+
+        Returns:
+            pd.Series: Best-so-far ``field`` matches.
+        """
+        return reduce(
+            lambda a, b: a.combine_first(b),
+            (
+                df[f"{loc}.{field}"].where(df[f"{loc}.lat"].notna())
+                if f"{loc}.{field}" in df.columns
+                else pd.Series(pd.NA, index=df.index, dtype=object)  # empty series
+                for loc in SORTED_LOCATORS
+            ),
+        )
 
     @classmethod
     def _still_unmatched(cls, df: pd.DataFrame) -> pd.Series:
@@ -313,7 +342,13 @@ class BasePipeline:
 
         # define relevant columns and ensure they actually exist in the operator data
         relevant_cols = []
-        for col in [self.name_col, self.code_col, self.fuel_col, self.fuel_sub_col]:
+        for col in [
+            self.name_col,
+            self.code_col,
+            self.fuel_col,
+            self.fuel_sub_col,
+            self.region_col,
+        ]:
             if not col:
                 continue
             if col not in df_all.columns:
@@ -443,7 +478,7 @@ class BasePipeline:
         return self._fuzzy_match_core(df, matcher)
 
     def _step_validate_fueltype(self, df: pd.DataFrame) -> pd.DataFrame:
-        """VALIDATION STEP --- Fuel-type validation for all matched units (from any source).
+        """VALIDATION STEP --- Fuel-type validation for all matched EGEs (from any source).
 
         Args:
             df (pd.DataFrame): The working dataframe.
@@ -451,22 +486,16 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): The updated working dataframe (with validated fuel type).
         """
+        if not self.sysop_fuel_col or self.sysop_fuel_col not in df.columns:
+            return df
+
+        fueltypes = self._matched_field(df, "fueltype")
+
         df["fuel_type_match"] = None
         df["fuel_type_match_level"] = None
-        matched_mask = (
-            df["ppdb.lat"].notna() | df["gem.lat"].notna() | df["osm.lat"].notna()
-        )
-        for idx, row in df[matched_mask].iterrows():
-            matched_fueltype = None
-            if pd.notna(row.get("ppdb.lat")):
-                matched_fueltype = row.get("ppdb.fueltype")
-            elif pd.notna(row.get("gem.lat")):
-                matched_fueltype = row.get("gem.fueltype")
-            elif pd.notna(row.get("osm.lat")):
-                matched_fueltype = row.get("osm.fueltype")
-
+        for idx in df.index[fueltypes.notna()]:
             level = classify_fueltype_match(
-                row.get(self.sysop_fuel_col), matched_fueltype
+                df.at[idx, self.sysop_fuel_col], fueltypes[idx]
             )
             df.at[idx, "fuel_type_match"] = level != "mismatch"
             df.at[idx, "fuel_type_match_level"] = level
@@ -475,7 +504,37 @@ class BasePipeline:
         if mismatches:
             logger.warning(
                 f"[{self.output_stem}] Fuel-type mismatch on {mismatches} matched "
-                f"unit(s) — verify these rows manually."
+                f"EGE(s) — verify these rows manually."
+            )
+        return df
+
+    def _step_validate_region(self, df: pd.DataFrame) -> pd.DataFrame:
+        """VALIDATION STEP --- Coordinate validation for all matched EGEs (from any source).
+
+        Args:
+            df (pd.DataFrame): The working dataframe.
+
+        Returns:
+            df (pd.DataFrame): The updated working dataframe (with validated coordinates).
+        """
+        if not self.sysop_region_col or self.sysop_region_col not in df.columns:
+            return df
+
+        lat, lon = self._matched_coords(df)  # reliability-ordered, incl. sibling
+        df["region_match"] = None
+        df["region_match_level"] = None
+        for idx in df.index[lat.notna()]:
+            level = classify_region_match(
+                self.country, df.at[idx, self.sysop_region_col], (lat[idx], lon[idx])
+            )
+            df.at[idx, "region_match"] = level != "mismatch"
+            df.at[idx, "region_match_level"] = level
+
+        mismatches = (df["region_match_level"] == "mismatch").sum()
+        if mismatches:
+            logger.warning(
+                f"[{self.output_stem}] Region mismatch on {mismatches} matched "
+                f"EGE(s) — verify these rows manually."
             )
         return df
 
@@ -604,12 +663,17 @@ class BasePipeline:
 
         # 2. Fuzzy matching candidate search
         for idx, row in df[self._still_unmatched(df)].iterrows():
-            sysop_fuel = row.get(self.sysop_fuel_col)
             sysop_name = strip_str(row.get(self.sysop_name_col))
+            sysop_fuel = row.get(self.sysop_fuel_col)
+            sysop_region = row.get(self.sysop_region_col)
             if sysop_name is None:
                 continue
 
-            result = matcher.match(target_name=sysop_name, target_fueltype=sysop_fuel)
+            result = matcher.match(
+                target_name=sysop_name,
+                target_fueltype=sysop_fuel,
+                target_region=sysop_region,
+            )
             fuzzy_results_list.extend(
                 result.to_dicts(target_idx=idx, target_fueltype=sysop_fuel)
             )

@@ -34,6 +34,7 @@ class OperatorInfo(TypedDict):
     fuel_col: NotRequired[str]
     fuel_subtype_col: NotRequired[str]  # extra fueltype information for refinement
     fuel_mapping: NotRequired[dict[str, str]]
+    region_col: NotRequired[str]  # region specs for verifying locations
     pipeline: NotRequired[str]
 
 
@@ -106,6 +107,7 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         fuel_col="nom_tipousina",
         fuel_subtype_col="nom_tipocombustivel",
         fuel_mapping=ONS_FUEL_MAPPINGS,
+        region_col="nom_estado",
         needs_coordinates=True,
         entity_str_style="real",
     ),

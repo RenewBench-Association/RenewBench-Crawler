@@ -106,8 +106,8 @@ class MatchCandidate:
     capacity: str | None
     status: str | None
     url: str | None
-    lat: float | None
-    lon: float | None
+    lat: float
+    lon: float
     country: str | None
     extras: dict = field(default_factory=dict, metadata={"internal": True})  # more data
 
@@ -163,10 +163,17 @@ class MatchCandidate:
         capacity = strip_str(row.get(loc.capacity_col))
         status = strip_str(row.get(loc.status_col))
         url = strip_str(row.get(loc.url_col))
-        lat = float(row[loc.lat_col])
-        lon = float(row[loc.lon_col])
         country = strip_str(row.get(loc.country_col))
         extras = {c: strip_str(row.get(c)) for c in loc.extra_cols}
+
+        try:
+            lat = float(row[loc.lat_col])
+            lon = float(row[loc.lon_col])
+        except (ValueError, TypeError):
+            logger.warning(
+                f"Skipping {loc.source}'s '{primary_name}' due to missing lat/lon values!"
+            )
+            return []
 
         candidates: list[MatchCandidate] = []
         for name in name_variants:
