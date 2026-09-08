@@ -138,6 +138,7 @@ class BasePipeline:
             )
             self.code_col = OPERATOR_METADATA[self.operator].get("code_col")
             self.fuel_col = OPERATOR_METADATA[self.operator].get("fuel_col")
+            self.fuel_sub_col = OPERATOR_METADATA[self.operator].get("fuel_subtype_col")
             self.fuel_mapping = OPERATOR_METADATA[self.operator].get("fuel_mapping", {})
 
             if self.name_col == "":
@@ -219,18 +220,23 @@ class BasePipeline:
     # ------------------------------------------------------------------
     @property
     def sysop_name_col(self) -> str:
-        """The name of the SysOp's entity column (e.g. 'Asset Name', 'Generator')."""
+        """Name of the SysOp's entity column (e.g. 'Asset Name', 'Generator')."""
         return f"sysop.{self.name_col}"
 
     @property
     def sysop_code_col(self) -> str | None:
-        """The name of the SysOp's code column, if existent (e.g. 'id_central')."""
+        """Name of the SysOp's code column, if existent (e.g. 'id_central')."""
         return f"sysop.{self.code_col}" if self.code_col else None
 
     @property
     def sysop_fuel_col(self) -> str | None:
-        """The name of the SysOp's fuel column, if existent (e.g. 'fuel_code')."""
+        """Name of the SysOp's fuel column, if existent (e.g. 'nom_tipousina')."""
         return f"sysop.{self.fuel_col}" if self.fuel_col else "sysop.fuel_type"
+
+    @property
+    def sysop_fuel_sub_col(self) -> str | None:
+        """Name of the SysOp's fuel subtype column, if existent ('nom_tipocombustivel')."""
+        return f"sysop.{self.fuel_sub_col}" if self.fuel_sub_col else None
 
     @staticmethod
     def _create_match_method_columns(df: pd.DataFrame) -> None:
@@ -307,7 +313,7 @@ class BasePipeline:
 
         # define relevant columns and ensure they actually exist in the operator data
         relevant_cols = []
-        for col in [self.name_col, self.code_col, self.fuel_col]:
+        for col in [self.name_col, self.code_col, self.fuel_col, self.fuel_sub_col]:
             if not col:
                 continue
             if col not in df_all.columns:
@@ -368,7 +374,27 @@ class BasePipeline:
                 lambda x: self.fuel_mapping.get(strip_str(x) or "")
             )
 
-        # 4. ensure the required columns for matching algorithms are created
+        # 4. refine the fuel type with the subtype data if it exists & they agree
+        if self.sysop_fuel_sub_col and self.sysop_fuel_sub_col in df.columns:
+            subtypes = df[self.sysop_fuel_sub_col].map(
+                lambda x: (
+                    self.fuel_mapping.get(strip_str(x) or "")
+                    if self.fuel_mapping
+                    else strip_str(x)
+                )
+            )
+            # check where the two fueltypes agree, use the second (detailed) in those cases
+            refine = pd.Series(
+                [
+                    classify_fueltype_match(primary, sub)
+                    in ("exact", "compatible", "family")
+                    for primary, sub in zip(df[self.sysop_fuel_col], subtypes)
+                ],
+                index=df.index,
+            )
+            df[self.sysop_fuel_col] = subtypes.where(refine, df[self.sysop_fuel_col])
+
+        # 5. ensure the required columns for matching algorithms are created
         self._create_match_method_columns(df)
         return df
 

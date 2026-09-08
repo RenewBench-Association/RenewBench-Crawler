@@ -32,6 +32,7 @@ class OperatorInfo(TypedDict):
     entity_mapping: NotRequired[dict[str, str] | dict[str, dict[str, str]]]
     code_col: NotRequired[str]
     fuel_col: NotRequired[str]
+    fuel_subtype_col: NotRequired[str]  # extra fueltype information for refinement
     fuel_mapping: NotRequired[dict[str, str]]
     pipeline: NotRequired[str]
 
@@ -103,6 +104,7 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         entity_mapping=ONS_NAME_TRANSLATIONS,
         code_col="id_ons",
         fuel_col="nom_tipousina",
+        fuel_subtype_col="nom_tipocombustivel",
         fuel_mapping=ONS_FUEL_MAPPINGS,
         needs_coordinates=True,
         entity_str_style="real",

@@ -100,9 +100,9 @@ class TestClassifyFueltypeMatch:
         [
             ("gas", "fossil gas: gas, fossil liquids: heavy fuel oil"),
             ("fossil gas", "natural gas"),
-            ("thermal (coal/gas/oil/waste/biomass)", "bioenergy (landfill gas)"),
-            ("thermal (coal/gas/oil/waste/biomass)", "bioenergy: agri waste (solids)"),
-            ("thermal (coal/gas/oil/waste/biomass)", "fossil fuel: diesel oil"),
+            ("bioenergy", "bioenergy (landfill gas)"),
+            ("industrial waste", "bioenergy: agri waste (solids)"),
+            ("diesel oil", "fossil fuel: diesel oil"),
         ],
         ids=["gas1", "gas2", "gas3", "waste", "oil"],
     )
@@ -123,7 +123,7 @@ class TestClassifyFueltypeMatch:
             ("peat", "bioenergy: wood & other biomass (solids), other: other"),
             ("peat", "oil"),
             ("peat", "fossil liquids: diesel"),
-            ("thermal (coal/gas/oil/waste/biomass)", "bioenergy: paper mill wastes"),
+            ("industrial waste", "bioenergy: paper mill wastes"),
         ],
         ids=["lignite", "solid_biomass", "wood", "oil", "diesel", "wastes"],
     )
@@ -132,8 +132,8 @@ class TestClassifyFueltypeMatch:
 
         No locators use "peat" at all -- Ireland's peat plants appear as diesel,
         fuel oil, lignite or biomass depending on the curator -- so a strict veto rejects
-        matches whose coordinates are correct. These seven pairs are the real ONS/ENTSO-E
-        rejections the family level was introduced for.
+        matches whose coordinates are correct. These are the real ONS/ENTSO-E rejections
+        the family level was introduced for.
 
         Args:
             sysop_type (str): Fuel type of the operator's EGE.
@@ -144,10 +144,9 @@ class TestClassifyFueltypeMatch:
     @pytest.mark.parametrize(
         "sysop_type, loc_type",
         [
-            ("thermal (coal/gas/oil/waste/biomass)", "solar"),
+            ("thermal", "solar"),
             ("hydroelectric", "solar"),
             ("wind", "solar"),
-            ("thermal (coal/gas/oil/waste/biomass)", "wind"),
             ("wind", "fossil gas: natural gas"),
             ("hydroelectric", "oil"),
             ("hydroelectric", "fossil"),

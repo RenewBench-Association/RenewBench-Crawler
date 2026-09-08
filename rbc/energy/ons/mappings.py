@@ -5,8 +5,9 @@
 # ---------------------------------------------------------------------------
 # ======= FUEL TYPES =======
 FUELTYPE_BASE_MAPPING = {
-    "TÉRMICA": "thermal (coal/gas/oil/waste/biomass)",
-    "termeletrica": "thermal (coal/gas/oil/waste/biomass)",
+    "TÉRMICA": "thermal",
+    "termeletrica": "thermal",
+    "Óleo": "oil",
     "Óleo Diesel": "diesel oil",
     "Óleo Combustível": "fuel oil",
     "Carvão": "coal",
@@ -47,7 +48,6 @@ for key, value in FUELTYPE_BASE_MAPPING.items():
 #      OSM's "Casa de Força da Pequena Central Hidrelétrica Colino Dois"
 EGE_NAME_BASE_TRANSLATIONS = {
     # overrides for multi-key fuel values
-    "Térmica": "thermal",
     "Diesel": "diesel oil",
     "Combustível": "fuel oil",
     "Industrial": "industrial",
