@@ -14,12 +14,12 @@ from shapely.prepared import PreparedGeometry, prep
 
 from rbc.coordinates.utils.values import normalize_name, strip_str
 
-# Natural Earth admin-1 (states/provinces): public domain, ~4600 units worldwide.
+# Natural Earth admin-1 (states/provinces): public domain, ~4600 regions worldwide.
 NE_ADMIN1_URL = (
     "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_1_states_provinces.zip"
 )
-# Tolerance for boundary imprecision
-BUFFER_KM = 15.0
+# Tolerance for boundary imprecision (e.g. offshore wind, hydro plants on border rivers)
+BUFFER_KM = 20.0
 
 
 def classify_region_match(
@@ -60,7 +60,7 @@ def classify_region_match(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=40)  # maxsize depends on num of sysop countries (ENTSOe = 38 atm)
 def _region_index(country: str) -> dict[str, tuple[PreparedGeometry, PreparedGeometry]]:
     """Map normalized region names of a country to their (exact, buffered) polygons.
 
@@ -74,7 +74,7 @@ def _region_index(country: str) -> dict[str, tuple[PreparedGeometry, PreparedGeo
         dict[str, tuple[PreparedGeometry, PreparedGeometry]]: A dictionary mapping the
             region name to its geometry (exact, buffered).
     """
-    gdf = gpd.read_file(NE_ADMIN1_URL)
+    gdf = _get_ne_admin1()
 
     # 1. filter to the country ("Amazonas" exists in BR, CO, PE and VE)
     gdf = gdf[gdf["admin"].map(normalize_name) == normalize_name(country)]
@@ -101,3 +101,13 @@ def _region_index(country: str) -> dict[str, tuple[PreparedGeometry, PreparedGeo
                 if name := normalize_name(alt):
                     index.setdefault(name, polys)
     return index
+
+
+@lru_cache(maxsize=1)
+def _get_ne_admin1() -> gpd.GeoDataFrame:
+    """Get the Natural Earth Admin 1 level dataframe once and store to cache.
+
+    Returns:
+        gpd.GeoDataFrame: The NE admin 1 geodataframe.
+    """
+    return gpd.read_file(NE_ADMIN1_URL)
