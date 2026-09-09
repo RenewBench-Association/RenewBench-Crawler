@@ -19,6 +19,7 @@ import pandas as pd
 
 from rbc.config.loader import load_config
 from rbc.coordinates.mappings import OPERATOR_METADATA
+from rbc.coordinates.utils.values import strip_str
 
 UNMATCHED = "unmatched"
 
@@ -353,11 +354,10 @@ def _matched_candidate(row: pd.Series, match_source: str) -> dict[str, object]:
     locator = match_source.split("_")[0]  # gem_fuzzy -> gem, gem_sibling -> gem
     get = lambda field: row.get(f"{locator}.{field}")  # noqa: E731
 
-    # the sibling step inherits coordinates, recording its donor in match_source instead
+    # the sibling step inherits coordinates, recording its donor in "sibling_of" instead
     name = get("name")
     if "_sibling" in match_source:
-        raw = str(row.get("sibling.match_source") or "")
-        name = raw.split("_sibling_of:")[-1] or None
+        name = strip_str(row.get("sibling_of"))
 
     return {
         "name": name,

@@ -210,16 +210,37 @@ class TestDefaultPipelineHelpers:
                 "sysop.respondent-name": ["Matched Unit", "Needs Sibling Unit"],
                 "ppdb.lat": [40.0, None],
                 "ppdb.lon": [-90.0, None],
+                "ppdb.match_source": ["ppdb_fuzzy", None],
+                "ppdb.name": ["Donor Power Station", None],
+                "ppdb.source_id": ["ppdb-1", None],
+                "ppdb.fueltype": ["hydro", None],
+                "ppdb.geometry": ["POINT (-90 40)", None],  # a per-locator extra column
+                "ppdb.match_score": [98.5, None],
                 "gem.lat": [None, None],
                 "gem.lon": [None, None],
+                "gem.match_source": [None, None],
                 "osm.lat": [None, None],
                 "osm.lon": [None, None],
-                "sibling.lat": [None, None],
-                "sibling.lon": [None, None],
+                "osm.match_source": [None, None],
             }
         )
         plant_group_key = pd.Series(["group:x", "group:x"])
         result = eia_pipeline._sibling_fallback_core(df, plant_group_key)
-        assert result.loc[1, "sibling.lat"] == 40.0
-        assert result.loc[1, "sibling.lon"] == -90.0
-        assert pd.isna(result.loc[0, "sibling.lat"])  # already matched, sibling unreq
+
+        # sibling inherits all donor's into correct locator's columns (except score)
+        assert result.loc[1, "ppdb.lat"] == 40.0
+        assert result.loc[1, "ppdb.lon"] == -90.0
+        assert result.loc[1, "ppdb.name"] == "Donor Power Station"
+        assert result.loc[1, "ppdb.source_id"] == "ppdb-1"
+        assert result.loc[1, "ppdb.fueltype"] == "hydro"  # so it can be fuel-validated
+        assert result.loc[1, "ppdb.geometry"] == "POINT (-90 40)"  # extras come too
+        assert pd.isna(result.loc[1, "ppdb.match_score"])
+
+        # inheritance is marked and donor is recorded
+        assert result.loc[1, "ppdb.match_source"] == "ppdb_sibling"
+        assert result.loc[1, "sibling_of"] == "Matched Unit"
+
+        # donor stays as is
+        assert result.loc[0, "ppdb.match_source"] == "ppdb_fuzzy"
+        assert result.loc[0, "ppdb.match_score"] == 98.5
+        assert pd.isna(result.loc[0, "sibling_of"])

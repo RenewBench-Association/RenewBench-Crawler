@@ -34,7 +34,6 @@ class EntsoePipeline(BasePipeline):
         "_step_entsoe_resolve_parent_unit",
         "_step_entsoe_match_by_parent_id",
         "_step_fuzzy_match",
-        "_step_validate_fueltype",
         "_step_sibling_fallback_eic",
     ]
 

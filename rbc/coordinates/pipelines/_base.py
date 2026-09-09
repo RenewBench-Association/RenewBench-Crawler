@@ -41,7 +41,6 @@ DATE_PATTERN = DownloadTask._DATE_PATTERN  # data file stems ("2020-01-05")
 SORTED_LOCATORS = sorted(
     LOCATOR_RELIABILITY, key=lambda loc: LOCATOR_RELIABILITY[loc], reverse=True
 )
-SORTED_MATCH_SOURCES = SORTED_LOCATORS + ["sibling"]
 
 
 class BasePipeline:
@@ -98,10 +97,12 @@ class BasePipeline:
                 "BasePipeline must be subclassed, not instantiated directly!"
             )
 
+        # validation runs after every matching step, so it also covers inherited matches
         self.ALL_STEPS: list[str] = [
             "_step_load_and_dedupe",
             "_step_prepare_matching",
             *self.STEPS,
+            "_step_validate_fueltype",
             "_step_validate_region",
             "_step_finalize",
         ]
@@ -256,49 +257,36 @@ class BasePipeline:
         Args:
             df (pd.DataFrame): The working dataframe of SysOp (target EGE) data.
         """
-        for ms in SORTED_MATCH_SOURCES:  # currently: "gem", "ppdb", "osm", "sibling"
-            for col in [f"{ms}.lat", f"{ms}.lon", f"{ms}.match_source"]:
+        for loc in SORTED_LOCATORS:  # currently: "gem", "ppdb", "osm"
+            for col in [f"{loc}.lat", f"{loc}.lon", f"{loc}.match_source"]:
                 if col not in df.columns:
                     df[col] = None
 
+        if "sibling_of" not in df.columns:  # for inheritance info in sibling fallback
+            df["sibling_of"] = None
+
     @staticmethod
-    def _matched_coords(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-        """Best lat/lon coords from all algorithms so far (e.g. exact-ID, fuzzy, sibling).
+    def _matched_column(df: pd.DataFrame, column: str) -> pd.Series:
+        """Best column value from the most reliable locator that actually matched each row.
+
+        Only "<loc>.lat"/"<loc>.lon"/"<loc>.match_source" are guaranteed to exist, so other
+        columns are skipped if a <loc> never created it. ``column`` values are masked using
+        <loc> coords ("<loc>.lat" != None), so only rows with an actual match return values.
 
         Args:
             df (pd.DataFrame): The working dataFrame of SysOp (target EGE) data.
+            column (str): The column to find values for (e.g. 'lat', 'lon', 'fueltype', ...).
 
         Returns:
-            tuple[pd.Series, pd.Series]: Best-so-far lat and lon coordinates.
-        """
-        lat = reduce(
-            lambda a, b: a.combine_first(b),
-            (df[f"{s}.lat"] for s in SORTED_MATCH_SOURCES),
-        )
-        lon = reduce(
-            lambda a, b: a.combine_first(b),
-            (df[f"{s}.lon"] for s in SORTED_MATCH_SOURCES),
-        )
-        return lat, lon
-
-    @staticmethod
-    def _matched_field(df: pd.DataFrame, field: str) -> pd.Series:
-        """Best `field` value from the most reliable locator that actually matched each row.
-
-        Args:
-            df (pd.DataFrame): The working dataFrame of SysOp (target EGE) data.
-            field (str): The target field to check for matches (e.g. 'sysop.fuel').
-
-        Returns:
-            pd.Series: Best-so-far ``field`` matches.
+            pd.Series: Best-so-far matches for the specific column.
         """
         return reduce(
             lambda a, b: a.combine_first(b),
             (
-                df[f"{loc}.{field}"].where(df[f"{loc}.lat"].notna())
-                if f"{loc}.{field}" in df.columns
-                else pd.Series(pd.NA, index=df.index, dtype=object)  # empty series
-                for loc in SORTED_LOCATORS
+                df[f"{loc}.{column}"].where(df[f"{loc}.lat"].notna())
+                if f"{loc}.{column}" in df.columns
+                else pd.Series(pd.NA, index=df.index, dtype=object)  # empty fallback
+                for loc in SORTED_LOCATORS  # sorted by reliability
             ),
         )
 
@@ -312,7 +300,7 @@ class BasePipeline:
         Returns:
             pd.Series: List of bool values, True if a target EGE is still unmatched else False.
         """
-        return cls._matched_coords(df)[0].isna()
+        return cls._matched_column(df, column="lat").isna()
 
     # ------------------------------------------------------------------
     # SHARED STEP METHODS (run by every pipeline)
@@ -489,7 +477,7 @@ class BasePipeline:
         if not self.sysop_fuel_col or self.sysop_fuel_col not in df.columns:
             return df
 
-        fueltypes = self._matched_field(df, "fueltype")
+        fueltypes = self._matched_column(df, column="fueltype")
 
         df["fuel_type_match"] = None
         df["fuel_type_match_level"] = None
@@ -520,12 +508,12 @@ class BasePipeline:
         if not self.sysop_region_col or self.sysop_region_col not in df.columns:
             return df
 
-        lat, lon = self._matched_coords(df)  # reliability-ordered, incl. sibling
+        lats, lons = (self._matched_column(df, "lat"), self._matched_column(df, "lon"))
         df["region_match"] = None
         df["region_match_level"] = None
-        for idx in df.index[lat.notna()]:
+        for idx in df.index[lats.notna()]:
             level = classify_region_match(
-                self.country, df.at[idx, self.sysop_region_col], (lat[idx], lon[idx])
+                self.country, df.at[idx, self.sysop_region_col], (lats[idx], lons[idx])
             )
             df.at[idx, "region_match"] = level != "mismatch"
             df.at[idx, "region_match_level"] = level
@@ -541,30 +529,40 @@ class BasePipeline:
     def _step_finalize(self, df: pd.DataFrame) -> pd.DataFrame:
         """LAST STEP --- Finalize lat/lon, match_source, and write the output CSV.
 
+        Create and populate final ``lat``, ``lon`` and ``match_source`` columns with results.
+        If a validation step rejected a match, its values are excluded from these columns.
+        The locator's own "<loc>.*" columns are left intact, so the process / rejected
+        candidates stay visible for review together with the "*_match_level" details.
+
         Args:
             df (pd.DataFrame): SysOp df with matched coordinates.
 
         Returns:
             df (pd.DataFrame): Enriched SysOp df with matched coordinates.
         """
-        df["lat"], df["lon"] = self._matched_coords(df)
+        # 1. Determine which matches were vetoed by the validation step(s)
+        vetoed = pd.Series(False, index=df.index)
+        for col in ("fuel_type_match", "region_match"):
+            if col in df.columns:
+                vetoed |= df[col].eq(False)  # veto=True if already True or col=False
 
-        # get sibling from its match_source's "<loc>_sibling_of:<donor>" as "<loc>_sibling"
-        sibling_source = df["sibling.match_source"].str.split("_of:").str[0]
-        derived_source = sibling_source.fillna("unmatched")
+        # 2. Add lat/lon columns to df and populate with matches (excluding vetoed ones)
+        for col in ("lat", "lon"):
+            df[col] = self._matched_column(df, column=col).mask(vetoed)
 
+        # 3. Define the 'match_source' value for all matches (excluding vetoed ones)
         df["match_source"] = (
-            df["ppdb.match_source"]
-            .combine_first(df["gem.match_source"])
-            .combine_first(df["osm.match_source"])
-            .combine_first(derived_source)
+            self._matched_column(df, "match_source")
+            .fillna("unmatched")
+            .mask(vetoed, "unmatched")
         )
 
-        sources = df.loc[df["lat"].notna(), "match_source"].value_counts().to_dict()
+        # 4. Log a detailed overview of how many matches were achieved by what methods
+        matches = df.loc[df["lat"].notna(), "match_source"].value_counts().to_dict()
         self._log_step_result(
             "--- TOTAL ---",
             matched=int(df["lat"].notna().sum()),
-            note="\n" + "\n".join(f"    {k}:\t{v}" for k, v in sources.items()),
+            note="\n" + "\n".join(f"    {k}:\t{v}" for k, v in matches.items()),
         )
 
         if self.output_dir:
@@ -721,6 +719,11 @@ class BasePipeline:
         by any of the previous steps. Rather than re-guessing a name for OSM/ppdb/GEM
         matching, simply inherit that sibling's coordinates.
 
+        Inherited values are written into the DONOR's locator columns (marked by a
+        "<loc>_sibling" match source), so a sibling match is shaped like any other match
+        and every later check applies to it without a special case. The donor's own name
+        is recorded separately in "sibling_of" for auditing.
+
         Args:
             df (pd.DataFrame): The working dataframe.
             plant_group_keys (pd.Series): The previously-derived plant group keys.
@@ -729,51 +732,55 @@ class BasePipeline:
             df (pd.DataFrame): The updated working dataframe (now with sibling matches).
 
         Raises:
-            RuntimeError: If "sibling"-related columns have been populated before this step.
+            RuntimeError: If sibling matches have been recorded before this step.
         """
-        if df["sibling.lat"].notna().any():
+        if any(
+            df[f"{loc}.match_source"]
+            .astype("string")
+            .str.endswith("_sibling", na=False)
+            .any()
+            for loc in SORTED_LOCATORS
+        ):
             raise RuntimeError(
-                "Sibling matching has not yet occurred, but columns like 'sibling.lat' are "
-                "already populated with apparent matches. Something has gone wrong!"
+                "Sibling matching has not yet occurred, but a '<loc>_sibling' match source "
+                "is already recorded. Something has gone wrong!"
             )
 
+        # 1. Helpers for getting sibling information
         has_group = plant_group_keys.map(
             lambda k: isinstance(k, str) and bool(k.strip())
         )
+        already_matched = self._matched_column(df, "lat").notna()
 
-        matched_lat, matched_lon = self._matched_coords(df)
-        already_matched = matched_lat.notna()
-
-        # define which locator each donor's coordinates came from
+        # 2. Define a lookup with all donor info (name, locator, fueltype, ...) by '_key'
         donor_locator = pd.Series(None, index=df.index, dtype=object)
-        for locator in reversed(SORTED_LOCATORS):  # most reliable takes precedence
-            donor_locator = donor_locator.mask(df[f"{locator}.lat"].notna(), locator)
+        for loc in reversed(SORTED_LOCATORS):  # most reliable takes precedence
+            donor_locator = donor_locator.mask(df[f"{loc}.lat"].notna(), loc)
 
-        sibling_lookup = (
-            pd.DataFrame(
-                {
-                    "_key": plant_group_keys[already_matched & has_group],
-                    "_lat": matched_lat[already_matched & has_group],
-                    "_lon": matched_lon[already_matched & has_group],
-                    "_name": df.loc[already_matched & has_group, self.sysop_name_col],
-                    "_locator": donor_locator[already_matched & has_group],
-                }
-            )
+        donors = already_matched & has_group
+        donor_lookup = (
+            pd.DataFrame({"_key": plant_group_keys[donors], "_idx": df.index[donors]})
             .dropna(subset=["_key"])
             .drop_duplicates(subset=["_key"])
-            .set_index("_key")
+            .set_index("_key")["_idx"]
         )
 
+        # 3. Search for sibling matches for the still unmatched EGEs
         needs_sibling = ~already_matched & has_group
         for idx in df.index[needs_sibling]:
             key = plant_group_keys.at[idx]
-            if key in sibling_lookup.index:
-                sib = sibling_lookup.loc[key]
-                df.at[idx, "sibling.lat"] = sib["_lat"]
-                df.at[idx, "sibling.lon"] = sib["_lon"]
-                df.at[idx, "sibling.match_source"] = (
-                    f"{sib['_locator']}_sibling_of:{sib['_name']}"
-                )
+            if key not in donor_lookup.index:
+                continue
+
+            # inherit all the donor's attributes (except the score its own name earned)
+            donor = donor_lookup.at[key]
+            loc = donor_locator.at[donor]
+            for col in df.columns:
+                if col.startswith(f"{loc}.") and col != f"{loc}.match_score":
+                    df.at[idx, col] = df.at[donor, col]
+
+            df.at[idx, f"{loc}.match_source"] = f"{loc}_sibling"
+            df.at[idx, "sibling_of"] = df.at[donor, self.sysop_name_col]
 
         self._log_step_result("Matched by sibling group", df=df)
         return df
@@ -812,15 +819,15 @@ class BasePipeline:
         # Option 1. Derive params (matched = # matches, delta = # new, counts = # per loc)
         delta, counts = None, None
         if df is not None and matched is None:
-            matched = int(self._matched_coords(df)[0].notna().sum())
+            matched = int(self._matched_column(df, "lat").notna().sum())
             delta = matched - self._matched_so_far
             self._matched_so_far = matched
 
-            ms_counts: dict[str, int] = {
-                ms: int(df.get(f"{ms}.lat", pd.Series(dtype=float)).notna().sum())
-                for ms in SORTED_MATCH_SOURCES
+            loc_counts: dict[str, int] = {
+                loc: int(df.get(f"{loc}.lat", pd.Series(dtype=float)).notna().sum())
+                for loc in SORTED_LOCATORS
             }
-            counts = ", ".join(f"{k} {v}" for k, v in ms_counts.items() if v)
+            counts = ", ".join(f"{k} {v}" for k, v in loc_counts.items() if v)
 
         # Option 2. Params provided directly, nothing to derive
         elif df is None and matched is not None:

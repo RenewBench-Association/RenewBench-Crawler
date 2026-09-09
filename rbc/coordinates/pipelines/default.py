@@ -15,7 +15,6 @@ class DefaultPipeline(BasePipeline):
 
     STEPS: list[str] = [
         "_step_fuzzy_match",
-        "_step_validate_fueltype",
         "_step_sibling_fallback_name",
     ]
 
@@ -63,6 +62,12 @@ class DefaultPipeline(BasePipeline):
     # ------------------------------------------------------------------
     def _step_sibling_fallback_name(self, df: pd.DataFrame) -> pd.DataFrame:
         """FALLBACK STEP --- Use name matching of siblings as fallback option.
+
+        NOTE: THIS IS OBSOLETE IN ITS CURRENT FORM BECAUSE FUZZY NAME MATCHING HAS IMPROVED!
+        The plant_group_key is derived from exact "discriminator" matches. If a match was
+        found for one EGE via fuzzy name matching, then a sibling (one with the exact same
+        "discriminator" tokens) will have 100% been matched in name matching before...
+        So this does nothing at the moment...
 
         Args:
             df (pd.DataFrame): The working dataframe.
