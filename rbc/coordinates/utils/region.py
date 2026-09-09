@@ -12,7 +12,7 @@ from loguru import logger
 from shapely.geometry import Point
 from shapely.prepared import PreparedGeometry, prep
 
-from rbc.coordinates.utils.values import normalize_name
+from rbc.coordinates.utils.values import normalize_name, strip_str
 
 # Natural Earth admin-1 (states/provinces): public domain, ~4600 units worldwide.
 NE_ADMIN1_URL = (
@@ -97,7 +97,7 @@ def _region_index(country: str) -> dict[str, tuple[PreparedGeometry, PreparedGeo
         polys = (prep(row["geometry"]), prep(row["buffered"]))
 
         for col in ("name", "name_en", "name_alt"):  # "name_alt" vals are "|"-separated
-            for alt in str(row.get(col) or "").split("|"):
+            for alt in (strip_str(row.get(col)) or "").split("|"):
                 if name := normalize_name(alt):
                     index.setdefault(name, polys)
     return index

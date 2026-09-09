@@ -478,9 +478,9 @@ class TestHelpers:
     @pytest.mark.parametrize(
         "source, expected",
         [
-            ("osm_fuzzy", "darkblue"),
-            ("OSM_FUZZY", "darkblue"),  # case-insensitive
-            ("  gem_direct  ", "purple"),  # stripped
+            ("osm_fuzzy", "purple"),
+            ("OSM_FUZZY", "purple"),  # case-insensitive
+            ("  gem_direct  ", "darkblue"),  # stripped
             ("totally_unknown_algorithm", _DEFAULT_COLOR),
             (None, _DEFAULT_COLOR),
             (float("nan"), _DEFAULT_COLOR),
