@@ -115,7 +115,7 @@ def query_osm_country_plants(
                 f"retrying via OSM relation {rel_id}."
             )
             area_clause = _id_area(relation_id=rel_id)
-            data = post_overpass(query=_build_query(area_clause), label=country_code)
+            data = post_overpass(query=_build_query(area_clause), label=str(rel_id))
         else:
             logger.error(
                 f"ISO3166-1 lookup returned 0 elements for '{country_code}' and "
@@ -187,6 +187,16 @@ def post_overpass(query: str, label: str) -> dict | None:
             data = response.json()
 
             n_elements = len(data.get("elements", []))
+            remark = str(data.get("remark", ""))
+
+            # some server issues: code=200 + n_elements=0 + remark="runtime error..." → catch!
+            if "error" in remark.lower():
+                logger.warning(
+                    f"Overpass endpoint '{endpoint}' returned {n_elements} elements and "
+                    f"failed for '{label}': {remark}"
+                )
+                continue  # try the next endpoint
+
             logger.info(
                 f"Overpass endpoint '{endpoint}' returned {n_elements} elements "
                 f"for '{label}'."
