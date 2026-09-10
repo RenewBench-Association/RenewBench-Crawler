@@ -101,7 +101,7 @@ class MatchCandidate:
     norm_name: str = field(metadata={"internal": True})  # tok str of THIS variant
     wt_string: str = field(metadata={"internal": True})  # WeightedTokens str of THIS
     source: str = field(metadata={"internal": True})  # 'ppdb' (= ppm/osmpp)/'gem'/'osm'
-    source_id: str
+    id: str  # the EGE's id in its own locator (e.g. GEM unit id, OSM id)
     fueltype: str | None
     capacity: str | None
     status: str | None
@@ -118,7 +118,7 @@ class MatchCandidate:
         Returns:
             tuple[str, str]: Identity key for the physical EGE.
         """
-        return self.source, self.source_id
+        return self.source, self.id
 
     @classmethod
     def from_row(
@@ -142,8 +142,8 @@ class MatchCandidate:
         if primary_name is None:
             return []
 
-        source_id = strip_str(row.get(loc.id_col))
-        if source_id is None:
+        loc_id = strip_str(row.get(loc.id_col))
+        if loc_id is None:
             logger.warning(
                 f"Skipping {loc.source} row with missing {loc.id_col} for "
                 f"{primary_name}"
@@ -186,7 +186,7 @@ class MatchCandidate:
                     wt_string=wt_name,
                     primary_name=primary_name,
                     source=source,
-                    source_id=source_id,
+                    id=loc_id,
                     fueltype=fueltype,
                     capacity=capacity,
                     status=status,
@@ -241,7 +241,7 @@ class MatchCandidate:
                 )
 
         extras = {
-            f"{self.source}.{key.removeprefix('OSM_')}": val
+            f"{self.source}.{key.removeprefix('OSM_').lower()}": val
             for key, val in self.extras.items()
             if val is not None
         }
@@ -286,11 +286,15 @@ class MatchResult:
         if self.top_matches:
             for cand, score in self.top_matches:
                 locator = cand.source
+                # extras (e.g. OSM geometry blobs) and country are noise for review
+                extras = {
+                    f"{locator}.{k.removeprefix('OSM_').lower()}" for k in cand.extras
+                }
                 cand_dict = {
                     "candidate." + k.split(f"{locator}.")[-1]: v
                     for k, v in cand.to_dict().items()
                     if k.startswith(f"{locator}.")
-                    and not any(map(str.isupper, k))
+                    and k not in extras
                     and not k.endswith(".country")
                 }
                 list_of_dicts.append(

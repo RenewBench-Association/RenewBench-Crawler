@@ -192,7 +192,7 @@ class TestAdapters:
         c = candidates[0]
         assert c.name == "Auvere Power Plant"
         assert c.source == "ppdb"
-        assert c.source_id == "ppdb-ppm-1"
+        assert c.id == "ppdb-ppm-1"
         assert c.country == "Estonia"
 
     def test_ppdb_adapter_filter_target_country(self, ppdb_df: pd.DataFrame) -> None:
@@ -211,7 +211,7 @@ class TestAdapters:
         candidates = m._build_candidates(PPDB_ADAPTER)
 
         assert len(candidates) == 1
-        assert candidates[0].source_id == "ppdb-ppm-2"
+        assert candidates[0].id == "ppdb-ppm-2"
         assert candidates[0].country == "Germany"
 
     def test_osm_adapter(self, matcher: NameMatcher) -> None:
@@ -224,7 +224,7 @@ class TestAdapters:
         assert len(candidates) == 1
         c = candidates[0]
         assert c.source == "osm"
-        assert c.source_id == "osm-1"
+        assert c.id == "osm-1"
         assert c.country is None
 
 
@@ -244,8 +244,8 @@ class TestMatchCandidateConstruction:
         row["plant_name"] = None
         assert MatchCandidate.from_row(row, loc=GEM_ADAPTER) == []
 
-    def test_from_row_missing_source_id_skipped(self, gem_df: pd.DataFrame) -> None:
-        """Failure path: from_row skips and warns for a row whose source_id is missing.
+    def test_from_row_missing_id_skipped(self, gem_df: pd.DataFrame) -> None:
+        """Failure path: from_row skips and warns for a row whose locator id is missing.
 
         Args:
             gem_df (pd.DataFrame): Synthetic GEM rows (here using first row = Estonia).
@@ -274,7 +274,7 @@ class TestMatchCandidateConstruction:
         assert candidate is not None
         assert candidate.name == "Auvere"
         assert candidate.primary_name == "Auvere"
-        assert candidate.source_id == "gem-1"
+        assert candidate.id == "gem-1"
 
     def test_primary_from_row_no_name_returns_none(self, gem_df: pd.DataFrame) -> None:
         """Failure path: primary_from_row returns None when the row has no name.
@@ -332,10 +332,10 @@ class TestNameMatcherTargetVariants:
 
         assert result.matched
         assert result.candidate is not None
-        assert result.candidate.source_id == "gem-maua-6"
+        assert result.candidate.id == "gem-maua-6"
 
         # the wrong unit is still a candidate, just a strictly worse-scoring one
-        scores = {cand.source_id: score for cand, score in result.top_matches}
+        scores = {cand.id: score for cand, score in result.top_matches}
         assert scores["gem-maua-6"] > scores["gem-maua-3"]
 
     def test_match_check_all_candidates(self, gem_df: pd.DataFrame) -> None:

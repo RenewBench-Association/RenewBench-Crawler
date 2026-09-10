@@ -60,9 +60,6 @@ def perform_coordinate_finding(
     dataframes: list[pd.DataFrame] = []
     labels: list[str] = []
 
-    name_col: str | None = None
-    fuel_col: str | None = None
-
     for csv_dir in csv_dirs:
         try:
             cl = make_pipeline(
@@ -84,22 +81,13 @@ def perform_coordinate_finding(
                 label = "_".join(csv_dir.parts[csv_dir.parts.index(source) :])
                 labels.append(label)
 
-                name_col = cl.sysop_name_col if name_col is None else name_col
-                fuel_col = cl.sysop_fuel_col if fuel_col is None else fuel_col
-
         except Exception as e:
             logger.exception(
                 f"Error occurred while analysing {csv_dir}: {e}. Skipping..."
             )
 
     if dataframes:
-        build_map(
-            dataframes,
-            labels=labels,
-            name_col=name_col,
-            fuel_col=fuel_col,
-            output_dir=output_dir,
-        )
+        build_map(dataframes, labels=labels, output_dir=output_dir)
     else:
         logger.warning("No results found for the given input paths.")
 

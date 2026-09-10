@@ -124,11 +124,11 @@ class TestDefaultPipelineRunPipeline:
         """
         df = eia_pipeline.run_pipeline()
         assert len(df) == 2
-        for col in ("lat", "lon", "match_source"):
+        for col in ("lat", "lon", "match_method"):
             assert col in df.columns
 
         # no row should be attributed to a ppdb.* source.
-        assert not df["match_source"].astype(str).str.startswith("ppdb").any()
+        assert not df["match_method"].astype(str).str.startswith("ppdb").any()
 
 
 class TestDefaultPipelineSteps:
@@ -173,7 +173,7 @@ class TestDefaultPipelineHelpers:
         """
         df = pd.DataFrame(
             {
-                "sysop.respondent-name": [
+                "sysop.name": [
                     "Riverside Plant Unit 1",
                     "Riverside Plant Unit 2",
                     "Downtown Station",
@@ -195,7 +195,7 @@ class TestDefaultPipelineHelpers:
             eia_pipeline (DefaultPipeline): Default pipeline class instance for "eia".
             name (str): A name without any discriminative tokens in it.
         """
-        df = pd.DataFrame({"sysop.respondent-name": [name]})
+        df = pd.DataFrame({"sysop.name": [name]})
         keys = eia_pipeline._derive_plant_group_key_name(df)
         assert keys.iloc[0] is None
 
@@ -207,21 +207,21 @@ class TestDefaultPipelineHelpers:
         """
         df = pd.DataFrame(
             {
-                "sysop.respondent-name": ["Matched Unit", "Needs Sibling Unit"],
+                "sysop.name": ["Matched Unit", "Needs Sibling Unit"],
                 "ppdb.lat": [40.0, None],
                 "ppdb.lon": [-90.0, None],
-                "ppdb.match_source": ["ppdb_fuzzy", None],
+                "ppdb.match_method": ["ppdb_fuzzy", None],
                 "ppdb.name": ["Donor Power Station", None],
-                "ppdb.source_id": ["ppdb-1", None],
+                "ppdb.id": ["ppdb-1", None],
                 "ppdb.fueltype": ["hydro", None],
                 "ppdb.geometry": ["POINT (-90 40)", None],  # a per-locator extra column
                 "ppdb.match_score": [98.5, None],
                 "gem.lat": [None, None],
                 "gem.lon": [None, None],
-                "gem.match_source": [None, None],
+                "gem.match_method": [None, None],
                 "osm.lat": [None, None],
                 "osm.lon": [None, None],
-                "osm.match_source": [None, None],
+                "osm.match_method": [None, None],
             }
         )
         plant_group_key = pd.Series(["group:x", "group:x"])
@@ -231,16 +231,16 @@ class TestDefaultPipelineHelpers:
         assert result.loc[1, "ppdb.lat"] == 40.0
         assert result.loc[1, "ppdb.lon"] == -90.0
         assert result.loc[1, "ppdb.name"] == "Donor Power Station"
-        assert result.loc[1, "ppdb.source_id"] == "ppdb-1"
+        assert result.loc[1, "ppdb.id"] == "ppdb-1"
         assert result.loc[1, "ppdb.fueltype"] == "hydro"  # so it can be fuel-validated
         assert result.loc[1, "ppdb.geometry"] == "POINT (-90 40)"  # extras come too
         assert pd.isna(result.loc[1, "ppdb.match_score"])
 
         # inheritance is marked and donor is recorded
-        assert result.loc[1, "ppdb.match_source"] == "ppdb_sibling"
+        assert result.loc[1, "ppdb.match_method"] == "ppdb_sibling"
         assert result.loc[1, "sibling_of"] == "Matched Unit"
 
         # donor stays as is
-        assert result.loc[0, "ppdb.match_source"] == "ppdb_fuzzy"
+        assert result.loc[0, "ppdb.match_method"] == "ppdb_fuzzy"
         assert result.loc[0, "ppdb.match_score"] == 98.5
         assert pd.isna(result.loc[0, "sibling_of"])

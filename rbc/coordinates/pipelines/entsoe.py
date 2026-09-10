@@ -9,6 +9,7 @@ import rbc.coordinates.locators.eic_registry as eic
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
+from rbc.coordinates.mappings import SYSOP_CODE_COL, SYSOP_NAME_COL
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.values import normalize_name, strip_str
@@ -103,7 +104,7 @@ class EntsoePipeline(BasePipeline):
             df[f"{WCODE_PREFIX}.{col}"] = None
 
         for idx, row in df.iterrows():
-            eic = strip_str(row.get(self.sysop_code_col))
+            eic = strip_str(row.get(SYSOP_CODE_COL))
             if eic is None:
                 continue
             full_row = self.eic_reg.lookup_full_row(eic)
@@ -127,39 +128,32 @@ class EntsoePipeline(BasePipeline):
         assert self.ppdb_loc is not None
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
-            eic = strip_str(row.get(self.sysop_code_col))
+            eic = strip_str(row.get(SYSOP_CODE_COL))
             parent_eic = strip_str(row.get(WCODE_PARENT))
-            candidate, source = None, None
+            candidate, method = None, None
 
             # 1. GEM: try the unit (generation) EIC directly
             if self.gem_loc and eic:
                 candidate = self.gem_loc.match_by_entsoe_id(eic)
-                source = "gem_direct"
+                method = "gem_direct"
 
             # 2. GEM: try the parent (production) EIC from wcode.EicParent
             if candidate is None and self.gem_loc and parent_eic:
                 candidate = self.gem_loc.match_by_entsoe_id(parent_eic)
-                source = "gem_parent_direct"
+                method = "gem_parent_direct"
 
             # 3. ppdb (PPM) fallback: unit EIC directly
             if candidate is None and eic:
                 candidate = self.ppdb_loc.match_by_entsoe_id(eic)
-                source = "ppdb_direct"
+                method = "ppdb_direct"
 
             # 4. ppdb (PPM) fallback: parent EIC from wcode.EicParent
             if candidate is None and parent_eic:
                 candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
-                source = "ppdb_parent_direct"
+                method = "ppdb_parent_direct"
 
-            if candidate is not None and source is not None:
-                if source.startswith("gem"):
-                    self._write_candidate_into_df(
-                        df, idx, candidate, match_source=source
-                    )
-                else:
-                    self._write_candidate_into_df(
-                        df, idx, candidate, match_source=source
-                    )
+            if candidate is not None and method is not None:
+                self._write_candidate_into_df(df, idx, candidate, match_method=method)
 
         self._log_step_result("Matched directly by EIC IDs", df=df)
         return df
@@ -224,13 +218,13 @@ class EntsoePipeline(BasePipeline):
             )
             if candidate is not None:
                 self._write_candidate_into_df(
-                    df, idx, candidate, match_source="gem_parent_entsoe_id"
+                    df, idx, candidate, match_method="gem_parent_entsoe_id"
                 )
             else:
                 candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
                 if candidate is not None:
                     self._write_candidate_into_df(
-                        df, idx, candidate, match_source="ppdb_parent_entsoe_id"
+                        df, idx, candidate, match_method="ppdb_parent_entsoe_id"
                     )
 
         self._log_step_result("Fuzzy-matched by parent EIC IDs", df=df)
@@ -266,12 +260,7 @@ class EntsoePipeline(BasePipeline):
         eic_parent = df[WCODE_PARENT].map(strip_str)
 
         # OPTION 1: use fuzzy-resolved parent EIC code
-        sysop_code_col = self.sysop_code_col  # define to prevent recall of property
-        own_eic = (
-            df[sysop_code_col].map(strip_str)
-            if sysop_code_col and sysop_code_col in df
-            else None
-        )
+        own_eic = df[SYSOP_CODE_COL].map(strip_str) if SYSOP_CODE_COL in df else None
         parent_eic_resolved = df[WCODE_PARENT_EIC].map(strip_str)
         distinct_parent_eic = pd.Series(
             [
@@ -337,7 +326,7 @@ class EntsoePipeline(BasePipeline):
         """
         for _, row in df[self._still_unmatched(df)].iterrows():
             # keyed on the stripped name, as that is what the matcher looks alt names up by
-            raw_name = strip_str(row.get(self.sysop_name_col))
+            raw_name = strip_str(row.get(SYSOP_NAME_COL))
             if raw_name is None:
                 continue
 

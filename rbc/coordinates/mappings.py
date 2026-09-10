@@ -25,100 +25,116 @@ class OperatorInfo(TypedDict):
 
     needs_coordinates: bool
     country: str
-    entity_col: str
-    entity_str_style: NotRequired[Literal["real", "code"]]  # fuzzy matching strategy
+    name_col: str
+    name_str_style: NotRequired[Literal["real", "code"]]  # fuzzy matching strategy
     # "real" = spaced real place names -> exact match
     # "code" = special-char-divided code-like names -> partial match (lower fuzzy threshold)
-    entity_mapping: NotRequired[dict[str, str] | dict[str, dict[str, str]]]
+    name_mapping: NotRequired[dict[str, str] | dict[str, dict[str, str]]]
     code_col: NotRequired[str]
     fuel_col: NotRequired[str]
-    fuel_subtype_col: NotRequired[str]  # extra fueltype information for refinement
+    fuel_sub_col: NotRequired[str]  # extra fueltype information for refinement
     fuel_mapping: NotRequired[dict[str, str]]
     region_col: NotRequired[str]  # region specs for verifying locations
     pipeline: NotRequired[str]
 
 
+# Definitions of column names only
+SYSOP_NAME_COL = "sysop.name"
+SYSOP_CODE_COL = "sysop.code"
+SYSOP_FUEL_COL = "sysop.fueltype"
+SYSOP_FUEL_SUB_COL = "sysop.subfueltype"
+SYSOP_REGION_COL = "sysop.region"
+
+# Map: OperatorInfo attribute → header the data will be published under in output df
+OPERATOR_COLUMNS: dict[str, str] = {
+    "name_col": SYSOP_NAME_COL,
+    "code_col": SYSOP_CODE_COL,
+    "fuel_col": SYSOP_FUEL_COL,
+    "fuel_sub_col": SYSOP_FUEL_SUB_COL,
+    "region_col": SYSOP_REGION_COL,
+}
+
 # Map: Operator name → defining details for location finding (e.g. data column names)
 OPERATOR_METADATA: dict[str, OperatorInfo] = {
-    "adme": OperatorInfo(  # todo: check if other entity_str_style def required
+    "adme": OperatorInfo(  # todo: check if other name_str_style def required
         country="Uruguay",
-        entity_col="",
+        name_col="",
         needs_coordinates=True,
     ),
     "aemo": OperatorInfo(
         country="Australia",
-        entity_col="unit_code",
+        name_col="unit_code",
         fuel_col="unit_fueltech_id",
         needs_coordinates=False,
     ),
-    "aeso": OperatorInfo(  # todo: check if other entity_str_style def required
+    "aeso": OperatorInfo(  # todo: check if other name_str_style def required
         country="Canada",
-        entity_col="Asset Name",
+        name_col="Asset Name",
         fuel_col="Fuel Type",
         needs_coordinates=True,
     ),
-    "cen": OperatorInfo(  # todo: check if other entity_str_style def required
+    "cen": OperatorInfo(  # todo: check if other name_str_style def required
         country="Chile",
-        entity_col="central",
+        name_col="central",
         fuel_col="tipo_tecnologia",
         code_col="id_central",
         needs_coordinates=True,
     ),
-    "eat": OperatorInfo(  # todo: check if other entity_str_style def required
+    "eat": OperatorInfo(  # todo: check if other name_str_style def required
         country="New Zealand",
-        entity_col="gen_code",
+        name_col="gen_code",
         fuel_col="fuel_code",
         needs_coordinates=True,
     ),
     "eia": OperatorInfo(
         country="United States",
-        entity_col="respondent-name",
+        name_col="respondent-name",
         code_col="respondent",
         fuel_col="fueltype",
         needs_coordinates=False,
     ),
     "entsoe": OperatorInfo(
         country="Europe",
-        entity_col="time_series.mkt_psrtype.power_system_resources.name",
-        entity_mapping=ENTSOE_NAME_TRANSLATIONS,
+        name_col="time_series.mkt_psrtype.power_system_resources.name",
+        name_str_style="code",
+        name_mapping=ENTSOE_NAME_TRANSLATIONS,
         code_col="time_series.mkt_psrtype.power_system_resources.m_rid.value",
         fuel_col="time_series.mkt_psrtype.psr_type",
         fuel_mapping=ENTSOE_FUEL_MAPPINGS,
         pipeline="entsoe",
         needs_coordinates=True,
-        entity_str_style="code",
     ),
-    "epias": OperatorInfo(  # todo: check if other entity_str_style def required
+    "epias": OperatorInfo(  # todo: check if other name_str_style def required
         country="Türkiye",
-        entity_col="powerPlantName",
+        name_col="powerPlantName",
         needs_coordinates=True,
     ),
     "ieso": OperatorInfo(
         country="Canada",
-        entity_col="Generator",
+        name_col="Generator",
         fuel_col="Fuel Type",
         needs_coordinates=False,
     ),
     "ons": OperatorInfo(
         country="Brazil",
-        entity_col="nom_usina",
-        entity_mapping=ONS_NAME_TRANSLATIONS,
+        name_col="nom_usina",
+        name_str_style="real",
+        name_mapping=ONS_NAME_TRANSLATIONS,
         code_col="id_ons",
         fuel_col="nom_tipousina",
-        fuel_subtype_col="nom_tipocombustivel",
+        fuel_sub_col="nom_tipocombustivel",
         fuel_mapping=ONS_FUEL_MAPPINGS,
         region_col="nom_estado",
         needs_coordinates=True,
-        entity_str_style="real",
     ),
     "rei": OperatorInfo(
         country="Japan",
-        entity_col="",
+        name_col="",
         needs_coordinates=False,
     ),
-    "taipower": OperatorInfo(  # todo: check if other entity_str_style def required
+    "taipower": OperatorInfo(  # todo: check if other name_str_style def required
         country="Taiwan",
-        entity_col="name",
+        name_col="name",
         fuel_col="fueltype",
         needs_coordinates=True,
     ),

@@ -18,7 +18,7 @@ from typing import cast
 import pandas as pd
 
 from rbc.config.loader import load_config
-from rbc.coordinates.mappings import OPERATOR_METADATA
+from rbc.coordinates.mappings import OPERATOR_COLUMNS, OPERATOR_METADATA
 from rbc.coordinates.utils.values import strip_str
 
 UNMATCHED = "unmatched"
@@ -171,7 +171,7 @@ def compare_coordinates(
         f"({a_matched - b_matched:+d}, {a_matched / max(len(a), 1):.1%} coverage)"
     )
 
-    print("\n  match_source:")
+    print("\n  match_method:")
     counts = (
         pd.DataFrame(
             {"before": b["src"].value_counts(), "after": a["src"].value_counts()}
@@ -180,9 +180,9 @@ def compare_coordinates(
         .astype(int)
     )
     counts["delta"] = counts["after"] - counts["before"]
-    for match_source, row in counts.sort_values("after", ascending=False).iterrows():
+    for match_method, row in counts.sort_values("after", ascending=False).iterrows():
         flag = "" if row["delta"] == 0 else f"  {row['delta']:+d}"
-        print(f"    {match_source:<16} {row['before']:>6} -> {row['after']:>6}{flag}")
+        print(f"    {match_method:<16} {row['before']:>6} -> {row['after']:>6}{flag}")
 
     shared = b.index.intersection(a.index)
     changed = shared[b.loc[shared, "src"].values != a.loc[shared, "src"].values]
@@ -213,8 +213,7 @@ def compare_coordinates(
                     f"Duplicate EGE keys in the {label} run: {duplicates[:5]}"
                 )
 
-        fuel_col = OPERATOR_METADATA[sysop].get("fuel_col")
-        sysop_fuel = f"sysop.{fuel_col}" if fuel_col else None
+        sysop_fuel = _sysop_col(before, sysop, OPERATOR_COLUMNS["fuel_col"], "fuel_col")
 
         candidates = {
             key: (
@@ -296,6 +295,27 @@ def compare_fuzzy(before: pd.DataFrame, after: pd.DataFrame) -> None:
 # ------------------------------------------------------------------
 # Secondary helpers
 # ------------------------------------------------------------------
+def _sysop_col(df: pd.DataFrame, sysop: str, generic: str, role: str) -> str | None:
+    """Find a sysop column, tolerating runs made before the generic-header rename.
+
+    Runs archived earlier published the operator's own header (e.g. "sysop.nom_usina"),
+    so comparing against them needs the OPERATOR_METADATA lookup as a fallback.
+
+    Args:
+        df (pd.DataFrame): Coordinates dataframe from one run.
+        sysop (str): System operator name, used to look up its column definitions.
+        generic (str): The generic header a current run publishes the role under.
+        role (str): The OperatorInfo key naming that role (e.g. "name_col").
+
+    Returns:
+        str | None: Column name present in `df`, or None if the role has none.
+    """
+    if generic in df.columns:
+        return generic
+    legacy = OPERATOR_METADATA[sysop].get(role)
+    return f"sysop.{legacy}" if legacy else None
+
+
 def _keys(df: pd.DataFrame, sysop: str) -> pd.Series:
     """Build a readable, unique per-EGE key from the operator's own name/code columns.
 
@@ -309,13 +329,12 @@ def _keys(df: pd.DataFrame, sysop: str) -> pd.Series:
     Returns:
         pd.Series: Row key, falling back to the row index if no sysop column is found.
     """
-    meta = OPERATOR_METADATA[sysop]
-    name_col = f"sysop.{meta.get('entity_col')}"
-    code_col = f"sysop.{meta.get('code_col')}"
+    name_col = _sysop_col(df, sysop, OPERATOR_COLUMNS["name_col"], "name_col")
+    code_col = _sysop_col(df, sysop, OPERATOR_COLUMNS["code_col"], "code_col")
 
-    if name_col in df.columns:
+    if name_col and name_col in df.columns:
         names = df[name_col].astype(str)
-        if code_col in df.columns:
+        if code_col and code_col in df.columns:
             return names + " [" + df[code_col].astype(str) + "]"
         return names
 
@@ -327,44 +346,50 @@ def _keys(df: pd.DataFrame, sysop: str) -> pd.Series:
 
 
 def _methods(df: pd.DataFrame) -> pd.Series:
-    """Return each row's match_source methods, with unmatched rows labeled explicitly.
+    """Return each row's match method, with unmatched rows labeled explicitly.
 
     Args:
         df (pd.DataFrame): Coordinates dataframe from one run.
 
     Returns:
-        pd.Series: match_source per row.
+        pd.Series: match method per row.
     """
-    if "match_source" not in df:
+    col = "match_method" if "match_method" in df else "match_source"  # pre-rename runs
+    if col not in df:
         return pd.Series(UNMATCHED, index=df.index)
-    return df["match_source"].fillna(UNMATCHED).replace("", UNMATCHED)
+    return df[col].fillna(UNMATCHED).replace("", UNMATCHED)
 
 
-def _matched_candidate(row: pd.Series, match_source: str) -> dict[str, object]:
+def _matched_candidate(row: pd.Series, match_method: str) -> dict[str, object]:
     """Pull the winning candidate's details out of its `<locator>.*` columns.
 
     Args:
         row (pd.Series): One EGE's row from a coordinates dataframe.
-        match_source (str): That row's match_source (e.g. "gem_fuzzy", "osm_sibling_of:...").
+        match_method (str): That row's match method (e.g. "gem_fuzzy", "osm_sibling").
 
     Returns:
-        dict[str, object]: name, source_id, score, fueltype, fuel level, lat and lon of
+        dict[str, object]: name, id, score, fueltype, fuel level, lat and lon of
             the winning candidate.
     """
-    locator = match_source.split("_")[0]  # gem_fuzzy -> gem, gem_sibling -> gem
+    locator = match_method.split("_")[0]  # gem_fuzzy -> gem, gem_sibling -> gem
     get = lambda field: row.get(f"{locator}.{field}")  # noqa: E731
+
+    # runs made before the rename published "<loc>.source_id" (and a dead, empty "osm.id")
+    loc_id = get("id")
+    if loc_id is None or pd.isna(loc_id):
+        loc_id = get("source_id")
 
     # the sibling step inherits coordinates, recording its donor in "sibling_of" instead
     name = get("name")
-    if "_sibling" in match_source:
+    if "_sibling" in match_method:
         name = strip_str(row.get("sibling_of"))
 
     return {
         "name": name,
-        "source_id": get("source_id"),
+        "id": loc_id,
         "score": get("match_score"),
         "fueltype": get("fueltype"),  # decides whether a candidate is vetoed
-        "fuel_level": row.get("fuel_type_match_level"),
+        "fuel_level": row.get("fueltype_match_level", row.get("fuel_type_match_level")),
         "lat": row.get("lat"),
         "lon": row.get("lon"),
     }
@@ -383,8 +408,8 @@ def _describe_name(candidate: dict[str, object]) -> str:
         return "?"
 
     name = str(candidate["name"] or "?")[:40]
-    if candidate["source_id"] is not None and not pd.isna(candidate["source_id"]):
-        return f"{name} [{candidate['source_id']}]"
+    if candidate["id"] is not None and not pd.isna(candidate["id"]):
+        return f"{name} [{candidate['id']}]"
     return name
 
 

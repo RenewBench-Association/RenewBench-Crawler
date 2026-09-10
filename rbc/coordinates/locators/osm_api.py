@@ -65,7 +65,7 @@ def query_osm_country_plants(
         force_update (bool): Ignore any existing local file and re-fetch from
             Overpass, then overwrite it.  Corresponds to `--update`.
         live (bool): Query Overpass directly without reading or writing any local
-            file.  Corresponds to `--live`.
+            file. Corresponds to `--live`.
 
     Returns:
         pd.DataFrame: DataFrame of power plants in given country.
@@ -96,6 +96,11 @@ def query_osm_country_plants(
                             f"country '{country_code}'."
                         )
                         return df_cached
+
+    logger.info(
+        f"No cached OSM data found for '{country_code}' (or running in update/live mode): "
+        f"Querying the Overpass API now (this may take a while)..."
+    )
 
     # --- Attempt 1: ISO alpha-2 tag lookup ----------------------------------------
     area_clause = _code_area(iso_alpha_code=country_code)

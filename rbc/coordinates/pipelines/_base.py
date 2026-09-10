@@ -15,7 +15,7 @@ This class shouldn't be instantiated directly -- its __init__ raises TypeError i
 from functools import reduce
 from pathlib import Path
 from pprint import pformat
-from typing import cast
+from typing import Any, cast
 
 import country_converter as coco
 import pandas as pd
@@ -25,7 +25,14 @@ from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osm_api import query_osm_country_plants
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.mappings import OPERATOR_METADATA
+from rbc.coordinates.mappings import (
+    OPERATOR_COLUMNS,
+    OPERATOR_METADATA,
+    SYSOP_FUEL_COL,
+    SYSOP_FUEL_SUB_COL,
+    SYSOP_NAME_COL,
+    SYSOP_REGION_COL,
+)
 from rbc.coordinates.match_schema import LOCATOR_RELIABILITY, MatchCandidate
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
@@ -125,30 +132,23 @@ class BasePipeline:
             raise ValueError(f"Input directory '{input_dir}' is not a directory!")
 
         try:
-            self.operator = [p for p in self.input_dir.parts if p in OPERATOR_METADATA][
-                0
-            ]
-            self.country = OPERATOR_METADATA[self.operator]["country"]
-            self.name_col = OPERATOR_METADATA[self.operator]["entity_col"]
-            entity_mapping: dict[str, str] | dict[str, dict[str, str]] = (
-                OPERATOR_METADATA[self.operator].get("entity_mapping", {})
-            )
-            self.name_mapping: dict[str, str] | dict[str, dict[str, str]] = (
-                OPERATOR_METADATA[self.operator].get("entity_mapping", {})
-            )
-            self.name_str_style = OPERATOR_METADATA[self.operator].get(
-                "entity_str_style", "code"
-            )
-            self.code_col = OPERATOR_METADATA[self.operator].get("code_col")
-            self.fuel_col = OPERATOR_METADATA[self.operator].get("fuel_col")
-            self.fuel_sub_col = OPERATOR_METADATA[self.operator].get("fuel_subtype_col")
-            self.fuel_mapping = OPERATOR_METADATA[self.operator].get("fuel_mapping", {})
-            self.region_col = OPERATOR_METADATA[self.operator].get("region_col")
+            self.sysop = [p for p in self.input_dir.parts if p in OPERATOR_METADATA][0]
+            meta = OPERATOR_METADATA[self.sysop]
+
+            self.country = meta["country"]
+            self.name_col = meta["name_col"]
+            self.name_str_style = meta.get("name_str_style", "code")
+            raw_name_mapping = meta.get("name_mapping", {})
+            self.code_col = meta.get("code_col")
+            self.fuel_col = meta.get("fuel_col")
+            self.fuel_sub_col = meta.get("fuel_sub_col")
+            self.fuel_mapping = meta.get("fuel_mapping", {})
+            self.region_col = meta.get("region_col")
 
             if self.name_col == "":
                 raise MissingDataError(
-                    f"No 'entity_col' name defined in OPERATOR_METADATA for "
-                    f"'{[self.operator]}':\n{OPERATOR_METADATA[self.operator]}"
+                    f"No 'name_col' name defined in OPERATOR_METADATA for "
+                    f"'{[self.sysop]}':\n{meta}"
                 )
 
             self.country_code: str | None = None
@@ -156,17 +156,25 @@ class BasePipeline:
                 bz = self.input_dir.stem
                 self.country = str(ACTIVE_ZONES_METADATA[bz]["country"])
                 self.country_code = str(ACTIVE_ZONES_METADATA[bz]["alpha2"])
-                nested_mapping = cast(dict[str, dict[str, str]], entity_mapping)
+                nested_mapping = cast(dict[str, dict[str, str]], raw_name_mapping)
                 self.name_mapping = nested_mapping.get(self.country_code, {})
             else:
                 self.country_code = coco.convert(names=self.country, to="ISO2")
-                self.name_mapping = cast(dict[str, str], entity_mapping)
+                self.name_mapping = cast(dict[str, str], raw_name_mapping)
 
             if self.country_code == "not found":
                 self.country_code = None
                 logger.warning(
                     f"No country code found for {self.country}! OSM matching not possible."
                 )
+
+            # Map: operator's original column headers → column headers for output storing
+            meta_dict: dict[str, Any] = dict(meta)  # convert for variable key access
+            self.sysop_cols: dict[str, str] = {
+                meta_dict[attr]: header
+                for attr, header in OPERATOR_COLUMNS.items()
+                if meta_dict.get(attr)
+            }
 
         except IndexError:
             raise ValueError(f"No country match found for '{self.input_dir}'!")
@@ -193,7 +201,7 @@ class BasePipeline:
         self.osm_df = pd.DataFrame()  # loaded later if required as very I/O expensive!
 
         logger.info(
-            f"{type(self).__name__} initialized for '{self.operator}' ({self.country})\n"
+            f"{type(self).__name__} initialized for '{self.sysop}' ({self.country})\n"
             f"{pformat(vars(self), indent=4, sort_dicts=False)}"
         )
 
@@ -220,45 +228,20 @@ class BasePipeline:
         return df
 
     # ------------------------------------------------------------------
-    # CLASS PROPERTIES AND COLUMN SCHEMA (shared across steps)
+    # DATAFRAME COLUMN SCHEMA (shared across steps)
     # ------------------------------------------------------------------
-    @property
-    def sysop_name_col(self) -> str:
-        """Name of the SysOp's entity column (e.g. 'Asset Name', 'Generator')."""
-        return f"sysop.{self.name_col}"
-
-    @property
-    def sysop_code_col(self) -> str | None:
-        """Name of the SysOp's code column, if existent (e.g. 'id_central')."""
-        return f"sysop.{self.code_col}" if self.code_col else None
-
-    @property
-    def sysop_fuel_col(self) -> str | None:
-        """Name of the SysOp's fuel column, if existent (e.g. 'nom_tipousina')."""
-        return f"sysop.{self.fuel_col}" if self.fuel_col else "sysop.fuel_type"
-
-    @property
-    def sysop_fuel_sub_col(self) -> str | None:
-        """Name of the SysOp's fuel subtype col, if existent (e.g. 'nom_tipocombustivel')."""
-        return f"sysop.{self.fuel_sub_col}" if self.fuel_sub_col else None
-
-    @property
-    def sysop_region_col(self) -> str | None:
-        """Name of the SysOp's region column, if existent (e.g. 'nom_estado')."""
-        return f"sysop.{self.region_col}" if self.region_col else None
-
     @staticmethod
     def _create_match_method_columns(df: pd.DataFrame) -> None:
         """Create all columns generally required by the matching methods/algorithms.
 
-        This method ensures the required columns lat/lon/match_source for the matching
+        This method ensures the required columns lat/lon/match_method for the matching
         methods (e.g. fuzzy name via ppdb.*/gem.*/osm.*) are created to prevent KeyErrors.
 
         Args:
             df (pd.DataFrame): The working dataframe of SysOp (target EGE) data.
         """
         for loc in SORTED_LOCATORS:  # currently: "gem", "ppdb", "osm"
-            for col in [f"{loc}.lat", f"{loc}.lon", f"{loc}.match_source"]:
+            for col in [f"{loc}.lat", f"{loc}.lon", f"{loc}.match_method"]:
                 if col not in df.columns:
                     df[col] = None
 
@@ -269,7 +252,7 @@ class BasePipeline:
     def _matched_column(df: pd.DataFrame, column: str) -> pd.Series:
         """Best column value from the most reliable locator that actually matched each row.
 
-        Only "<loc>.lat"/"<loc>.lon"/"<loc>.match_source" are guaranteed to exist, so other
+        Only "<loc>.lat"/"<loc>.lon"/"<loc>.match_method" are guaranteed to exist, so other
         columns are skipped if a <loc> never created it. ``column`` values are masked using
         <loc> coords ("<loc>.lat" != None), so only rows with an actual match return values.
 
@@ -330,15 +313,7 @@ class BasePipeline:
 
         # define relevant columns and ensure they actually exist in the operator data
         relevant_cols = []
-        for col in [
-            self.name_col,
-            self.code_col,
-            self.fuel_col,
-            self.fuel_sub_col,
-            self.region_col,
-        ]:
-            if not col:
-                continue
+        for col in self.sysop_cols.keys():  # go through original sysop's column names
             if col not in df_all.columns:
                 raise MissingDataError(f"No '{col}' column in '{self.input_dir}' CSVs!")
             relevant_cols.append(col)
@@ -384,22 +359,22 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with fuel type).
         """
-        # 1. rename all columns with "sysop." prefix
-        df = df.rename(columns={c: f"sysop.{c}" for c in df.columns})
+        # 1. rename relevant columns to generic "sysop.*" (e.g. 'nom_usina' → 'sysop.name')
+        df = df.rename(columns=self.sysop_cols)
 
         # 2. create SysOp fuel column with None values if fuel column is missing/unconfigured
-        if not self.fuel_col or self.sysop_fuel_col not in df.columns:
-            df[self.sysop_fuel_col] = None
+        if SYSOP_FUEL_COL not in df.columns:
+            df[SYSOP_FUEL_COL] = None
 
         # 3. apply mapping to SysOp fuel column if mapping was provided
         elif self.fuel_mapping:
-            df[self.sysop_fuel_col] = df[self.sysop_fuel_col].map(
+            df[SYSOP_FUEL_COL] = df[SYSOP_FUEL_COL].map(
                 lambda x: self.fuel_mapping.get(strip_str(x) or "")
             )
 
         # 4. refine the fuel type with the subtype data if it exists & they agree
-        if self.sysop_fuel_sub_col and self.sysop_fuel_sub_col in df.columns:
-            subtypes = df[self.sysop_fuel_sub_col].map(
+        if SYSOP_FUEL_SUB_COL in df.columns:
+            subtypes = df[SYSOP_FUEL_SUB_COL].map(
                 lambda x: (
                     self.fuel_mapping.get(strip_str(x) or "")
                     if self.fuel_mapping
@@ -411,11 +386,14 @@ class BasePipeline:
                 [
                     classify_fueltype_match(primary, sub)
                     in ("exact", "compatible", "family")
-                    for primary, sub in zip(df[self.sysop_fuel_col], subtypes)
+                    for primary, sub in zip(df[SYSOP_FUEL_COL], subtypes)
                 ],
                 index=df.index,
             )
-            df[self.sysop_fuel_col] = subtypes.where(refine, df[self.sysop_fuel_col])
+            df[SYSOP_FUEL_COL] = subtypes.where(refine, df[SYSOP_FUEL_COL])
+
+            # remove the sub fueltype (served its purpose, no need to keep it)
+            df = df.drop(columns=[SYSOP_FUEL_SUB_COL])
 
         # 5. ensure the required columns for matching algorithms are created
         self._create_match_method_columns(df)
@@ -474,21 +452,21 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): The updated working dataframe (with validated fuel type).
         """
-        if not self.sysop_fuel_col or self.sysop_fuel_col not in df.columns:
+        if SYSOP_FUEL_COL not in df.columns:
             return df
 
         fueltypes = self._matched_column(df, column="fueltype")
 
-        df["fuel_type_match"] = None
-        df["fuel_type_match_level"] = None
+        df["fueltype_match"] = None
+        df["fueltype_match_level"] = None
         for idx in df.index[fueltypes.notna()]:
             level = classify_fueltype_match(
-                df.at[idx, self.sysop_fuel_col], fueltypes[idx]
+                sysop_type=df.at[idx, SYSOP_FUEL_COL], loc_type=fueltypes[idx]
             )
-            df.at[idx, "fuel_type_match"] = level != "mismatch"
-            df.at[idx, "fuel_type_match_level"] = level
+            df.at[idx, "fueltype_match"] = level != "mismatch"
+            df.at[idx, "fueltype_match_level"] = level
 
-        mismatches = (df["fuel_type_match_level"] == "mismatch").sum()
+        mismatches = (df["fueltype_match_level"] == "mismatch").sum()
         if mismatches:
             logger.warning(
                 f"[{self.output_stem}] Fuel-type mismatch on {mismatches} matched "
@@ -505,7 +483,7 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): The updated working dataframe (with validated coordinates).
         """
-        if not self.sysop_region_col or self.sysop_region_col not in df.columns:
+        if SYSOP_REGION_COL not in df.columns:
             return df
 
         lats, lons = (self._matched_column(df, "lat"), self._matched_column(df, "lon"))
@@ -513,7 +491,9 @@ class BasePipeline:
         df["region_match_level"] = None
         for idx in df.index[lats.notna()]:
             level = classify_region_match(
-                self.country, df.at[idx, self.sysop_region_col], (lats[idx], lons[idx])
+                self.country,
+                target_region=df.at[idx, SYSOP_REGION_COL],
+                cand_coord=(lats[idx], lons[idx]),
             )
             df.at[idx, "region_match"] = level != "mismatch"
             df.at[idx, "region_match_level"] = level
@@ -527,9 +507,9 @@ class BasePipeline:
         return df
 
     def _step_finalize(self, df: pd.DataFrame) -> pd.DataFrame:
-        """LAST STEP --- Finalize lat/lon, match_source, and write the output CSV.
+        """LAST STEP --- Finalize lat/lon, match_method, and write the output CSV.
 
-        Create and populate final ``lat``, ``lon`` and ``match_source`` columns with results.
+        Create and populate final ``lat``, ``lon`` and ``match_method`` columns with results.
         If a validation step rejected a match, its values are excluded from these columns.
         The locator's own "<loc>.*" columns are left intact, so the process / rejected
         candidates stay visible for review together with the "*_match_level" details.
@@ -542,7 +522,7 @@ class BasePipeline:
         """
         # 1. Determine which matches were vetoed by the validation step(s)
         vetoed = pd.Series(False, index=df.index)
-        for col in ("fuel_type_match", "region_match"):
+        for col in ("fueltype_match", "region_match"):
             if col in df.columns:
                 vetoed |= df[col].eq(False)  # veto=True if already True or col=False
 
@@ -550,15 +530,15 @@ class BasePipeline:
         for col in ("lat", "lon"):
             df[col] = self._matched_column(df, column=col).mask(vetoed)
 
-        # 3. Define the 'match_source' value for all matches (excluding vetoed ones)
-        df["match_source"] = (
-            self._matched_column(df, "match_source")
+        # 3. Define the 'match_method' value for all matches (excluding vetoed ones)
+        df["match_method"] = (
+            self._matched_column(df, "match_method")
             .fillna("unmatched")
             .mask(vetoed, "unmatched")
         )
 
         # 4. Log a detailed overview of how many matches were achieved by what methods
-        matches = df.loc[df["lat"].notna(), "match_source"].value_counts().to_dict()
+        matches = df.loc[df["lat"].notna(), "match_method"].value_counts().to_dict()
         self._log_step_result(
             "--- TOTAL ---",
             matched=int(df["lat"].notna().sum()),
@@ -661,9 +641,9 @@ class BasePipeline:
 
         # 2. Fuzzy matching candidate search
         for idx, row in df[self._still_unmatched(df)].iterrows():
-            sysop_name = strip_str(row.get(self.sysop_name_col))
-            sysop_fuel = row.get(self.sysop_fuel_col)
-            sysop_region = row.get(self.sysop_region_col)
+            sysop_name = strip_str(row.get(SYSOP_NAME_COL))
+            sysop_fuel = row.get(SYSOP_FUEL_COL)
+            sysop_region = row.get(SYSOP_REGION_COL)
             if sysop_name is None:
                 continue
 
@@ -686,20 +666,14 @@ class BasePipeline:
                         idx,
                         candidate,
                         match_score=result.score,
-                        match_source=f"{locator}_fuzzy",
+                        match_method=f"{locator}_fuzzy",
                     )
-
-        # 3. Postprocessing
-        df_fuzzy_results = pd.DataFrame(fuzzy_results_list)
-
-        # initialize specific OSM columns if they don't exist
-        for col in ["id", "type", "url", "geometry"]:
-            if f"osm.{col}" not in df.columns:
-                df[f"osm.{col}"] = None
 
         self._log_step_result("Fuzzy-matched by name", df=df)
 
-        # 4. Storing the fuzzy matching df
+        # 3. Combine fuzzy matching details into a df and store to a debugging CSV
+        df_fuzzy_results = pd.DataFrame(fuzzy_results_list)
+
         if self.output_dir and not df_fuzzy_results.empty:
             out_path = Path(self.output_dir, f"fuzzy_matches_{self.output_stem}.csv")
             df_fuzzy_results.to_csv(out_path, index=False)
@@ -735,7 +709,7 @@ class BasePipeline:
             RuntimeError: If sibling matches have been recorded before this step.
         """
         if any(
-            df[f"{loc}.match_source"]
+            df[f"{loc}.match_method"]
             .astype("string")
             .str.endswith("_sibling", na=False)
             .any()
@@ -779,8 +753,8 @@ class BasePipeline:
                 if col.startswith(f"{loc}.") and col != f"{loc}.match_score":
                     df.at[idx, col] = df.at[donor, col]
 
-            df.at[idx, f"{loc}.match_source"] = f"{loc}_sibling"
-            df.at[idx, "sibling_of"] = df.at[donor, self.sysop_name_col]
+            df.at[idx, f"{loc}.match_method"] = f"{loc}_sibling"
+            df.at[idx, "sibling_of"] = df.at[donor, SYSOP_NAME_COL]
 
         self._log_step_result("Matched by sibling group", df=df)
         return df
@@ -885,7 +859,7 @@ class BasePipeline:
         df: pd.DataFrame,
         idx: int,
         candidate: MatchCandidate,
-        match_source: str,
+        match_method: str,
         match_score: float | None = None,
     ) -> None:
         """Write a matched candidate into the df with its `<source>.*` columns.
@@ -894,7 +868,7 @@ class BasePipeline:
             df (pd.DataFrame): The working dataframe.
             idx (int): Index of the candidate to write.
             candidate (MatchCandidate): The candidate to write.
-            match_source (str): The match algorithm that was used to find this candidate.
+            match_method (str): The match algorithm that was used to find this candidate.
             match_score (float | None): The match score of the target and candidate,
                 if one exists (e.g. for fuzzy matching).
         """
@@ -902,7 +876,7 @@ class BasePipeline:
             df.at[idx, f"{field}"] = value
 
         df.at[idx, f"{candidate.source}.match_score"] = match_score
-        df.at[idx, f"{candidate.source}.match_source"] = match_source
+        df.at[idx, f"{candidate.source}.match_method"] = match_method
 
     def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatcher) -> None:
         """Add alternative names to matcher. Overwritable by child pipeline (i.e. entsoe).

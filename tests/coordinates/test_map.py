@@ -9,14 +9,15 @@ import pandas as pd
 import pytest
 
 from rbc.coordinates.map import (
-    _DEFAULT_COLOR,
-    _DEFAULT_ICON,
+    DEFAULT_COLOR,
+    DEFAULT_ICON,
     _EgeMap,
     _fueltype_icon,
     _geometry_summary,
-    _match_source_color,
+    _match_method_color,
     build_map,
 )
+from rbc.coordinates.mappings import SYSOP_NAME_COL
 
 
 # ----------------------------------
@@ -60,7 +61,7 @@ def _marker_attributes(marker: folium.Marker) -> dict:
 # ----------------------------------
 @pytest.fixture
 def df_matched() -> pd.DataFrame:
-    """Two matched EGEs (different match_source/fuel type) and one unmatched.
+    """Two matched EGEs (different match_method/fuel type) and one unmatched.
 
     Returns:
         pd.DataFrame: Synthetic coordinate df resembling one pipeline's output.
@@ -72,21 +73,21 @@ def df_matched() -> pd.DataFrame:
                 "lat": 52.1,
                 "lon": 4.1,
                 "fuel_type": "Onshore Wind",
-                "match_source": "osm",
+                "match_method": "osm",
             },
             {
                 "name": "Plant B",
                 "lat": 52.2,
                 "lon": 4.3,
                 "fuel_type": "Solar",
-                "match_source": "gem_direct",
+                "match_method": "gem_direct",
             },
             {
                 "name": "Plant C (unmatched)",
                 "lat": None,
                 "lon": None,
                 "fuel_type": "Gas",
-                "match_source": None,
+                "match_method": None,
             },
         ]
     )
@@ -102,7 +103,7 @@ def make_ege_map() -> Callable[..., _EgeMap]:
 
     def _factory(
         dfs: list[pd.DataFrame],
-        name_col: str | None = "name",
+        name_col: str = SYSOP_NAME_COL,
         fuel_col: str | None = None,
         labels: list[str] | None = None,
         cluster_markers: bool = False,
@@ -197,7 +198,7 @@ class TestEGEMapInit:
             df_matched (pd.DataFrame): Location finding df with matched/unmatched EGE rows.
             make_ege_map (Callable): Factory fixture for `_EgeMap`.
         """
-        ege_map = make_ege_map([df_matched], name_col=None)
+        ege_map = make_ege_map([df_matched], name_col="non_existant_column_name")
         assert ege_map.name_col == df_matched.columns[0]
 
     def test_init_error_missing_name_col(
@@ -238,22 +239,22 @@ class TestEGEMapInit:
         ege_map = make_ege_map([df_matched, other], fuel_col="fuel_type")
         assert ege_map.fuel_col is None
 
-    def test_init_match_source_col_default(
+    def test_init_match_method_col_default(
         self, df_matched: pd.DataFrame, make_ege_map: Callable
     ) -> None:
-        """Happy path: `match_source_col` is `"match_source"` when every df has it.
+        """Happy path: `match_method_col` is `"match_method"` when every df has it.
 
         Args:
             df_matched (pd.DataFrame): Location finding df with matched/unmatched EGE rows.
             make_ege_map (Callable): Factory fixture for `_EgeMap`.
         """
         ege_map = make_ege_map([df_matched])
-        assert ege_map.match_source_col == "match_source"
+        assert ege_map.match_method_col == "match_method"
 
-    def test_init_match_source_col_reset(
+    def test_init_match_method_col_reset(
         self, df_matched: pd.DataFrame, make_ege_map: Callable
     ) -> None:
-        """Failure-tolerant path: `match_source_col` resets to `None` if any df lacks it.
+        """Failure-tolerant path: `match_method_col` resets to `None` if any df lacks it.
 
         Args:
             df_matched (pd.DataFrame): Location finding df with matched/unmatched EGE rows.
@@ -261,7 +262,7 @@ class TestEGEMapInit:
         """
         other = pd.DataFrame({"name": ["X"], "lat": [1.0], "lon": [1.0]})
         ege_map = make_ege_map([df_matched, other])
-        assert ege_map.match_source_col is None
+        assert ege_map.match_method_col is None
 
     def test_build(self, df_matched: pd.DataFrame, make_ege_map: Callable) -> None:
         """Happy path: `build()` returns full map.
@@ -303,24 +304,24 @@ class TestEGEMapMarkers:
         ege_map = make_ege_map([df_matched], fuel_col="fuel_type")
         m = ege_map.build()
 
-        # check that the different layers are built depending on match_source_col
+        # check that the different layers are built depending on match_method_col
         by_layer = _markers_by_layer(m)
         assert set(by_layer) == {"osm", "gem_direct"}
         assert len(by_layer["osm"]) == 1
         assert len(by_layer["gem_direct"]) == 1
 
-        # check that markers color and icon depending on match_source_col and fuel_col
+        # check that markers color and icon depending on match_method_col and fuel_col
         osm_marker = by_layer["osm"][0]
         osm_attributes = _marker_attributes(osm_marker)
-        assert osm_attributes["marker_color"] == _match_source_color("osm")
+        assert osm_attributes["marker_color"] == _match_method_color("osm")
         assert osm_attributes["icon"] == _fueltype_icon("Onshore Wind")
 
         # check that unmatched rows (no lat/lon) are excluded - here: Plant C
         total_markers = sum(len(v) for v in _markers_by_layer(m).values())
         assert total_markers == 2
 
-    def test_add_markers_no_match_source_col(self, make_ege_map: Callable) -> None:
-        """Failure-tolerant: markers in default color & unknown layer without match_source.
+    def test_add_markers_no_match_method_col(self, make_ege_map: Callable) -> None:
+        """Failure-tolerant: markers in default color & unknown layer without match_method.
 
         Args:
             make_ege_map (Callable): Factory fixture for `_EgeMap`.
@@ -334,7 +335,7 @@ class TestEGEMapMarkers:
 
         unknown_marker = by_layer["unknown"][0]
         unknown_attributes = _marker_attributes(unknown_marker)
-        assert unknown_attributes["marker_color"] == _DEFAULT_COLOR
+        assert unknown_attributes["marker_color"] == DEFAULT_COLOR
 
     def test_add_markers_no_fuel_col(
         self, df_matched: pd.DataFrame, make_ege_map: Callable
@@ -349,7 +350,7 @@ class TestEGEMapMarkers:
         m = ege_map.build()
 
         (osm_marker,) = _markers_by_layer(m)["osm"]
-        assert _marker_attributes(osm_marker)["icon"] == _DEFAULT_ICON
+        assert _marker_attributes(osm_marker)["icon"] == DEFAULT_ICON
 
     def test_build_popup_html(
         self, df_matched: pd.DataFrame, make_ege_map: Callable
@@ -420,7 +421,7 @@ class TestEGEMapLegendSidebar:
                 "lat": [1.0, 2.0],
                 "lon": [1.0, 2.0],
                 "fuel_type": ["Wind", "wind"],
-                "match_source": ["osm", "osm"],
+                "match_method": ["osm", "osm"],
             }
         )
         ege_map = make_ege_map([df], fuel_col="fuel_type")
@@ -430,7 +431,7 @@ class TestEGEMapLegendSidebar:
         assert html.count("fa-wind") == 1
 
     def test_add_legend_unknown_fallback_shown(self, make_ege_map: Callable) -> None:
-        """Happy path: legend still correctly adds an 'unknown' entry without match_source.
+        """Happy path: legend still correctly adds an 'unknown' entry without match_method.
 
         Args:
             make_ege_map (Callable): Factory fixture for `_EgeMap`.
@@ -481,21 +482,21 @@ class TestHelpers:
             ("osm_fuzzy", "purple"),
             ("OSM_FUZZY", "purple"),  # case-insensitive
             ("  gem_direct  ", "darkblue"),  # stripped
-            ("totally_unknown_algorithm", _DEFAULT_COLOR),
-            (None, _DEFAULT_COLOR),
-            (float("nan"), _DEFAULT_COLOR),
+            ("totally_unknown_algorithm", DEFAULT_COLOR),
+            (None, DEFAULT_COLOR),
+            (float("nan"), DEFAULT_COLOR),
         ],
     )
-    def test_match_source_color(
+    def test_match_method_color(
         self, source: str | float | None, expected: str
     ) -> None:
-        """Happy + failure paths: Known/unknown/missing match_source values handled correctly.
+        """Happy + failure paths: Known/unknown/missing match_method values handled correctly.
 
         Args:
-            source (str | float | None): Parametrized `match_source` value under test.
-            expected (str): Expected color returned by `_match_source_color`.
+            source (str | float | None): Parametrized `match_method` value under test.
+            expected (str): Expected color returned by `_match_method_color`.
         """
-        assert _match_source_color(source) == expected
+        assert _match_method_color(source) == expected
 
     @pytest.mark.parametrize(
         "fueltype, expected",
@@ -503,9 +504,9 @@ class TestHelpers:
             ("Solar", "sun"),
             ("Onshore Wind", "wind"),
             ("  PUMPED STORAGE  ", "water"),
-            ("totally_unknown_fuel", _DEFAULT_ICON),
-            (None, _DEFAULT_ICON),
-            (float("nan"), _DEFAULT_ICON),
+            ("totally_unknown_fuel", DEFAULT_ICON),
+            (None, DEFAULT_ICON),
+            (float("nan"), DEFAULT_ICON),
         ],
     )
     def test_fueltype_icon(self, fueltype: str | float | None, expected: str) -> None:

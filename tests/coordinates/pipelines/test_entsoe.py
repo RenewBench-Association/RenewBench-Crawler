@@ -14,7 +14,7 @@ from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.pipelines.entsoe import EntsoePipeline
 
-NAME_COL = OPERATOR_METADATA["entsoe"].get("entity_col")
+NAME_COL = OPERATOR_METADATA["entsoe"].get("name_col")
 CODE_COL = OPERATOR_METADATA["entsoe"].get("code_col")
 FUEL_COL = OPERATOR_METADATA["entsoe"].get("fuel_col")
 
@@ -164,7 +164,7 @@ class TestEntsoePipelineRunPipeline:
         """
         df = entsoe_pipeline.run_pipeline()
         assert len(df) == 2
-        for col in ("lat", "lon", "match_source"):
+        for col in ("lat", "lon", "match_method"):
             assert col in df.columns
 
 

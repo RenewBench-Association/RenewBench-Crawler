@@ -31,6 +31,7 @@ import folium.plugins
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.mappings import SYSOP_FUEL_COL, SYSOP_NAME_COL
 from rbc.coordinates.utils import map_html as tpl
 from rbc.coordinates.utils.values import is_missing, strip_lower_str, strip_str
 
@@ -39,8 +40,8 @@ BROWSERS = ["safari", "google-chrome", "chrome"]  # browsers that display withou
 # ---------------------------------------------------------------------------
 # Marker plotting schemas (color & icon types)
 # ---------------------------------------------------------------------------
-# Define marker color by `match_source` value (created by running a pipeline).
-_MATCH_SOURCE_COLORS: dict[str, str] = {  # always: from most to least confident
+# Define marker color by `match_method` value (created by running a pipeline).
+MATCH_METHOD_COLORS: dict[str, str] = {  # always: from most to least confident
     # GEM matches
     "gem_direct": "darkblue",  # exact EIC hit in GEM
     "gem_parent_direct": "darkblue",  # parent EIC → direct GEM hit
@@ -59,10 +60,10 @@ _MATCH_SOURCE_COLORS: dict[str, str] = {  # always: from most to least confident
     # No coordinates found (won't normally be plotted)
     "unmatched": "red",
 }
-_DEFAULT_COLOR = "lightgray"
+DEFAULT_COLOR = "lightgray"
 
 # Define marker icon by fuel type (given by the operator)
-_FUEL_ICONS: dict[str, str] = {
+FUEL_ICONS: dict[str, str] = {
     # Renewables
     "solar": "sun",
     "photovoltaic": "sun",
@@ -89,7 +90,7 @@ _FUEL_ICONS: dict[str, str] = {
     "nuclear": "radiation",
     "waste": "trash",
 }
-_DEFAULT_ICON = "bolt"
+DEFAULT_ICON = "bolt"
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +98,8 @@ _DEFAULT_ICON = "bolt"
 # ---------------------------------------------------------------------------
 def build_map(
     dfs: list[pd.DataFrame],
-    name_col: str | None,
-    fuel_col: str | None,
+    name_col: str = SYSOP_NAME_COL,
+    fuel_col: str | None = SYSOP_FUEL_COL,
     labels: list[str] | None = None,
     output_dir: Path | str | None = None,
     open_browser: bool = True,
@@ -107,21 +108,22 @@ def build_map(
 ) -> folium.Map:
     """Build an interactive Leaflet map from a list of coordinate DataFrames.
 
-    When the DataFrames contain a `match_source` column (produced by the ENTSOE enrichment
-    pipeline) pin colors reflect the matching strategy used rather than the fuel type, and
-    a legend is added to the bottom-right corner. Otherwise, pins are colored by fuel type.
+    This function builds a map from the dataframe created during coordinate finding. For
+    all matched sysop target EGEs, the df contains ``lat``, ``lon`` (identified location) and
+    ``match_method`` (used algorithm) values. The fuel type is provided in ``sysop.fueltype``.
+    Together, this information is used to define the markers' parameters for mapping:
+    1. lat/lon: Positioning, 2. match method: Color, 3. fueltype: Icon
+
+    Two legends (bottom-right corner) show methods and fueltypes and their frequencies.
+    Via the built-in layer control (top-right corner), markers can be toggled by method.
 
     Each matched EGE is rendered as a clickable pin. Clicking a pin opens a popup table
-    that lists every column in the DataFrame — URL-like columns (`OSM_URL`, `*_url`, …) become
-    clickable hyperlinks. When an `osm.geometry` polygon is present it is also drawn as a
-    transparent overlay on the map.
-
-    Multiple DataFrames are shown as separate toggleable layers via the built-in
-    layer control (top-right corner).
+    that lists every column in the DataFrame, with URL-like columns as clickable hyperlinks.
+    When an `osm.geometry` polygon exists, it is also drawn as a transparent overlay.
 
     Args:
         dfs: A list of DataFrames as returned by `<...>Pipeline.run_pipeline()`.
-        name_col (str | None): Column header containing EGE names. If None, first col is used.
+        name_col (str): Column header containing EGE names.
         fuel_col (str | None): Column header containing EGE fuel types. If None, none exists.
         labels (list): Display name for each DataFrame shown in the layer control.
             Defaults to `["Dataset 1", "Dataset 2", ...]`.
@@ -169,13 +171,13 @@ class _EgeMap:
     otherwise have to be provided to every popup/marker/legend/sidebar helper separately.
 
     Attributes:
-        dfs: Coordinate DataFrames, one per zone/country/dataset.
-        labels: Display label for each entry in `dfs`.
-        name_col: Column used as popup header / marker tooltip.
-        fuel_col: Column used to color markers when not in match-source mode.
+        dfs (list): Coordinate DataFrames, one per zone/country/dataset.
+        labels (list): Display label for each entry in `dfs`.
+        name_col (str): Column used as popup header / marker tooltip.
+        fuel_col (str | None): Column used to define marker icons.
         cluster_markers: Whether to group nearby markers with `MarkerCluster`.
         tiles: Folium tile provider name.
-        match_source_col: Detected `match_source` column, or `None` if absent.
+        match_method_col: Detected `match_method` column, or `None` if absent.
         map: The `folium.Map` under construction (set by `build()`).
     """
 
@@ -183,7 +185,7 @@ class _EgeMap:
         self,
         dfs: list[pd.DataFrame],
         labels: list[str],
-        name_col: str | None,
+        name_col: str,
         fuel_col: str | None,
         cluster_markers: bool,
         tiles: str,
@@ -191,10 +193,10 @@ class _EgeMap:
         """Initialize energy-generating entity (EGE) map creator.
 
         Args:
-            dfs (list[pd.DataFrame]): Coordinate DataFrames.
+            dfs (list[pd.DataFrame]): Coordinate DataFrames (stored as `coordinates_...csv`).
             labels (list[str]): Display label for each entry in `dfs`.
             name_col (str): Column header containing the EGE name for each DataFrame
-                used as the popup header & marker tooltip. If None, the first column is used.
+                used as the popup header & marker tooltip.
             fuel_col (str | None): Column header of the fuel/energy type for each DataFrame
                 used to color the markers. If None, it is assumed none exists.
             cluster_markers (bool): Whether to group nearby markers with `MarkerCluster`.
@@ -205,11 +207,19 @@ class _EgeMap:
         """
         self.dfs = dfs
         self.labels = labels
-        self.name_col = name_col if name_col else self.dfs[0].columns[0]
+        self.name_col = name_col
         self.fuel_col = fuel_col
         self.cluster_markers = cluster_markers
         self.tiles = tiles
         self.map = folium.Map(tiles=self.tiles, zoom_start=4)  # empty map
+
+        if not any(self.name_col in df for df in dfs):
+            first_col = self.dfs[0].columns[0]
+            logger.warning(
+                f"Provided name column '{self.name_col}' not in dfs. Assuming the first "
+                f"column '{first_col}' is the name column instead."
+            )
+            self.name_col = first_col
 
         if not all(self.name_col in df for df in dfs):
             raise ValueError(
@@ -218,20 +228,20 @@ class _EgeMap:
 
         if not self.fuel_col:
             logger.warning("No `fuel_col` provided. Cannot define icons by fuel type.")
-        elif self.fuel_col and not all(self.fuel_col in df for df in dfs):
+        elif not all(self.fuel_col in df for df in dfs):
             logger.warning(
                 f"Not all dfs contain the same fuel column '{self.fuel_col}'! "
                 f"Cannot define icons by fuel type."
             )
             self.fuel_col = None
 
-        self.match_source_col: str | None = "match_source"
-        if not all(self.match_source_col in df for df in dfs):
+        self.match_method_col: str | None = "match_method"
+        if not all(self.match_method_col in df for df in dfs):
             logger.warning(
-                "Not all dfs contain a `match_source` column (inserted by coordinate"
+                "Not all dfs contain a `match_method` column (inserted by coordinate"
                 "/location finding)! Cannot group/color markers by matching strategy."
             )
-            self.match_source_col = None
+            self.match_method_col = None
 
     # ---------------------------------------------------
     # ENTRY-POINTS
@@ -295,14 +305,13 @@ class _EgeMap:
     # MARKERS & THEIR HELPERS
     # ---------------------------------------------------
     def _add_markers(self) -> None:
-        """Add EGE locations as global layers per match_source algorithm.
+        """Add EGE locations as global layers per match_method algorithm.
 
-        A single checkbox in the layer control can toggle that algorithm's markers. The
-        markers are additionally colored by the match_source algorithm. The icons are
-        defined by the EGE's fuel type (where its known).
+        The markers are colored by the algorithm and checkboxes in the layer control can be
+        used to toggle them on/off. Icons are defined by the EGE's fuel type (where known).
         """
-        # Build a dict of the used match_source algorithms and the associated data rows
-        ms_groups: dict[str, list[pd.Series]] = {}
+        # Build a dict of the used match_method algorithms and the associated data rows
+        match_methods: dict[str, list[pd.Series]] = {}
 
         for df in self.dfs:
             matched = df.dropna(subset=["lat", "lon"])
@@ -310,23 +319,23 @@ class _EgeMap:
                 continue
 
             for _, row in matched.iterrows():
-                ms_algorithm = (
-                    strip_str(row[self.match_source_col]) or "unknown"
-                    if self.match_source_col
+                method = (
+                    strip_str(row[self.match_method_col]) or "unknown"
+                    if self.match_method_col
                     else "unknown"
                 )
-                ms_groups.setdefault(ms_algorithm, []).append(row)
+                match_methods.setdefault(method, []).append(row)
 
-        # Render groups in the canonical order defined by _MATCH_SOURCE_COLORS
-        groups_ordered = [s for s in _MATCH_SOURCE_COLORS if s in ms_groups]
-        groups_extras = sorted(s for s in ms_groups if s not in _MATCH_SOURCE_COLORS)
+        # Render groups in the canonical order defined by MATCH_METHOD_COLORS
+        ordered_methods = [m for m in MATCH_METHOD_COLORS if m in match_methods]
+        extra_methods = sorted(m for m in match_methods if m not in MATCH_METHOD_COLORS)
 
-        total_added = 0
-        for ms_algorithm in groups_ordered + groups_extras:
-            rows = ms_groups[ms_algorithm]
-            color = _match_source_color(ms_algorithm)
+        total = 0
+        for method in ordered_methods + extra_methods:
+            rows = match_methods[method]
+            color = _match_method_color(method)
 
-            fg = folium.FeatureGroup(name=ms_algorithm, show=True)
+            fg = folium.FeatureGroup(name=method, show=True)
             cluster = folium.plugins.MarkerCluster() if self.cluster_markers else None
             target: folium.FeatureGroup | folium.plugins.MarkerCluster = cluster or fg
 
@@ -349,13 +358,11 @@ class _EgeMap:
 
             fg.add_to(self.map)
             added = len(rows)
-            total_added += added
+            total += added
 
-            logger.info(f"Match-source layer '{ms_algorithm}': {added} marker(s).")
+            logger.info(f"Match-method layer '{method}': {added} marker(s).")
 
-        logger.info(
-            f"Total: {total_added} markers across {len(ms_groups)} match-source layer(s)."
-        )
+        logger.info(f"Total: {total} markers via {len(match_methods)} match method(s).")
 
     def _build_popup_html(self, row: pd.Series) -> str:
         """Build the full HTML popup table for a single marker row.
@@ -438,21 +445,21 @@ class _EgeMap:
     # LEGEND AND SIDEBAR
     # ---------------------------------------------------
     def _add_legend(self) -> None:
-        """Add the color (`self.match_source_col`) and icon (`self.fuel_col`) legends."""
-        algo_colors: dict[str, str] = {}
+        """Add the color (`self.match_method_col`) and icon (`self.fuel_col`) legends."""
+        method_colors: dict[str, str] = {}
         fuel_icons: dict[str, str] = {}
         fallback = pd.Series("unknown", dtype=object)
 
-        algo_counts: Counter[str] = Counter()
+        method_counts: Counter[str] = Counter()
         fuel_counts: Counter[str] = Counter()
 
         for df in self.dfs:
-            # tally match source algorithms
-            for val in df.get(self.match_source_col, fallback).dropna().unique():
-                algo_colors.setdefault(strip_lower_str(val), _match_source_color(val))
+            # tally match methods
+            for val in df.get(self.match_method_col, fallback).dropna().unique():
+                method_colors.setdefault(strip_lower_str(val), _match_method_color(val))
 
-            algo_counts.update(
-                df.get(self.match_source_col, fallback).dropna().map(strip_lower_str)
+            method_counts.update(
+                df.get(self.match_method_col, fallback).dropna().map(strip_lower_str)
             )
 
             # tally fueltypes
@@ -465,7 +472,7 @@ class _EgeMap:
 
         # Format "key"/"k" as "label (count)"
         used_algos = {
-            f"{k} ({algo_counts[k]})": color for k, color in algo_colors.items()
+            f"{k} ({method_counts[k]})": color for k, color in method_colors.items()
         }
         used_fuels = {f"{k} ({fuel_counts[k]})": icon for k, icon in fuel_icons.items()}
 
@@ -522,16 +529,16 @@ class _EgeMap:
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-def _match_source_color(source: Any) -> str:
-    """Find a color for a folium marker depending on a given `match_source` value.
+def _match_method_color(method: Any) -> str:
+    """Find a color for a folium marker depending on a given `match_method` value.
 
     Args:
-        source (Any): match_source value.
+        method (Any): match_method value.
 
     Returns:
-        str: Color defined by `match_source` value. Defaults to _DEFAULT_COLOR ("lightgray").
+        str: Color defined by `match_method` value. Defaults to DEFAULT_COLOR ("lightgray").
     """
-    return _MATCH_SOURCE_COLORS.get(strip_lower_str(source), _DEFAULT_COLOR)
+    return MATCH_METHOD_COLORS.get(strip_lower_str(method), DEFAULT_COLOR)
 
 
 def _fueltype_icon(fueltype: Any) -> str:
@@ -541,16 +548,16 @@ def _fueltype_icon(fueltype: Any) -> str:
         fueltype (Any): Fuel type value.
 
     Returns:
-        str: Icon defined by fuel type value. Defaults to _DEFAULT_ICON ("bolt").
+        str: Icon defined by fuel type value. Defaults to DEFAULT_ICON ("bolt").
     """
     key = strip_lower_str(fueltype)
     if not key:
-        return _DEFAULT_ICON
+        return DEFAULT_ICON
 
-    for fragment, icon in _FUEL_ICONS.items():
+    for fragment, icon in FUEL_ICONS.items():
         if fragment in key:
             return icon
-    return _DEFAULT_ICON
+    return DEFAULT_ICON
 
 
 def _geometry_summary(geom: Any) -> str:

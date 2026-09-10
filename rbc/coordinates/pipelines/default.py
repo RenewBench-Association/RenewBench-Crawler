@@ -6,6 +6,7 @@ import pandas as pd
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
+from rbc.coordinates.mappings import SYSOP_NAME_COL
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.utils.values import strip_str
 
@@ -122,6 +123,6 @@ class DefaultPipeline(BasePipeline):
             base = " ".join(full_tokens).strip()
             return base or None
 
-        return df[self.sysop_name_col].map(
+        return df[SYSOP_NAME_COL].map(
             lambda v: f"name_base:{k}" if (k := _base_key(v)) else None
         )
