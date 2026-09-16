@@ -110,7 +110,10 @@ class GridRegridder(ABC):
         self.max_level = max_level
         self.variables = variables
         self.years = sorted(years)
-        self.months = months or [f"{i:02d}" for i in range(1, 13)]
+        # Sorted, like years: the store's time axis can only be extended
+        # forwards, so tasks have to run chronologically whatever order the
+        # caller passed them in. Zero-padded, so a plain sort is chronological.
+        self.months = sorted(months) if months else [f"{i:02d}" for i in range(1, 13)]
         self.dry_run = dry_run
         self.resume = resume
 
@@ -188,7 +191,8 @@ class GridRegridder(ABC):
         Override only if a source genuinely needs a different task shape.
 
         Returns:
-            list[tuple]: Ordered list of (year, month) tuples.
+            list[tuple]: (year, month) tuples in chronological order, since
+                the destination store's time axis only extends forwards.
         """
         return [(year, month) for year in self.years for month in self.months]
 

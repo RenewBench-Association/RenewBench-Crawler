@@ -274,6 +274,32 @@ class TestGetTasks:
 
         assert tasks == [(2024, "01"), (2024, "02"), (2025, "01"), (2025, "02")]
 
+    def test_tasks_are_chronological_regardless_of_input_order(
+        self, base_args: dict
+    ) -> None:
+        """Years and months are sorted, so tasks always run oldest-first.
+
+        The store's time axis can only be extended forwards, so an
+        out-of-order run would otherwise fail partway through.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        base_args["years"] = [2025, 2024]
+        base_args["months"] = ["03", "01", "02"]
+        rg = _ConcreteRegridder(**base_args)
+
+        tasks = GridRegridder._get_tasks(rg)
+
+        assert tasks == [
+            (2024, "01"),
+            (2024, "02"),
+            (2024, "03"),
+            (2025, "01"),
+            (2025, "02"),
+            (2025, "03"),
+        ]
+
     def test_months_default_to_all_twelve(self, base_args: dict) -> None:
         """When months is not provided, all 12 zero-padded months are used.
 
