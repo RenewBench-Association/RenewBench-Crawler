@@ -22,6 +22,19 @@ from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 # ("level", "level_1", ...) -- see _resolve_vertical_dim().
 _VERTICAL_DIMS = ("level", "height", "model_level")
 
+# Target uncompressed bytes per Zarr chunk. Chunks are otherwise inherited
+# from the incoming dask array, which for GRIB sources is one monolithic
+# chunk per month (cfgrib doesn't chunk natively) -- that overruns the
+# codecs' hard 2 GiB buffer limit on anything but the smallest domains
+# ("Codec does not support buffers of > 2147483647 bytes"), and left BARRA2
+# only just under it at 1.7 GB.
+_TARGET_CHUNK_BYTES = 64 * 1024**2
+
+# Timesteps per chunk. Divides every real month length (hourly months are
+# multiples of 24, 20-minute months multiples of 72), so a month written as
+# one region always starts on a chunk boundary.
+_TIME_CHUNK = 24
+
 
 class HealpixZarrWriter:
     """Writes regridded HEALPix pyramids into per-(model, time_res, level) Zarr stores.
@@ -184,9 +197,9 @@ class HealpixZarrWriter:
             (variable,) = ds.data_vars
             store_path = self._store_path(model_name, time_res, level)
             level_start = time.time()
-            zarr_encoding = {
-                variable: {**(encoding or {}), "compressors": self.compressors}
-            }
+            var_encoding: dict = {**(encoding or {}), "compressors": self.compressors}
+            var_encoding["chunks"] = self._chunk_shape(ds[variable], var_encoding)
+            zarr_encoding = {variable: var_encoding}
 
             if self._store_exists(store_path):
                 existing = xr.open_zarr(store_path, consolidated=False)
@@ -331,6 +344,40 @@ class HealpixZarrWriter:
         """
         return ds.transpose(
             "time", "level", "height", "model_level", "cell", missing_dims="ignore"
+        )
+
+    def _chunk_shape(self, da: xr.DataArray, encoding: dict) -> tuple[int, ...]:
+        """Return a chunk shape bounded by `_TARGET_CHUNK_BYTES`.
+
+        Chunks the time axis into `_TIME_CHUNK` blocks, keeps vertical levels
+        whole (there are few of them, and they're usually read together), and
+        splits "cell" to fit the remaining budget. Sized from the *encoded*
+        dtype, since that's what the codec actually sees.
+
+        Args:
+            da (xr.DataArray): The variable about to be written, already in
+                the contract's dimension order.
+            encoding (dict): This variable's encoding, read for its "dtype"
+                when the variable is packed.
+
+        Returns:
+            tuple[int, ...]: Chunk size per dimension, in `da.dims` order.
+        """
+        itemsize = np.dtype(encoding.get("dtype", da.dtype)).itemsize
+        sizes = dict(da.sizes)
+        time_chunk = min(_TIME_CHUNK, sizes.get("time", 1))
+
+        vertical = 1
+        for dim, size in sizes.items():
+            if dim != "time" and dim != "cell":
+                vertical *= size
+
+        budget = _TARGET_CHUNK_BYTES // (itemsize * time_chunk * vertical)
+        cell_chunk = max(1, min(budget, sizes.get("cell", 1)))
+
+        return tuple(
+            time_chunk if dim == "time" else cell_chunk if dim == "cell" else sizes[dim]
+            for dim in da.dims
         )
 
     def _extend_time_axis(

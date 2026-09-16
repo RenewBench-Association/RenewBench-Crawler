@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+import dask.array as dsa
 import numpy as np
 import pandas as pd
 import pytest
@@ -580,6 +581,90 @@ class TestCompression:
         """
         with pytest.raises(ValueError, match="Unknown compressor"):
             HealpixZarrWriter(base_dir=tmp_path, min_level=4, compressor="lz4")
+
+
+# ----------------------------------
+# HealpixZarrWriter._chunk_shape
+# ----------------------------------
+class TestChunkShape:
+    """Tests for HealpixZarrWriter._chunk_shape().
+
+    Chunks are otherwise inherited from the incoming dask array, which for
+    GRIB sources is one monolithic chunk per month -- that overran the
+    codecs' 2 GiB buffer limit on real ICON data.
+    """
+
+    CODEC_LIMIT = 2**31 - 1
+
+    @pytest.mark.parametrize(
+        "dims, shape, dtype",
+        [
+            (("time", "cell"), (744, 1_500_000), "float32"),
+            (("time", "model_level", "cell"), (744, 10, 12_582_912), "float32"),
+            (("time", "cell"), (744, 560_472), "int32"),
+            (("time", "level", "cell"), (744, 3, 560_472), "int32"),
+        ],
+        ids=["icon_eu", "icon_global_model_level", "barra2_packed", "barra2_plev"],
+    )
+    def test_stays_under_the_codec_buffer_limit(
+        self, writer: HealpixZarrWriter, dims: tuple, shape: tuple, dtype: str
+    ) -> None:
+        """Every real-world shape produces chunks well under 2 GiB.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+            dims (tuple): Dimension names.
+            shape (tuple): Array shape.
+            dtype (str): Encoded dtype.
+        """
+        # dask, so these real-world shapes cost no memory to describe
+        da = xr.DataArray(dsa.zeros(shape, chunks=shape, dtype="float64"), dims=dims)
+
+        chunks = writer._chunk_shape(da, {"dtype": dtype})
+
+        assert np.prod(chunks) * np.dtype(dtype).itemsize < self.CODEC_LIMIT
+
+    def test_chunks_time_and_keeps_vertical_whole(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Time is blocked, vertical levels stay whole, cell absorbs the rest.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        da = xr.DataArray(np.zeros((744, 3, 100_000)), dims=("time", "level", "cell"))
+
+        t_chunk, lev_chunk, cell_chunk = writer._chunk_shape(da, {"dtype": "float32"})
+
+        assert t_chunk == 24
+        assert lev_chunk == 3  # kept whole
+        assert 0 < cell_chunk <= 100_000
+
+    def test_small_arrays_are_not_over_chunked(self, writer: HealpixZarrWriter) -> None:
+        """An array smaller than the budget is written as a single chunk.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        da = xr.DataArray(np.zeros((3, 5)), dims=("time", "cell"))
+
+        assert writer._chunk_shape(da, {"dtype": "float64"}) == (3, 5)
+
+    def test_encoded_dtype_drives_the_budget(self, writer: HealpixZarrWriter) -> None:
+        """Packing to a narrower dtype allows proportionally more cells per chunk.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        da = xr.DataArray(
+            dsa.zeros((744, 5_000_000), chunks=(744, 5_000_000)), dims=("time", "cell")
+        )
+
+        wide = writer._chunk_shape(da, {"dtype": "float64"})[1]
+        narrow = writer._chunk_shape(da, {"dtype": "int16"})[1]
+
+        # 4x, give or take integer-division rounding
+        assert narrow == pytest.approx(wide * 4, rel=1e-6)
 
 
 # ----------------------------------
