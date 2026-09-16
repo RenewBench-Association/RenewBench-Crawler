@@ -209,3 +209,22 @@ class IconDreamRegridder(GridRegridder):
                 (icon_dream/mappings.py's own table, reversed).
         """
         return _SHORT_TO_CANONICAL
+
+    def encoding_for(self, variable: str) -> dict | None:
+        """Store ICON-DREAM as float32, the precision its source files actually carry.
+
+        GRIB packs per message (its own reference value and scale per
+        timestep/level), so there's no file-wide scale_factor/add_offset to
+        reuse the way BARRA2's NetCDF has. Confirmed on real data instead:
+        the messages are 16-bit (`bitsPerValue: 16`, binary scale 2**-10) and
+        cfgrib decodes them to float32 -- the float64 that would otherwise be
+        written is purely an artefact of regridding, carrying no information.
+
+        Args:
+            variable (str): Canonical variable name (unused -- every
+                ICON-DREAM variable comes from the same GRIB decoding path).
+
+        Returns:
+            dict | None: {"dtype": "float32"}.
+        """
+        return {"dtype": "float32"}

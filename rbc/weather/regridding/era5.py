@@ -226,3 +226,22 @@ class Era5Regridder(GridRegridder):
             dict[str, str]: Mapping of cfgrib variable names to canonical names.
         """
         return VARIABLE_MAPPING
+
+    def encoding_for(self, variable: str) -> dict | None:
+        """Store ERA5 as float32, the precision its source files actually carry.
+
+        GRIB packs per message (its own reference value and scale per
+        timestep/level), so there's no file-wide scale_factor/add_offset to
+        reuse the way BARRA2's NetCDF has. Confirmed on real data instead:
+        the messages are 16-bit (`bitsPerValue: 16`, binary scale 2**-9) and
+        cfgrib decodes them to float32 -- the float64 that would otherwise be
+        written is purely an artefact of regridding, carrying no information.
+
+        Args:
+            variable (str): Canonical variable name (unused -- every ERA5
+                variable comes from the same GRIB decoding path).
+
+        Returns:
+            dict | None: {"dtype": "float32"}.
+        """
+        return {"dtype": "float32"}

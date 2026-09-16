@@ -385,3 +385,28 @@ class TestVariableMapping:
         known = ALL_SINGLE_LEVEL_VARIABLES | ALL_PRESSURE_LEVEL_VARIABLES
         unknown = set(VARIABLE_MAPPING.values()) - known
         assert not unknown, f"Unknown canonical names: {unknown}"
+
+
+# ----------------------------------
+# Era5Regridder.encoding_for
+# ----------------------------------
+class TestEncodingFor:
+    """Tests for Era5Regridder.encoding_for()."""
+
+    def test_stores_float32(self, base_args: dict) -> None:
+        """ERA5 is written as float32, the precision cfgrib decodes from GRIB.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        rg = Era5Regridder(**base_args)
+        assert rg.encoding_for("2m_temperature") == {"dtype": "float32"}
+
+    def test_same_for_pressure_level_variables(self, base_args: dict) -> None:
+        """Pressure-level variables come from the same decoding path.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
+        """
+        rg = Era5Regridder(**base_args)
+        assert rg.encoding_for("temperature") == {"dtype": "float32"}

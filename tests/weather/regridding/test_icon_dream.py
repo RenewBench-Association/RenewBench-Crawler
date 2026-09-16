@@ -497,3 +497,30 @@ class TestVariableMapping:
         """The two DWD codes confirmed against real sample data map correctly."""
         assert _SHORT_TO_CANONICAL["T_2M"] == "2m_temperature"
         assert _SHORT_TO_CANONICAL["T"] == "temperature"
+
+
+# ----------------------------------
+# IconDreamRegridder.encoding_for
+# ----------------------------------
+class TestEncodingFor:
+    """Tests for IconDreamRegridder.encoding_for()."""
+
+    @pytest.mark.parametrize("model", ["global", "eu"])
+    def test_stores_float32(self, model: str, base_args: dict) -> None:
+        """ICON-DREAM is written as float32, the precision cfgrib decodes from GRIB.
+
+        Args:
+            model (str): Model variant under test.
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        rg = IconDreamRegridder(model=model, **base_args)
+        assert rg.encoding_for("2m_temperature") == {"dtype": "float32"}
+
+    def test_same_for_model_level_variables(self, base_args: dict) -> None:
+        """Model-level variables come from the same decoding path.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        rg = IconDreamRegridder(model="global", **base_args)
+        assert rg.encoding_for("temperature") == {"dtype": "float32"}

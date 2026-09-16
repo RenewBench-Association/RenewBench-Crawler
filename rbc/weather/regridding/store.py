@@ -229,7 +229,13 @@ class HealpixZarrWriter:
         )
 
     def already_written(self, model_name: str, time_res: str, level: int) -> set:
-        """Return timestamps already present in a (model, time_res, level) store.
+        """Return the timestamps a (model, time_res, level) store's time axis spans.
+
+        This is the store-wide axis, not a per-variable record: since
+        variables are NaN-padded to a shared time range, a timestamp here
+        doesn't mean every variable has data for it. `GridRegridder`'s
+        checkpoint, keyed by `(year, month, variable)`, is what actually
+        tracks regridded work.
 
         Args:
             model_name (str): Contract "model_name".
@@ -237,8 +243,8 @@ class HealpixZarrWriter:
             level (int): HEALPix level.
 
         Returns:
-            set: `pandas.Timestamp` values already written; empty if the
-                store doesn't exist yet.
+            set: `pandas.Timestamp` values on the store's time axis; empty if
+                the store doesn't exist yet.
         """
         store_path = self._store_path(model_name, time_res, level)
         if not self._store_exists(store_path):
