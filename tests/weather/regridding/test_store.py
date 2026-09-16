@@ -38,6 +38,38 @@ def _make_ds(
     )
 
 
+def _make_level_pyramid(
+    start: int,
+    n: int,
+    levels: list[float],
+    name: str = "T",
+    dim: str = "level",
+    healpix_level: int = 4,
+) -> dict[int, xr.Dataset]:
+    """Build a single-level pyramid whose variable carries a vertical dimension.
+
+    Args:
+        start (int): First time index value.
+        n (int): Number of timesteps.
+        levels (list[float]): Vertical coordinate values.
+        name (str): Data variable name. Defaults to "T".
+        dim (str): Vertical dimension name. Defaults to "level".
+        healpix_level (int): Pyramid level to key the dict by.
+
+    Returns:
+        dict[int, xr.Dataset]: Pyramid with one level.
+    """
+    ds = xr.Dataset(
+        {name: (("time", dim, "cell"), np.random.rand(n, len(levels), 5))},
+        coords={
+            "time": np.arange(start, start + n),
+            dim: np.asarray(levels, dtype=float),
+        },
+        attrs={"healpix_level": healpix_level, "healpix_order": "ring"},
+    )
+    return {healpix_level: ds}
+
+
 def _make_pyramid(
     levels: list[int], start: int, n: int, **attrs
 ) -> dict[int, xr.Dataset]:
@@ -548,6 +580,280 @@ class TestCompression:
         """
         with pytest.raises(ValueError, match="Unknown compressor"):
             HealpixZarrWriter(base_dir=tmp_path, min_level=4, compressor="lz4")
+
+
+# ----------------------------------
+# HealpixZarrWriter — shared time axis across variables
+# ----------------------------------
+def _named(pyramid: dict[int, xr.Dataset], name: str) -> dict[int, xr.Dataset]:
+    """Rename a pyramid's single data variable.
+
+    Args:
+        pyramid (dict[int, xr.Dataset]): Pyramid to rename.
+        name (str): New variable name.
+
+    Returns:
+        dict[int, xr.Dataset]: Pyramid with the variable renamed.
+    """
+    return {lvl: ds.rename_vars({"T": name}) for lvl, ds in pyramid.items()}
+
+
+class TestSharedTimeAxis:
+    """Tests for growing the store-wide time axis across several variables.
+
+    "time" is one dimension shared by every variable, so it has to grow for
+    all of them together. Extending it while writing only one variable left
+    the others short and made the whole store unopenable -- these cover that
+    directly, since it breaks any store with 2+ variables on its 2nd month.
+    """
+
+    def test_two_variables_across_two_months(self, writer: HealpixZarrWriter) -> None:
+        """Every variable stays full length across a second month.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        for name in ("tas", "clt"):
+            writer.append(
+                "era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), name)
+            )
+        for name in ("tas", "clt"):
+            writer.append(
+                "era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), name)
+            )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert list(opened["time"].values) == [0, 1, 2, 3, 4]
+        assert opened["tas"].sizes["time"] == 5
+        assert opened["clt"].sizes["time"] == 5
+        assert not opened["tas"].isnull().any()
+        assert not opened["clt"].isnull().any()
+
+    def test_store_stays_readable_between_variables(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Mid-month, before every variable is filled, the store still opens.
+
+        The old failure mode left the store unopenable at exactly this point,
+        which also broke the next variable's own consistency check.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        for name in ("tas", "clt"):
+            writer.append(
+                "era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), name)
+            )
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened.sizes["time"] == 5
+        assert not opened["tas"].isnull().any()
+        assert bool(opened["clt"].isel(time=slice(3, 5)).isnull().all())
+
+    def test_variable_added_later_is_backfilled_with_nan(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """A variable added after the fact spans the store's full range.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas"))
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "clt"))
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["clt"].sizes["time"] == 5
+        assert bool(opened["clt"].isel(time=slice(0, 3)).isnull().all())
+        assert not opened["clt"].isel(time=slice(3, 5)).isnull().any()
+
+    def test_backfilling_a_nan_gap_is_allowed(self, writer: HealpixZarrWriter) -> None:
+        """A month a variable skipped can be filled in afterwards.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas"))
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "clt"))
+
+        writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "clt"))
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert not opened["clt"].isnull().any()
+
+    def test_out_of_order_month_raises(self, writer: HealpixZarrWriter) -> None:
+        """Timestamps before the store's range need inserting, so they're refused.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
+
+        with pytest.raises(ValueError, match="chronological order"):
+            writer.append(
+                "era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas")
+            )
+
+
+# ----------------------------------
+# HealpixZarrWriter — vertical dimensions
+# ----------------------------------
+class TestVerticalDims:
+    """Tests for vertical-dimension resolution across differing level sets.
+
+    A store holds one coordinate array per dimension name, so variables
+    whose level sets differ (confirmed on real BARRA2 data: "ta" on
+    [1000, 950] but "ua" on [1000]) need numbered siblings.
+    """
+
+    def test_fresh_store_keeps_base_name(self, writer: HealpixZarrWriter) -> None:
+        """The first leveled variable in a store uses the plain base name.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0, 950.0])
+        )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["T"].dims == ("time", "level", "cell")
+        assert list(opened["level"].values) == [1000.0, 950.0]
+
+    def test_identical_level_sets_share_coordinate(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """Two variables with the same levels share one coordinate.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0, 950.0])
+        )
+        writer.append(
+            "era5",
+            "1h",
+            (2025, 1),
+            _make_level_pyramid(0, 3, [1000.0, 950.0], name="U"),
+        )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["T"].dims == ("time", "level", "cell")
+        assert opened["U"].dims == ("time", "level", "cell")
+        assert "level_1" not in opened.sizes
+
+    def test_differing_level_set_gets_numbered_sibling(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """A variable on different levels gets its own coordinate.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0, 950.0])
+        )
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0], name="U")
+        )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["T"].dims == ("time", "level", "cell")
+        assert opened["U"].dims == ("time", "level_1", "cell")
+        assert list(opened["level"].values) == [1000.0, 950.0]
+        assert list(opened["level_1"].values) == [1000.0]
+
+    def test_third_level_set_gets_next_sibling(self, writer: HealpixZarrWriter) -> None:
+        """A third distinct level set allocates the next free name.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0, 950.0])
+        )
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0], name="U")
+        )
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [900.0], name="V")
+        )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["V"].dims == ("time", "level_2", "cell")
+        assert list(opened["level_2"].values) == [900.0]
+
+    def test_height_resolved_independently_of_level(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """A "height" dim gets its own numbering, unaffected by "level".
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append(
+            "era5",
+            "1h",
+            (2025, 1),
+            _make_level_pyramid(0, 3, [50.0, 100.0], dim="height"),
+        )
+        writer.append(
+            "era5",
+            "1h",
+            (2025, 1),
+            _make_level_pyramid(0, 3, [100.0], name="U", dim="height"),
+        )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["T"].dims == ("time", "height", "cell")
+        assert opened["U"].dims == ("time", "height_1", "cell")
+        assert "level" not in opened.sizes
+
+    def test_matching_sibling_is_reused_not_duplicated(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """A level set matching an existing sibling reuses it instead of allocating.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0, 950.0])
+        )
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0], name="U")
+        )
+        writer.append(
+            "era5", "1h", (2025, 1), _make_level_pyramid(0, 3, [1000.0], name="V")
+        )
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert opened["U"].dims == ("time", "level_1", "cell")
+        assert opened["V"].dims == ("time", "level_1", "cell")
+        assert "level_2" not in opened.sizes
 
 
 # ----------------------------------
