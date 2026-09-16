@@ -2,10 +2,16 @@
 
 Source: API (https://overpass-turbo.eu/)
 Data foundation: OpenStreetMap (https://www.openstreetmap.org)
+
+Note: The last two OVERPASS_URLS currently always return a "406 Client Error". The community
+has enforced bans on large requests made by non-custom user agents (e.g. "Mozilla/...")
+https://community.openstreetmap.org/t/overpass-api-performance-issues/140598/74
+Despite the definition and lots of variants tried, none seems to work.
 """
 
 import json
 import re
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -53,7 +59,8 @@ def query_osm_country_plants(
     """Queries Overpass API for power plants in a specific country.
 
     Strategy: Search for area by its ISO 3166-1 alpha-2 tag first and retry using the OSM
-    relation ID only if alpha-code search returned nothing (this does not raise an error).
+    relation ID if that search failed or returned nothing. If both fail, a stale JSON
+    cache from an earlier run is the last resort (this does not raise an error).
     By default, the result is cached as ``overpass_<CC>_plants.parquet`` inside
     ``cache_dir`` and loaded from there on subsequent calls.
 
@@ -79,9 +86,7 @@ def query_osm_country_plants(
         cache_path = Path(cache_dir, f"overpass_{country_code}_plants.json")
 
         if not force_update:
-            if (
-                parquet_path.is_file()
-            ):  # Fast: local parquet (processed df, loads in ms)
+            if parquet_path.is_file():  # Fast: local parquet (proc df, loads in ms)
                 df_parquet = _load_parquet(parquet_path)
                 if df_parquet is not None and len(df_parquet) > 0:
                     return df_parquet
@@ -98,7 +103,7 @@ def query_osm_country_plants(
                         return df_cached
 
     logger.info(
-        f"No cached OSM data found for '{country_code}' (or running in update/live mode): "
+        f"No cached OSM data found for '{country_code}' or running in update/live mode: "
         f"Querying the Overpass API now (this may take a while)..."
     )
 
@@ -107,18 +112,18 @@ def query_osm_country_plants(
     data = post_overpass(query=_build_query(area_clause), label=country_code)
 
     # --- Attempt 2: osm country relation ID fallback ------------------------------
-    if data is not None and not data.get("elements"):
+    if data is None:
         rel_id = COUNTRY_OSM_RELATION_ID_MAP.get(country_code)
         if rel_id is not None:
             logger.warning(
-                f"ISO3166-1 lookup returned 0 elements for '{country_code}'; "
+                f"ISO3166-1 lookup for '{country_code}' failed or returned 0 elements; "
                 f"retrying via OSM relation {rel_id}."
             )
             area_clause = _id_area(relation_id=rel_id)
             data = post_overpass(query=_build_query(area_clause), label=str(rel_id))
         else:
             logger.error(
-                f"ISO3166-1 lookup returned 0 elements for '{country_code}' and "
+                f"ISO3166-1 lookup for '{country_code}' failed or returned 0 elements and "
                 "no relation ID is registered. Add one to COUNTRY_OSM_RELATION_ID_MAP!"
             )
 
@@ -157,29 +162,37 @@ def query_osm_country_plants(
 # Post query
 # ---------------------------------------------------------------------------
 def post_overpass(query: str, label: str) -> dict | None:
-    """Post a query to the OSM Overpass Turbo API endpoints in order, return on first success.
+    """Post a query to each Overpass endpoint in turn, return the first usable answer.
+
+    Moves on to the next endpoint after a network or server error, a runtime error in
+    the remark, or an answer without elements (the last two arrive with HTTP 200). A
+    rejected query (HTTP 400) stops right away, since it would fail everywhere.
 
     Args:
         query (str): Overpass QL query.
         label (str): Label for identification used in log messages (e.g. the country code).
 
     Returns:
-        dict | None: Parsed Overpass response, or None if every endpoint failed.
+        dict | None: Parsed Overpass response (with elements), or None if every endpoint
+            failed or the query was rejected.
     """
     for endpoint in OVERPASS_URLS:
+        log_str = f"Overpass endpoint '{endpoint}' request for '{label}'"
         try:
+            tick = time.perf_counter()
             response = requests.post(
                 endpoint,
                 data={"data": query},
                 headers=HEADER,
                 timeout=OVERPASS_CLIENT_TIMEOUT,
             )
+            tock = time.perf_counter()
+            time_str = f"{tock - tick:.2f}s"
 
             # if query syntax error (400): will fail for all URLs, so quit immediately
             if response.status_code == 400:
                 logger.error(
-                    f"Overpass rejected the query for '{label}' (HTTP 400). "
-                    f"Body: {response.text[:500]}"
+                    f"{log_str} was rejected (HTTP 400): {response.text[:500]}"
                 )
                 return None
 
@@ -188,23 +201,30 @@ def post_overpass(query: str, label: str) -> dict | None:
 
             n_elements = len(data.get("elements", []))
             remark = str(data.get("remark", ""))
+            remark_str = "." if not remark else f" (remark: {remark})."
 
             # some server issues: code=200 + n_elements=0 + remark="runtime error..." → catch!
             if "error" in remark.lower():
                 logger.warning(
-                    f"Overpass endpoint '{endpoint}' returned {n_elements} elements and "
-                    f"failed for '{label}': {remark}"
+                    f"{log_str} failed in {time_str}: {remark}. Trying next endpoint..."
+                )
+                continue  # try the next endpoint
+
+            if n_elements == 0:
+                logger.warning(
+                    f"{log_str} returned 0 elements in {time_str}"
+                    + remark_str
+                    + " Trying next endpoint..."
                 )
                 continue  # try the next endpoint
 
             logger.info(
-                f"Overpass endpoint '{endpoint}' returned {n_elements} elements "
-                f"for '{label}'."
+                f"{log_str} returned {n_elements} elements in {time_str}" + remark_str
             )
             return data
 
         except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Overpass endpoint '{endpoint}' failed for '{label}': {e}")
+            logger.warning(f"{log_str} failed: {e}")
 
     return None
 
