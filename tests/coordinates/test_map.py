@@ -13,7 +13,6 @@ from rbc.coordinates.map import (
     DEFAULT_ICON,
     _EgeMap,
     _fueltype_icon,
-    _geometry_summary,
     _match_method_color,
     build_map,
 )
@@ -369,42 +368,6 @@ class TestEGEMapMarkers:
         assert "Plant A" in html
         assert html.count("Plant A") == 1  # only the header, not a "name" row too
 
-    def test_add_geometry_overlay(self, make_ege_map: Callable) -> None:
-        """Happy path: a valid Polygon geometry is drawn as a GeoJson overlay.
-
-        Args:
-            make_ege_map (Callable): Factory fixture for `_EgeMap`.
-        """
-        df = pd.DataFrame({"name": ["A"], "lat": [1.0], "lon": [1.0]})
-        ege_map = make_ege_map([df])
-        row = pd.Series(
-            {"osm.geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 1]]]}}
-        )
-
-        ege_map._add_geometry_overlay(row, color="blue", tooltip="tip")
-
-        assert any(
-            isinstance(c, folium.GeoJson) for c in ege_map.map._children.values()
-        )
-
-    def test_add_geometry_overlay_skipped_when_missing(
-        self, make_ege_map: Callable
-    ) -> None:
-        """Failure path: no overlay is added when `osm_geometry` is missing.
-
-        Args:
-            make_ege_map (Callable): Factory fixture for `_EgeMap`.
-        """
-        df = pd.DataFrame({"name": ["A"], "lat": [1.0], "lon": [1.0]})
-        ege_map = make_ege_map([df])
-        row = pd.Series({"name": "A"})
-
-        ege_map._add_geometry_overlay(row, color="blue", tooltip="tip")
-
-        assert not any(
-            isinstance(c, folium.GeoJson) for c in ege_map.map._children.values()
-        )
-
 
 class TestEGEMapLegendSidebar:
     """Tests for the EGE map class' legend and sidebar methods."""
@@ -517,34 +480,3 @@ class TestHelpers:
             expected (str): Expected icon name returned by `_fueltype_icon`.
         """
         assert _fueltype_icon(fueltype) == expected
-
-    @pytest.mark.parametrize(
-        "geom, expected",
-        [
-            (None, "—"),
-            (float("nan"), "—"),
-            (
-                {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1]]]},
-                "Polygon (3 pts)",
-            ),
-            (
-                {"type": "Point", "coordinates": [4.1, 52.2]},
-                "Point (4.10000, 52.20000)",
-            ),
-            (
-                '{"type": "Point", "coordinates": [1.0, 2.0]}',
-                "Point (1.00000, 2.00000)",
-            ),
-            ("not valid json", "not valid json"),
-        ],
-    )
-    def test_geometry_summary(
-        self, geom: dict | str | float | None, expected: str
-    ) -> None:
-        """Happy + failure paths: dict/JSON-string/invalid/missing geometry values handled.
-
-        Args:
-            geom (dict | str | float | None): Parametrized `osm_geometry` value under test.
-            expected (str): Expected human-readable summary from `_geometry_summary`.
-        """
-        assert _geometry_summary(geom) == expected

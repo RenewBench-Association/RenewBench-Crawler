@@ -19,7 +19,6 @@ Usage
 """
 
 import html as _html
-import json
 import tempfile
 import webbrowser
 from collections import Counter
@@ -119,7 +118,6 @@ def build_map(
 
     Each matched EGE is rendered as a clickable pin. Clicking a pin opens a popup table
     that lists every column in the DataFrame, with URL-like columns as clickable hyperlinks.
-    When an `osm.geometry` polygon exists, it is also drawn as a transparent overlay.
 
     Args:
         dfs: A list of DataFrames as returned by `<...>Pipeline.run_pipeline()`.
@@ -351,7 +349,6 @@ class _EgeMap:
                     tooltip=tooltip_text,
                     icon=folium.Icon(color=color, icon=icon, prefix="fa"),
                 ).add_to(target)
-                self._add_geometry_overlay(row, color, tooltip_text)
 
             if cluster is not None:
                 cluster.add_to(fg)
@@ -382,10 +379,6 @@ class _EgeMap:
             if col == self.name_col:
                 continue
 
-            if col == "osm.geometry":
-                rows_html.append(tpl.popup_row_html(col, _geometry_summary(val)))
-                continue
-
             if is_missing(val):
                 continue
 
@@ -407,39 +400,6 @@ class _EgeMap:
             rows_html.append(tpl.popup_row_html(col, display))
 
         return tpl.popup_table_html(ege_name, "".join(rows_html))
-
-    def _add_geometry_overlay(self, row: pd.Series, color: str, tooltip: str) -> None:
-        """Draw an OSM polygon/polyline on the map when geometry data is present.
-
-        Args:
-            row (pd.Series): Single marker row.
-            color (str): Name of color for polygon/polyline.
-            tooltip (str): Text for tooltip (pop-up box).
-        """
-        geom = row.get("osm.geometry")
-        if is_missing(geom):
-            return
-        if isinstance(geom, str):
-            try:
-                geom = json.loads(geom)
-            except (json.JSONDecodeError, ValueError):
-                return
-        if not isinstance(geom, dict) or geom.get("type") not in (
-            "Polygon",
-            "LineString",
-        ):
-            return
-
-        folium.GeoJson(
-            data=geom,
-            style_function=lambda _, c=color: {
-                "color": c,
-                "weight": 2,
-                "fillOpacity": 0.12,
-                "fillColor": c,
-            },
-            tooltip=tooltip,
-        ).add_to(self.map)
 
     # ---------------------------------------------------
     # LEGEND AND SIDEBAR
@@ -558,36 +518,6 @@ def _fueltype_icon(fueltype: Any) -> str:
         if fragment in key:
             return icon
     return DEFAULT_ICON
-
-
-def _geometry_summary(geom: Any) -> str:
-    """Provide a short, human-readable description of an ``osm.geometry`` value.
-
-    Args:
-        geom (Any): GeoJSON geometry value to be described.
-
-    Returns:
-        str: Description of the ``osm.geometry`` value.
-    """
-    if is_missing(geom):
-        return "—"
-
-    if isinstance(geom, str):
-        try:
-            geom = json.loads(geom)
-        except (json.JSONDecodeError, ValueError):
-            return str(geom)[:60]
-
-    if isinstance(geom, dict):
-        gtype = geom.get("type", "?")
-        coords = geom.get("coordinates", [])
-        if gtype == "Polygon" and coords:
-            return f"Polygon ({len(coords[0])} pts)"
-        if gtype == "Point" and len(coords) >= 2:
-            return f"Point ({coords[0]:.5f}, {coords[1]:.5f})"
-        return gtype
-
-    return "—"
 
 
 def open_map_in_browser(file_path: Path | str) -> None:

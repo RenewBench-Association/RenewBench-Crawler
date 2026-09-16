@@ -98,7 +98,6 @@ def eia_pipeline(eia_input_dir: Path, tmp_path: Path) -> DefaultPipeline:
                 "OSM_ID": "osm-x",
                 "OSM_Type": "way",
                 "OSM_URL": "",
-                "OSM_Geometry": "",
             }
         ]
     )

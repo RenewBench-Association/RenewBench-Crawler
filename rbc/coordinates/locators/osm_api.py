@@ -44,7 +44,6 @@ OUT_COLUMNS = [
     "OSM_ID",
     "OSM_Type",
     "OSM_URL",
-    "OSM_Geometry",
     "Status",
     "Capacity",
 ]
@@ -270,7 +269,7 @@ def _build_query(area_clause: str) -> str:
       // Historic / decommissioned / planned EGEs
     {inactive_queries}
     );
-    out body geom center;
+    out body center;
     """
 
 
@@ -342,7 +341,7 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
         if not name_variants:  # only continue if element (EGE) has a name!
             continue
 
-        (lat, lon), geometry = _parse_spatial_data(el)
+        lat, lon = _parse_coordinates(el)
         osm_id = el.get("id")
         osm_type = str(el.get("type", ""))  # node, way or relation
         osm_url = f"https://www.openstreetmap.org/{osm_type}/{osm_id}"
@@ -360,7 +359,6 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
             "OSM_ID": osm_id,
             "OSM_Type": osm_type,
             "OSM_URL": osm_url,
-            "OSM_Geometry": geometry,
             "Status": status,
             "Capacity": capa,
         }
@@ -436,57 +434,22 @@ def _is_name_key(key: str) -> bool:
     return name in _NAME_KEYS and bool(sep) and bool(_LANGUAGE_SUFFIX.match(suffix))
 
 
-def _parse_spatial_data(
-    el: dict,
-) -> tuple[tuple[float | None, float | None], dict | None]:
-    """Extract centroid and GeoJSON geometry from an OSM element in one go.
+def _parse_coordinates(el: dict) -> tuple[float | None, float | None]:
+    """Extract an OSM element's coordinates (nodes: own; ways/relations: ``center``).
 
     Args:
         el (dict): The OSM data element.
 
     Returns:
-        tuple:
-            - tuple(lat (float), lon (float)): Tuple of floats, or (None, None) if not found.
-            - geojson (dict): Dictionary representing the GeoJSON geometry, or None.
+        tuple[float | None, float | None]: (lat, lon), or (None, None) if not found.
     """
-    osm_type = str(el.get("type", "")).lower()
-
-    # 1. Handle "ways" / "relations" data elements → list of points in 'geometry'
-    geometry = el.get("geometry")
-    if isinstance(geometry, list) and geometry:
-        coords = []
-        lat_sum, lon_sum = 0.0, 0.0
-
-        for p in geometry:
-            if isinstance(p, dict):
-                lat, lon = p.get("lat"), p.get("lon")
-                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-                    coords.append([float(lon), float(lat)])
-                    lat_sum += float(lat)
-                    lon_sum += float(lon)
-
-        if coords:
-            num_points = len(coords)
-            centroid = (lat_sum / num_points, lon_sum / num_points)
-
-            if osm_type in {"way", "relation"} and num_points >= 3:
-                if coords[0] != coords[-1]:  # if polygon is open, close it
-                    coords.append(coords[0])
-                return centroid, {"type": "Polygon", "coordinates": [coords]}
-
-            return centroid, {"type": "LineString", "coordinates": coords}
-
-    # 2. Handle "nodes" / "out center" API queries → single point in 'center' or 'lat'/'lon'
-    center = el.get("center", {}) if isinstance(el.get("center"), dict) else {}
-    lat = center.get("lat", el.get("lat"))
-    lon = center.get("lon", el.get("lon"))
+    center = el.get("center")
+    point = center if isinstance(center, dict) else el  # nodes have lat/lon themselves
+    lat, lon = point.get("lat"), point.get("lon")
 
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-        lat, lon = float(lat), float(lon)
-        return (lat, lon), {"type": "Point", "coordinates": [lon, lat]}
-
-    # 3. Handle missing spatial data
-    return (None, None), None
+        return float(lat), float(lon)
+    return None, None
 
 
 # ---------------------------------------------------------------------------

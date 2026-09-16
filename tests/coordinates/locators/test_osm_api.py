@@ -11,6 +11,7 @@ import pytest
 from rbc.coordinates.locators.osm_api import (
     OVERPASS_URLS,
     _elements_to_df,
+    _parse_coordinates,
     post_overpass,
     query_osm_country_plants,
 )
@@ -277,3 +278,34 @@ class TestElementsToDf:
         df = _elements_to_df({"elements": [EGE, untagged, unnamed]})
 
         assert list(df["Name"]) == ["Usina A"]
+
+
+# ----------------------------------
+# Tests - _parse_coordinates
+# ----------------------------------
+class TestParseCoordinates:
+    """Tests for _parse_coordinates."""
+
+    @pytest.mark.parametrize(
+        "element, expected",
+        [
+            pytest.param({"type": "node", "lat": 44.48, "lon": 28.27}, (44.48, 28.27)),
+            pytest.param(
+                {"type": "way", "center": {"lat": 45.02, "lon": 24.70}, "nodes": [1]},
+                (45.02, 24.70),
+            ),
+            pytest.param({"type": "relation", "members": []}, (None, None)),
+        ],
+        ids=["node-own-position", "way-center", "no-coordinates"],
+    )
+    def test_parse_coordinates(self, element: dict, expected: tuple) -> None:
+        """Happy + failure paths: nodes use their own position, ways their `center`.
+
+        Nodes carry `lat` / `lon` themselves, while ways and relations only get a
+        `center` from Overpass. Elements with neither return (None, None).
+
+        Args:
+            element (dict): OSM element, as Overpass returns it for `out body center;`.
+            expected (tuple): Expected (lat, lon).
+        """
+        assert _parse_coordinates(element) == expected

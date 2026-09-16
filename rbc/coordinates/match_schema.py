@@ -73,7 +73,7 @@ OSM_ADAPTER = LocatorAdapter(
     country_col=None,  # no country column; relies on the matrix-level filter
     status_col="Status",
     url_col="OSM_URL",
-    extra_cols=("OSM_Type", "OSM_Geometry"),
+    extra_cols=("OSM_Type",),
 )
 
 # locator adapters ordered by their reliability score
@@ -286,7 +286,7 @@ class MatchResult:
         if self.top_matches:
             for cand, score in self.top_matches:
                 locator = cand.source
-                # extras (e.g. OSM geometry blobs) and country are noise for review
+                # extras (e.g. OSM element type) and country are noise for review
                 extras = {
                     f"{locator}.{k.removeprefix('OSM_').lower()}" for k in cand.extras
                 }

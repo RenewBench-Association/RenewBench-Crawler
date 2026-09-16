@@ -137,7 +137,6 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
                 "OSM_ID": "osm-x",
                 "OSM_Type": "way",
                 "OSM_URL": "",
-                "OSM_Geometry": "",
             }
         ]
     )
