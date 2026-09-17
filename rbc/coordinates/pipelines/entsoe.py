@@ -8,6 +8,7 @@ import pandas as pd
 import rbc.coordinates.locators.eic_registry as eic
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import SYSOP_CODE_COL, SYSOP_NAME_COL
 from rbc.coordinates.matcher import NameMatcher
@@ -44,9 +45,8 @@ class EntsoePipeline(BasePipeline):
         output_dir: Path | None = None,
         gem_loc: GEMLocator | None = None,
         ppm_loc: PPMLocator | None = None,
+        osm_loc: OverpassLocator | None = None,
         eic_reg: EICCodeRegistry | None = None,
-        osm_update: bool = False,
-        osm_live: bool = False,
     ) -> None:
         """Initializes the child class for the Entsoe pipeline.
 
@@ -59,22 +59,18 @@ class EntsoePipeline(BasePipeline):
             ppm_loc (PPMLocator, optional): Pre-built PPM locator to reuse the pan-European
                 PPM CSV or global OSMPP CSV. Defaults to None, in which case a new locator
                 is built.
+            osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse.
+                Defaults to None, in which case a new locator is built.
             eic_reg (EICCodeRegistry, optional): Pre-built EIC directory registry to reuse
                 and fetch the W_eicCodes.csv. Defaults to None, in which case a new
                 instance is constructed.
-            osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
-                ``overpass_..._plants.parquet`` file even if it already exists.
-                Corresponds to the ``--update`` / ``-u`` CLI flag.
-            osm_live (bool): Query Overpass live on every run, ignoring and not writing
-                any local file.  Corresponds to the ``--live`` CLI flag.
         """
         super().__init__(
             input_dir=input_dir,
             output_dir=output_dir,
             gem_loc=gem_loc,
             ppdb_loc=ppm_loc,
-            osm_update=osm_update,
-            osm_live=osm_live,
+            osm_loc=osm_loc,
         )
 
         self.eic_reg: EICCodeRegistry | None = (

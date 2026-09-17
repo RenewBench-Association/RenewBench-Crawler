@@ -66,7 +66,7 @@ def parse_arguments() -> Namespace:
         action="store_true",
         help=(
             "Re-fetch OSM power plant data from Overpass API and overwrite the local "
-            "overpass_..._plants.parquet file, even if it already exists."
+            "overpass_<CC>.parquet and .json files, even if they already exist."
         ),
     )
     parser.add_argument(

@@ -22,7 +22,7 @@ import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.osm_api import query_osm_country_plants
+from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import (
@@ -77,8 +77,7 @@ class BasePipeline:
         output_dir: Path | None,
         gem_loc: GEMLocator | None,
         ppdb_loc: PPMLocator | OSMPPLocator | None,
-        osm_update: bool = False,
-        osm_live: bool = False,
+        osm_loc: OverpassLocator | None = None,
     ) -> None:
         """Initialize BasePipeline class.
 
@@ -90,11 +89,9 @@ class BasePipeline:
                 GEM is disabled.
             ppdb_loc (PPMLocator | OSMPPLocator optional): Pre-built locator to reuse the
                 European PPM CSV or global OSMPP CSV. If None, CSV-based location is disabled.
-            osm_update (bool): Re-fetch OSM data from the Overpass and overwrite the local
-                ``overpass_..._plants.parquet`` file even if it already exists.
-                Corresponds to the ``--update`` / ``-u`` CLI flag.
-            osm_live (bool): Query Overpass live on every run, ignoring and not writing
-                any local file. Corresponds to the ``--live`` CLI flag.
+            osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse
+                (loads each country only once per run). If None, a new locator is built
+                that caches its files in ``output_dir``.
 
         Raises:
             TypeError: If this class is instantiated instead of using a subclass.
@@ -126,8 +123,6 @@ class BasePipeline:
             else input_dir.name
         )
 
-        self.osm_update = osm_update
-        self.osm_live = osm_live
         if not self.input_dir.is_dir():
             raise ValueError(f"Input directory '{input_dir}' is not a directory!")
 
@@ -195,10 +190,14 @@ class BasePipeline:
             }
         )
 
-        # Pre-build expensive-to-construct items: locators, dfs
+        # Pre-build expensive-to-construct items: locators
         self.gem_loc: GEMLocator | None = gem_loc
         self.ppdb_loc: PPMLocator | OSMPPLocator | None = ppdb_loc
-        self.osm_df = pd.DataFrame()  # loaded later if required as very I/O expensive!
+        self.osm_loc: OverpassLocator = (
+            osm_loc
+            if osm_loc is not None
+            else OverpassLocator(cache_dir=self.output_dir)
+        )
 
         logger.info(
             f"{type(self).__name__} initialized for '{self.sysop}' ({self.country})\n"
@@ -422,20 +421,18 @@ class BasePipeline:
         """
         self._create_match_method_columns(df)
 
-        # OSM Dataframe: only fetch once and only for pipelines that use this step.
-        if self.country_code and self.osm_df.empty:
-            self.osm_df = query_osm_country_plants(
-                self.country_code,
-                cache_dir=self.input_dir,
-                force_update=self.osm_update,
-                live=self.osm_live,
-            )
+        # build OSM dataframe of this country (the locator loads each country only once)
+        osm_df = (
+            self.osm_loc.get_country_df(self.country_code)
+            if self.country_code
+            else pd.DataFrame()
+        )
 
         matcher = NameMatcher(
             country=self.country,
             gem_locator=self.gem_loc,
             ppdb_locator=self.ppdb_loc,
-            osm_df=self.osm_df if len(self.osm_df) > 0 else None,
+            osm_df=osm_df if len(osm_df) > 0 else None,
             tok=self.tok,
             style_policy=self.name_str_style,
         )

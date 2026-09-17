@@ -8,6 +8,7 @@ import pytest
 
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.pipelines import build_shared_locators, make_pipeline
@@ -77,6 +78,25 @@ class TestMakePipeline:
         pipeline = make_pipeline(input_dir=entsoe_zone_dir)
         assert isinstance(pipeline, EntsoePipeline)
 
+    @pytest.mark.parametrize("input_dir_fix", ["eia_dir", "entsoe_zone_dir"])
+    def test_use_osm_loc(
+        self, input_dir_fix: str, request: pytest.FixtureRequest
+    ) -> None:
+        """Happy path: both pipelines use the given (shared) Overpass locator.
+
+        If a pipeline built its own locator instead, every directory would load its
+        country again, and `--update` / `--live` would be ignored.
+
+        Args:
+            input_dir_fix (str): Name of the directory fixture (default or entsoe).
+            request (pytest.FixtureRequest): Pytest-provided request to get the fixture.
+        """
+        osm_loc = OverpassLocator()
+        pipeline = make_pipeline(
+            input_dir=request.getfixturevalue(input_dir_fix), osm_loc=osm_loc
+        )
+        assert pipeline.osm_loc is osm_loc
+
 
 class TestBuildSharedLocators:
     """Test the 'build_shared_locators' function."""
@@ -86,6 +106,7 @@ class TestBuildSharedLocators:
         shared = build_shared_locators(source="eia", gem_dir=None, output_dir=None)
         assert isinstance(shared.ppdb_loc, OSMPPLocator)
         assert isinstance(shared.gem_loc, GEMLocator)
+        assert isinstance(shared.osm_loc, OverpassLocator)
         assert shared.eic_reg is None
 
     def test_entsoe_pipeline(self) -> None:
@@ -93,5 +114,24 @@ class TestBuildSharedLocators:
         shared = build_shared_locators(source="entsoe", gem_dir=None, output_dir=None)
         assert isinstance(shared.ppdb_loc, PPMLocator)
         assert isinstance(shared.gem_loc, GEMLocator)
+        assert isinstance(shared.osm_loc, OverpassLocator)
         assert shared.eic_reg is not None
         assert isinstance(shared.eic_reg, EICCodeRegistry)
+
+    def test_osm_flags_reach_overpass_locator(self, tmp_path: Path) -> None:
+        """Happy path: the CLI's update/live flags and the output dir reach the locator.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory, used as `output_dir`.
+        """
+        shared = build_shared_locators(
+            source="eia",
+            gem_dir=None,
+            output_dir=tmp_path,
+            osm_update=True,
+            osm_live=True,
+        )
+        assert shared.osm_loc is not None
+        assert shared.osm_loc.cache_dir == tmp_path
+        assert shared.osm_loc.update is True
+        assert shared.osm_loc.live is True

@@ -10,10 +10,10 @@ import pytest
 
 from rbc.coordinates.locators.osm_api import (
     OVERPASS_URLS,
+    OverpassLocator,
     _elements_to_df,
     _parse_coordinates,
     post_overpass,
-    query_osm_country_plants,
 )
 
 # Overpass reports server-side failures as HTTP 200 with the error only in "remark"
@@ -59,7 +59,7 @@ def _cached_parquet(cache_dir: Path, name: str) -> Path:
     Returns:
         Path: Path of the written parquet file.
     """
-    parquet_path = Path(cache_dir, "overpass_BR_plants.parquet")
+    parquet_path = Path(cache_dir, "overpass_BR.parquet")
     pd.DataFrame({"Name": [name]}).to_parquet(parquet_path, index=False)
     return parquet_path
 
@@ -136,10 +136,10 @@ class TestPostOverpass:
 
 
 # ----------------------------------
-# Tests - query_osm_country_plants (caching)
+# Tests - OverpassLocator (loading & caching)
 # ----------------------------------
-class TestQueryOsmCountryPlants:
-    """Tests for query_osm_country_plants' cache handling and area fallback."""
+class TestOverpassLocator:
+    """Tests for OverpassLocator's caching, area fallback and once-per-run loads."""
 
     def test_all_endpoints_failing_uses_stale_cache(self, tmp_path: Path) -> None:
         """Failure path: if every endpoint errors in update mode, the old JSON is used.
@@ -150,14 +150,14 @@ class TestQueryOsmCountryPlants:
         Args:
             tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
         """
-        Path(tmp_path, "overpass_BR_plants.json").write_text(
+        Path(tmp_path, "overpass_BR.json").write_text(
             json.dumps({"elements": [EGE]}), encoding="utf-8"
         )
         failed = _overpass_response({"elements": [], "remark": TIMEOUT_REMARK})
 
         with patch("rbc.coordinates.locators.osm_api.requests.post") as mock_post:
             mock_post.return_value = failed
-            df = query_osm_country_plants("BR", cache_dir=tmp_path, force_update=True)
+            df = OverpassLocator(cache_dir=tmp_path, update=True).get_country_df("BR")
 
         assert list(df["Name"]) == ["Usina A"]
         assert mock_post.call_count == 2 * len(OVERPASS_URLS)  # ISO + relation lookups
@@ -171,12 +171,12 @@ class TestQueryOsmCountryPlants:
         _cached_parquet(tmp_path, name="Cached Plant")
 
         with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
-            df = query_osm_country_plants("BR", cache_dir=tmp_path)
+            df = OverpassLocator(cache_dir=tmp_path).get_country_df("BR")
 
         assert list(df["Name"]) == ["Cached Plant"]
         mock_post.assert_not_called()
 
-    def test_force_update_refetches_and_overwrites(self, tmp_path: Path) -> None:
+    def test_update_refetches_and_overwrites(self, tmp_path: Path) -> None:
         """Happy path: update mode ignores the cache, then replaces parquet and JSON.
 
         Args:
@@ -187,11 +187,11 @@ class TestQueryOsmCountryPlants:
 
         with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
             mock_post.return_value = response
-            df = query_osm_country_plants("BR", cache_dir=tmp_path, force_update=True)
+            df = OverpassLocator(cache_dir=tmp_path, update=True).get_country_df("BR")
 
         assert list(df["Name"]) == ["Usina A"]
         assert list(pd.read_parquet(parquet_path)["Name"]) == ["Usina A"]
-        json_path = Path(tmp_path, "overpass_BR_plants.json")
+        json_path = Path(tmp_path, "overpass_BR.json")
         assert json.loads(json_path.read_text(encoding="utf-8")) == response
 
     def test_live_reads_and_writes_no_files(self, tmp_path: Path) -> None:
@@ -204,7 +204,7 @@ class TestQueryOsmCountryPlants:
 
         with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
             mock_post.return_value = {"elements": [EGE]}
-            df = query_osm_country_plants("BR", cache_dir=tmp_path, live=True)
+            df = OverpassLocator(cache_dir=tmp_path, live=True).get_country_df("BR")
 
         assert list(df["Name"]) == ["Usina A"]
         assert list(tmp_path.iterdir()) == [parquet_path]
@@ -218,10 +218,41 @@ class TestQueryOsmCountryPlants:
         """
         with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
             mock_post.side_effect = [None, {"elements": [EGE]}]
-            df = query_osm_country_plants("BR")
+            df = OverpassLocator().get_country_df("BR")
 
         assert list(df["Name"]) == ["Usina A"]
         assert "area(3600059470)" in mock_post.call_args_list[1].kwargs["query"]
+
+    @pytest.mark.parametrize(
+        "answer, expected_calls",
+        [
+            pytest.param({"elements": [EGE]}, 1),
+            pytest.param(None, 2),  # ISO lookup + relation-ID retry, both failed
+        ],
+        ids=["successful-load", "failed-load"],
+    )
+    def test_country_loaded_once_per_run(
+        self, answer: dict | None, expected_calls: int
+    ) -> None:
+        """Happy + failure paths: repeated requests for a country reuse the first load.
+
+        Directories of the same country (e.g. 1h and 15min data, or several bidding
+        zones) must not query Overpass again. Failed loads are kept too, so they aren't
+        retried.
+
+        Args:
+            answer (dict | None): What `post_overpass` returns for every query.
+            expected_calls (int): Number of queries the first load needs.
+        """
+        locator = OverpassLocator()
+
+        with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
+            mock_post.return_value = answer
+            first = locator.get_country_df("BR")
+            second = locator.get_country_df("br")  # country codes are case-insensitive
+
+        assert second is first
+        assert mock_post.call_count == expected_calls
 
 
 # ----------------------------------

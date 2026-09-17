@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.pipelines.default import DefaultPipeline
 
@@ -86,20 +87,24 @@ def eia_pipeline(eia_input_dir: Path, tmp_path: Path) -> DefaultPipeline:
                 ),
             ),
         ),
-    )
-    # skip the live Overpass call by pre-populating osm_df (before _step_fuzzy_match)
-    pipeline.osm_df = pd.DataFrame(
-        [
-            {
-                "Name": "Unrelated OSM Plant",
-                "Fueltype": "Coal",
-                "lat": 10.0,
-                "lon": 10.0,
-                "OSM_ID": "osm-x",
-                "OSM_Type": "way",
-                "OSM_URL": "",
-            }
-        ]
+        osm_loc=cast(
+            OverpassLocator,
+            SimpleNamespace(
+                get_country_df=lambda country_code: pd.DataFrame(
+                    [
+                        {
+                            "Name": "Unrelated OSM Plant",
+                            "Fueltype": "Coal",
+                            "lat": 10.0,
+                            "lon": 10.0,
+                            "OSM_ID": "osm-x",
+                            "OSM_Type": "way",
+                            "OSM_URL": "",
+                        }
+                    ]
+                )
+            ),
+        ),
     )
     return pipeline
 

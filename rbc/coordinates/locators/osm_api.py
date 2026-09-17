@@ -49,112 +49,158 @@ OUT_COLUMNS = [
 ]
 
 
-def query_osm_country_plants(
-    country_code: str,
-    cache_dir: Path | str | None = None,
-    force_update: bool = False,
-    live: bool = False,
-) -> pd.DataFrame:
-    """Queries Overpass API for power plants in a specific country.
+class OverpassLocator:
+    """Coordinate locator using the OSM Overpass API.
 
-    Strategy: Search for area by its ISO 3166-1 alpha-2 tag first and retry using the OSM
-    relation ID if that search failed or returned nothing. If both fail, a stale JSON
-    cache from an earlier run is the last resort (this does not raise an error).
-    By default, the result is cached as ``overpass_<CC>_plants.parquet`` inside
-    ``cache_dir`` and loaded from there on subsequent calls.
+    Meant to be built once per run and shared across all directories of that run, so
+    directories of the same country (e.g. 1h and 15min data, or several bidding zones)
+    reuse one load instead of querying Overpass again. Failed loads (empty DataFrames)
+    are kept too, so a country whose fetch failed isn't retried within the same run.
 
-    Args:
-        country_code (str): ISO 3166-1 alpha-2 country code.
-        cache_dir (Path | str | None, optional): Directory for the local OSM power
-            plant files.  When provided a `.parquet` file is written on the first
-            successful fetch and read back on all subsequent calls.
-        force_update (bool): Ignore any existing local file and re-fetch from
-            Overpass, then overwrite it.  Corresponds to `--update`.
-        live (bool): Query Overpass directly without reading or writing any local
-            file. Corresponds to `--live`.
-
-    Returns:
-        pd.DataFrame: DataFrame of power plants in given country.
+    Attributes:
+        cache_dir (Path | None): Directory of the ``overpass_<CC>.*`` files.
+            If None, no local files are read or written.
+        update (bool): Ignore existing local files, re-fetch from Overpass and overwrite
+            them. Corresponds to the ``--update`` / ``-u`` CLI flag.
+        live (bool): Query Overpass without reading or writing any local file.
+            Corresponds to the ``--live`` CLI flag.
     """
-    country_code = country_code.upper()
-    cache_path: Path | None = None
-    parquet_path: Path | None = None
 
-    if not live and cache_dir is not None:
-        parquet_path = Path(cache_dir, f"overpass_{country_code}_plants.parquet")
-        cache_path = Path(cache_dir, f"overpass_{country_code}_plants.json")
+    def __init__(
+        self, cache_dir: Path | None = None, update: bool = False, live: bool = False
+    ) -> None:
+        """Initialize the Overpass locator (no data is loaded until it's requested).
 
-        if not force_update:
-            if parquet_path.is_file():  # Fast: local parquet (proc df, loads in ms)
-                df_parquet = _load_parquet(parquet_path)
-                if df_parquet is not None and len(df_parquet) > 0:
-                    return df_parquet
+        Args:
+            cache_dir (Path | None, optional): Directory for the local Overpass files.
+                Defaults to None, in which case no local files are read or written.
+            update (bool, optional): Ignore existing local files, re-fetch from Overpass
+                and overwrite them. Defaults to False.
+            live (bool, optional): Query Overpass without reading or writing any local
+                file. Defaults to False.
+        """
+        self.cache_dir = cache_dir
+        self.update = update
+        self.live = live
+        self._country_dfs: dict[str, pd.DataFrame] = {}  # loaded EGEs per country code
 
-            if cache_path.is_file():  # Fallback: raw JSON cache (re-parse on load)
-                cached = _load_cached_overpass(cache_path)
-                if isinstance(cached, dict):
-                    df_cached = _elements_to_df(cached)
-                    if len(df_cached) > 0:
-                        logger.info(
-                            f"Loaded {len(df_cached)} OSM rows from JSON cache for "
-                            f"country '{country_code}'."
-                        )
-                        return df_cached
+    # ------------------------------------------------------------------
+    # Internal helpers for initialization
+    # ------------------------------------------------------------------
+    def _load(self, country_code: str) -> pd.DataFrame:
+        """Load a country's EGEs from local files or the Overpass API.
 
-    logger.info(
-        f"No cached OSM data found for '{country_code}' or running in update/live mode: "
-        f"Querying the Overpass API now (this may take a while)..."
-    )
+        Unless in update or live mode, uses the local parquet / json file.
+        Otherwise, query Overpass by the ISO 3166-1 alpha-2 tag first (``country_code``) and
+        retry using the OSM relation ID if the initial search failed or returned nothing.
+        If both fail, a stale JSON file from an earlier run is the last resort.
+        Successful queries are saved to the cache_dir as ``overpass_<CC>.parquet`` & ``.json``
+        (except in live mode).
 
-    # --- Attempt 1: ISO alpha-2 tag lookup ----------------------------------------
-    area_clause = _code_area(iso_alpha_code=country_code)
-    data = post_overpass(query=_build_query(area_clause), label=country_code)
+        Args:
+            country_code (str): ISO 3166-1 alpha-2 country code (uppercase).
 
-    # --- Attempt 2: osm country relation ID fallback ------------------------------
-    if data is None:
-        rel_id = COUNTRY_OSM_RELATION_ID_MAP.get(country_code)
-        if rel_id is not None:
-            logger.warning(
-                f"ISO3166-1 lookup for '{country_code}' failed or returned 0 elements; "
-                f"retrying via OSM relation {rel_id}."
-            )
-            area_clause = _id_area(relation_id=rel_id)
-            data = post_overpass(query=_build_query(area_clause), label=str(rel_id))
-        else:
-            logger.error(
-                f"ISO3166-1 lookup for '{country_code}' failed or returned 0 elements and "
-                "no relation ID is registered. Add one to COUNTRY_OSM_RELATION_ID_MAP!"
-            )
+        Returns:
+            pd.DataFrame: EGEs in the country (one row per name variant), or an empty
+                DataFrame if every source failed.
+        """
+        cache_path: Path | None = None
+        parquet_path: Path | None = None
 
-    if data is not None:
-        df = _elements_to_df(data)
+        if not self.live and self.cache_dir is not None:
+            parquet_path = Path(self.cache_dir, f"overpass_{country_code}.parquet")
+            cache_path = Path(self.cache_dir, f"overpass_{country_code}.json")
 
-        if len(df) > 0 and not live:
-            if parquet_path is not None:
-                _save_parquet(parquet_path, df)
-            if cache_path is not None:
-                _save_cached_overpass(cache_path, data)
+            if not self.update:
+                if parquet_path.is_file():  # Fast: local parquet (proc df, loads in ms)
+                    df_parquet = _load_parquet(parquet_path)
+                    if df_parquet is not None and len(df_parquet) > 0:
+                        return df_parquet
 
-        logger.info(f"Built {len(df)} OSM rows for '{country_code}'.")
-        return df
+                if cache_path.is_file():  # Fallback: raw JSON cache (re-parse on load)
+                    cached = _load_cached_overpass(cache_path)
+                    if isinstance(cached, dict):
+                        df_cached = _elements_to_df(cached)
+                        if len(df_cached) > 0:
+                            logger.info(
+                                f"Loaded {len(df_cached)} OSM rows from JSON cache for "
+                                f"country '{country_code}'."
+                            )
+                            return df_cached
 
-    # --- Stale cache as last resort -------------------------------------------
-    if not live and cache_path is not None and cache_path.exists():
-        cached = _load_cached_overpass(cache_path)
-        if isinstance(cached, dict):
-            df_cached = _elements_to_df(cached)
-            if len(df_cached) > 0:
+        logger.info(
+            f"No cached OSM data found for '{country_code}' or running in update/live mode: "
+            "Querying the Overpass API now (this may take a while)..."
+        )
+
+        # --- Attempt 1: ISO alpha-2 tag lookup ----------------------------------------
+        area_clause = _code_area(iso_alpha_code=country_code)
+        data = post_overpass(query=_build_query(area_clause), label=country_code)
+
+        # --- Attempt 2: osm country relation ID fallback ------------------------------
+        if data is None:
+            rel_id = COUNTRY_OSM_RELATION_ID_MAP.get(country_code)
+            if rel_id is not None:
                 logger.warning(
-                    f"All Overpass endpoints failed for '{country_code}'. "
-                    "Using stale cached OSM data."
+                    f"ISO3166-1 lookup for '{country_code}' failed or returned 0 "
+                    f"elements; retrying via OSM relation {rel_id}."
                 )
-                return df_cached
+                area_clause = _id_area(relation_id=rel_id)
+                data = post_overpass(query=_build_query(area_clause), label=str(rel_id))
+            else:
+                logger.error(
+                    f"ISO3166-1 lookup for '{country_code}' failed or returned 0 "
+                    "elements and no relation ID is registered. Add one to "
+                    "COUNTRY_OSM_RELATION_ID_MAP!"
+                )
 
-    logger.error(
-        f"All Overpass endpoints failed for country '{country_code}', "
-        "and no usable cache was found."
-    )
-    return pd.DataFrame(columns=OUT_COLUMNS)  # empty df
+        if data is not None:
+            df = _elements_to_df(data)
+
+            if len(df) > 0 and not self.live:
+                if parquet_path is not None:
+                    _save_parquet(parquet_path, df)
+                if cache_path is not None:
+                    _save_cached_overpass(cache_path, data)
+
+            logger.info(f"Built {len(df)} OSM rows for '{country_code}'.")
+            return df
+
+        # --- Stale cache as last resort -------------------------------------------
+        if not self.live and cache_path is not None and cache_path.exists():
+            cached = _load_cached_overpass(cache_path)
+            if isinstance(cached, dict):
+                df_cached = _elements_to_df(cached)
+                if len(df_cached) > 0:
+                    logger.warning(
+                        f"All Overpass endpoints failed for '{country_code}'. "
+                        "Using stale cached OSM data."
+                    )
+                    return df_cached
+
+        logger.error(
+            f"All Overpass endpoints failed for country '{country_code}', "
+            "and no usable cache was found."
+        )
+        return pd.DataFrame(columns=OUT_COLUMNS)  # empty df
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def get_country_df(self, country_code: str) -> pd.DataFrame:
+        """Get all EGEs of one country, loading them only on the first request.
+
+        Args:
+            country_code (str): ISO 3166-1 alpha-2 country code (case-insensitive).
+
+        Returns:
+            pd.DataFrame: EGEs in the country (one row per name variant), or an empty
+                DataFrame if loading failed.
+        """
+        country_code = country_code.upper()
+        if country_code not in self._country_dfs:
+            self._country_dfs[country_code] = self._load(country_code)
+        return self._country_dfs[country_code]
 
 
 # ---------------------------------------------------------------------------

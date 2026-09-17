@@ -17,9 +17,9 @@ def mock_expensive_network_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace every network-hitting locator/query with mock stand-ins.
 
     Constructing a pipeline can trigger real network I/O in two ways:
-    1. locator classes (PPM, OSMPP, EICCodeRegistry) fetch remote CSVs when instantiated
+    1. Locator classes (PPM, OSMPP, EICCodeRegistry) fetch remote CSVs when instantiated
         -> use `create_autospec` to return something that passes assert statements.
-    2. `query_osm_country_plants` requests an OSM df from the Overpass API
+    2. `OverpassLocator.get_country_df` requests an OSM df from the Overpass API
         -> patch to return an empty DataFrame (can be overwritten when true df is needed).
 
     Args:
@@ -36,6 +36,6 @@ def mock_expensive_network_io(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(
-        "rbc.coordinates.pipelines._base.query_osm_country_plants",
+        "rbc.coordinates.locators.osm_api.OverpassLocator.get_country_df",
         lambda *args, **kwargs: pd.DataFrame(),
     )

@@ -10,6 +10,7 @@ import pytest
 
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.pipelines.entsoe import EntsoePipeline
@@ -56,7 +57,7 @@ def entsoe_input_dir(tmp_path: Path) -> Path:
 def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
     """Returns a real EntsoePipeline for "10YNL----------L", backed by fake locators.
 
-    eic_reg/ppdb_loc/gem_loc are all faked to avoid the real network/CSV fetches
+    eic_reg/ppdb_loc/gem_loc/osm_loc are all faked to avoid the real network/CSV fetches
     their real constructors would otherwise perform, and to keep every
     exact-ID lookup a clean miss so the pipeline falls through to fuzzy
     matching against the fake GEM data.
@@ -113,6 +114,27 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
                 ),
             ),
         ),
+        osm_loc=cast(
+            OverpassLocator,
+            cast(
+                object,
+                SimpleNamespace(
+                    get_country_df=lambda country_code: pd.DataFrame(
+                        [
+                            {
+                                "Name": "Unrelated OSM Plant",
+                                "Fueltype": "Coal",
+                                "lat": 10.0,
+                                "lon": 10.0,
+                                "OSM_ID": "osm-x",
+                                "OSM_Type": "way",
+                                "OSM_URL": "",
+                            }
+                        ]
+                    )
+                ),
+            ),
+        ),
         eic_reg=cast(
             EICCodeRegistry,
             cast(
@@ -125,20 +147,6 @@ def entsoe_pipeline(entsoe_input_dir: Path, tmp_path: Path) -> EntsoePipeline:
                 ),
             ),
         ),
-    )
-    # skip the live Overpass call by pre-populating osm_df (before _step_fuzzy_match)
-    pipeline.osm_df = pd.DataFrame(
-        [
-            {
-                "Name": "Unrelated OSM Plant",
-                "Fueltype": "Coal",
-                "lat": 10.0,
-                "lon": 10.0,
-                "OSM_ID": "osm-x",
-                "OSM_Type": "way",
-                "OSM_URL": "",
-            }
-        ]
     )
     return pipeline
 

@@ -50,7 +50,11 @@ def perform_coordinate_finding(
 
     # Build the expensive (network/CSV/parquet-backed) helper-data locators ONCE and share!
     shared = build_shared_locators(
-        source=source, gem_dir=gem_dir, output_dir=output_dir
+        source=source,
+        gem_dir=gem_dir,
+        output_dir=output_dir,
+        osm_update=update,
+        osm_live=live,
     )
     logger.info(
         f"Initialized shared locators. Now analyzing {len(csv_dirs)} directories...\n--"
@@ -67,9 +71,8 @@ def perform_coordinate_finding(
                 output_dir=output_dir,
                 gem_loc=shared.gem_loc,
                 ppdb_loc=shared.ppdb_loc,
+                osm_loc=shared.osm_loc,
                 eic_reg=shared.eic_reg,
-                osm_update=update,
-                osm_live=live,
             )
             df = cl.run_pipeline()
 

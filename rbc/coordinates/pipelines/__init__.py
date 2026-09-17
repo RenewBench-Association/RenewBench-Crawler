@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
@@ -34,9 +35,8 @@ def make_pipeline(
     output_dir: Path | None = None,
     gem_loc: GEMLocator | None = None,
     ppdb_loc: PPMLocator | OSMPPLocator | None = None,
+    osm_loc: OverpassLocator | None = None,
     eic_reg: EICCodeRegistry | None = None,
-    osm_update: bool = False,
-    osm_live: bool = False,
 ) -> BasePipeline:
     """Build the right pipeline instance (BasePipeline subclass) for `input_dir`.
 
@@ -55,11 +55,8 @@ def make_pipeline(
             None, in which case the resolved pipeline builds its own default.
         eic_reg (EICCodeRegistry, optional): Pre-built EIC directory locator
             to reuse. Only relevant for the entsoe pipeline; ignored otherwise.
-        osm_update (bool): Re-fetch OSM data from Overpass and overwrite the local
-            ``overpass_..._plants.parquet`` file even if it already exists.
-            Corresponds to the ``--update`` / ``-u`` CLI flag.
-        osm_live (bool): Query Overpass live on every run, ignoring and not writing
-            any local file. Corresponds to the ``--live`` CLI flag.
+        osm_loc (OverpassLocator, optional): Pre-built OSM Overpass locator to reuse.
+            Defaults to None, in which case the resolved pipeline builds its own default.
 
     Returns:
         BasePipeline: The concrete pipeline instance for `input_dir`.
@@ -82,9 +79,8 @@ def make_pipeline(
             output_dir=output_dir,
             gem_loc=gem_loc,
             ppm_loc=ppdb_loc,
+            osm_loc=osm_loc,
             eic_reg=eic_reg,
-            osm_update=osm_update,
-            osm_live=osm_live,
         )
 
     if ppdb_loc is not None and not isinstance(ppdb_loc, OSMPPLocator):
@@ -97,8 +93,7 @@ def make_pipeline(
         output_dir=output_dir,
         gem_loc=gem_loc,
         osmpp_loc=ppdb_loc,
-        osm_update=osm_update,
-        osm_live=osm_live,
+        osm_loc=osm_loc,
     )
 
 
@@ -108,11 +103,16 @@ class SharedLocators:
 
     gem_loc: GEMLocator | None
     ppdb_loc: PPMLocator | OSMPPLocator | None
+    osm_loc: OverpassLocator | None
     eic_reg: EICCodeRegistry | None
 
 
 def build_shared_locators(
-    source: str, gem_dir: Path | None, output_dir: Path | None
+    source: str,
+    gem_dir: Path | None,
+    output_dir: Path | None,
+    osm_update: bool = False,
+    osm_live: bool = False,
 ) -> SharedLocators:
     """Build the expensive (network/CSV/parquet-backed) locators shared across one run.
 
@@ -127,7 +127,12 @@ def build_shared_locators(
         gem_dir (Path | None): Path to the manually downloaded GEM data or, if None,
             to use the fallback GEM files from the PyPSA team's cloud storage.
         output_dir (Path | None): Output directory, used as the cache dir for
-            locators that persist a local file (e.g. the EIC directory).
+            locators that persist a local file (e.g. the EIC directory, OSM files).
+        osm_update (bool, optional): Re-fetch OSM data from Overpass (once per country)
+            and overwrite the local files. Corresponds to the ``--update`` / ``-u`` CLI
+            flag. Defaults to False.
+        osm_live (bool, optional): Query Overpass without reading or writing any local
+            file. Corresponds to the ``--live`` CLI flag. Defaults to False.
 
     Returns:
         SharedLocators: The locators to reuse across every directory processed
@@ -147,4 +152,11 @@ def build_shared_locators(
         ppdb_loc = OSMPPLocator()
         eic_reg = None
 
-    return SharedLocators(gem_loc=gem_loc, ppdb_loc=ppdb_loc, eic_reg=eic_reg)
+    osm_loc = OverpassLocator(cache_dir=output_dir, update=osm_update, live=osm_live)
+
+    return SharedLocators(
+        gem_loc=gem_loc,
+        ppdb_loc=ppdb_loc,
+        osm_loc=osm_loc,
+        eic_reg=eic_reg,
+    )
