@@ -32,8 +32,9 @@ _TARGET_CHUNK_BYTES = 64 * 1024**2
 
 # Timesteps per chunk. Divides every real month length (hourly months are
 # multiples of 24, 20-minute months multiples of 72), so a month written as
-# one region always starts on a chunk boundary.
-_TIME_CHUNK = 24
+# one region always starts on a chunk boundary. GridRegridder chunks sources
+# by it too, so dask chunks line up with Zarr chunks.
+TIME_CHUNK = 24
 
 
 class HealpixZarrWriter:
@@ -380,7 +381,7 @@ class HealpixZarrWriter:
     def _chunk_shape(self, da: xr.DataArray, encoding: dict) -> tuple[int, ...]:
         """Return a chunk shape bounded by `_TARGET_CHUNK_BYTES`.
 
-        Chunks the time axis into `_TIME_CHUNK` blocks, keeps vertical levels
+        Chunks the time axis into `TIME_CHUNK` blocks, keeps vertical levels
         whole (there are few of them, and they're usually read together), and
         splits "cell" to fit the remaining budget. Sized from the *encoded*
         dtype, since that's what the codec actually sees.
@@ -396,7 +397,7 @@ class HealpixZarrWriter:
         """
         itemsize = np.dtype(encoding.get("dtype", da.dtype)).itemsize
         sizes = dict(da.sizes)
-        time_chunk = min(_TIME_CHUNK, sizes.get("time", 1))
+        time_chunk = min(TIME_CHUNK, sizes.get("time", 1))
 
         vertical = 1
         for dim, size in sizes.items():

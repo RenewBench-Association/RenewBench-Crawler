@@ -5,6 +5,7 @@ import pickle
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 import xarray as xr
 
@@ -421,6 +422,40 @@ class TestRegrid:
             list(rg.regrid())
 
         assert rg.checkpoint == {}
+
+    def test_regrids_each_time_chunk_once_for_all_levels(self, base_args: dict) -> None:
+        """The source is split into time chunks, each regridded once for all levels.
+
+        Coarser levels derive from the finer ones, so a lazy pyramid would
+        repeat the regrid for every level the writer stores.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        source = xr.Dataset({"var_a": (("time", "x"), np.zeros((48, 3)))})
+        rg = _ConcreteRegridder(tasks=[(2025, "01")], source_ds=source, **base_args)
+        regridded_blocks = []
+
+        def regrid(block: np.ndarray) -> np.ndarray:
+            regridded_blocks.append(block.shape)
+            return block
+
+        def lazy_pyramid(ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
+            meta = np.empty((0, 0))
+            finest = ds.copy(
+                data={"var_a": ds["var_a"].data.map_blocks(regrid, meta=meta)}
+            )
+            return {5: finest, 4: finest / 2}
+
+        with (
+            patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
+            patch.object(rg, "_regrid_chunk", side_effect=lazy_pyramid),
+        ):
+            ((_, pyramid),) = rg.regrid()
+            for ds in pyramid.values():
+                ds.compute()
+
+        assert regridded_blocks == [(24, 3), (24, 3)]
 
 
 # ----------------------------------

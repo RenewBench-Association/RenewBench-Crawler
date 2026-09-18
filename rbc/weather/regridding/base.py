@@ -8,10 +8,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
 
+import dask
 import grid_doctor as gd
 import xarray as xr
 from loguru import logger
 from tqdm.dask import TqdmCallback
+
+from rbc.weather.regridding.store import TIME_CHUNK
 
 
 class GridRegridder(ABC):
@@ -130,8 +133,9 @@ class GridRegridder(ABC):
         per task (from whichever variable is loaded first) and reused for
         every other variable in that task, since they depend only on
         horizontal grid geometry. If `dry_run`, resolves weights but skips
-        regridding and yielding. The caller writes each yielded pyramid via
-        `HealpixZarrWriter.append()`, then calls `mark_done(key)`.
+        regridding and yielding. Each yielded pyramid is computed and held in
+        memory. The caller writes it via `HealpixZarrWriter.append()`, then
+        calls `mark_done(key)`.
 
         Yields:
             tuple[tuple, dict[int, xr.Dataset]]: (key, pyramid) pairs, where
@@ -149,6 +153,10 @@ class GridRegridder(ABC):
                 logger.info(f"Task {key}: loading source data...")
                 ds = self._load_source_chunk(task, variable)
                 ds = self._rename_to_canonical(ds)
+                # Sources open as one chunk per month; time chunks regrid in
+                # parallel and give the progress bar real steps.
+                if "time" in ds.dims:
+                    ds = ds.chunk({"time": TIME_CHUNK})
 
                 if weights is None:
                     logger.info(f"Task {task}: resolving HEALPix weights...")
@@ -167,6 +175,11 @@ class GridRegridder(ABC):
                 )
                 with TqdmCallback(desc=f"Task {key}"):
                     pyramid = self._regrid_chunk(ds, weights)
+                    # Coarser levels derive from the finer ones, so computing
+                    # them in one call runs the regrid once, not once per
+                    # level when the writer stores each.
+                    levels = dask.persist(*pyramid.values())
+                    pyramid = dict(zip(pyramid, levels, strict=True))
                 logger.info(f"Task {key}: regridding complete.")
                 yield key, pyramid
 
