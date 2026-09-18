@@ -120,6 +120,8 @@ class GridRegridder(ABC):
         self.checkpoint_path = Path(checkpoint_path)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint: dict = self._load_checkpoint()
+        # Filled by subclasses' _load_source_chunk(); see quantization_step().
+        self._quantization_steps: dict[str, float | None] = {}
 
     def regrid(self) -> Iterator[tuple[tuple, dict[int, xr.Dataset]]]:
         """Regrid all unfinished (task, variable) pairs, one variable at a time.
@@ -299,6 +301,24 @@ class GridRegridder(ABC):
             dict | None: None by default.
         """
         return None
+
+    def quantization_step(self, variable: str) -> float | None:
+        """Return the source's own precision step for one canonical variable.
+
+        Regridding averages the source's evenly spaced values into arbitrary
+        floats; `HealpixZarrWriter` snaps them back onto this step, dropping
+        mantissa bits the source never carried (measured on regridded float32
+        precipitation: 26.05 -> 13.76 bits/value, error <= half a step).
+        Subclasses record it in `self._quantization_steps` while loading.
+
+        Args:
+            variable (str): Canonical variable name.
+
+        Returns:
+            float | None: The step, or None to write values unchanged -- as
+                for BARRA2, whose int32 packing already rounds onto its step.
+        """
+        return self._quantization_steps.get(variable)
 
     def _get_weights(self, ds: xr.Dataset) -> Path:
         """Compute or load cached HEALPix weights for this source.

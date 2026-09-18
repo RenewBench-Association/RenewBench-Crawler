@@ -11,6 +11,7 @@ import xarray as xr
 
 from rbc.weather.era5.mappings import MODEL_CONFIG
 from rbc.weather.regridding.base import GridRegridder
+from rbc.weather.regridding.grib import grib_quantization_step
 from rbc.weather.utils import raw_data_dir
 
 # Native cfgrib variable name -> canonical name, verified against real sample
@@ -116,6 +117,7 @@ class Era5Regridder(GridRegridder):
                 f"(needed for '{variable}')."
             )
         f = files[0]
+        self._quantization_steps[variable] = grib_quantization_step(f, cfgrib_name)
 
         if level_type == "pl":
             ds = self._open_pressure_level(f)

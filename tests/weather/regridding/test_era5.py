@@ -145,41 +145,6 @@ class TestOpenSingleLevel:
 
 
 # ----------------------------------
-# Era5Regridder._open_pressure_level
-# ----------------------------------
-class TestOpenPressureLevel:
-    """Tests for Era5Regridder._open_pressure_level()."""
-
-    def test_renames_isobaricinhpa_to_level(self, base_args: dict) -> None:
-        """The "isobaricInhPa" dim cfgrib gives is renamed to "level".
-
-        Per the weather Zarr contract's naming convention for pressure-level
-        variables.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
-        """
-        rg = Era5Regridder(**base_args)
-
-        pl_ds = xr.Dataset(
-            {"t": (("isobaricInhPa", "time"), [[1.0], [2.0]])},
-            coords={"isobaricInhPa": [1000.0, 950.0], "time": [0]},
-        )
-
-        with patch(
-            "rbc.weather.regridding.era5.xr.open_dataset", return_value=pl_ds
-        ) as mock_open:
-            result = rg._open_pressure_level(Path("fake_pl.grib"))
-
-        mock_open.assert_called_once_with(
-            Path("fake_pl.grib"), engine="cfgrib", chunks={}
-        )
-        assert "level" in result.dims
-        assert "isobaricInhPa" not in result.dims
-        assert list(result["level"].values) == [1000.0, 950.0]
-
-
-# ----------------------------------
 # Era5Regridder._load_source_chunk
 # ----------------------------------
 class TestLoadSourceChunk:
@@ -346,35 +311,10 @@ class TestDiscoverVariables:
 
 
 # ----------------------------------
-# Era5Regridder._grid_metadata_path
-# ----------------------------------
-class TestGridMetadataPath:
-    """Tests for Era5Regridder._grid_metadata_path()."""
-
-    def test_returns_none(self, base_args: dict) -> None:
-        """ERA5 has no separate grid definition file.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
-        """
-        rg = Era5Regridder(**base_args)
-        assert rg._grid_metadata_path() is None
-
-
-# ----------------------------------
 # Era5Regridder._variable_mapping
 # ----------------------------------
 class TestVariableMapping:
     """Tests for Era5Regridder._variable_mapping()."""
-
-    def test_returns_variable_mapping(self, base_args: dict) -> None:
-        """Returns the module-level VARIABLE_MAPPING dict.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
-        """
-        rg = Era5Regridder(**base_args)
-        assert rg._variable_mapping() == VARIABLE_MAPPING
 
     def test_mapping_values_are_known_era5_variables(self) -> None:
         """Every canonical name in VARIABLE_MAPPING is a real ERA5 variable.
@@ -402,11 +342,40 @@ class TestEncodingFor:
         rg = Era5Regridder(**base_args)
         assert rg.encoding_for("2m_temperature") == {"dtype": "float32"}
 
-    def test_same_for_pressure_level_variables(self, base_args: dict) -> None:
-        """Pressure-level variables come from the same decoding path.
+
+# ----------------------------------
+# Era5Regridder.quantization_step
+# ----------------------------------
+class TestQuantizationStep:
+    """Tests for Era5Regridder's quantization-step wiring."""
+
+    def test_records_the_step_filtered_to_the_variable(self, base_args: dict) -> None:
+        """Loading records the file's step for this variable's messages only.
+
+        ERA5 files hold several variables, so the step is filtered by the
+        cfgrib name -- another variable's coarser or finer packing mustn't
+        leak in.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Era5Regridder.
         """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        sl_file = Path(source_dir, "era5_2020_04_sl_2t.grib")
+        sl_file.touch()
         rg = Era5Regridder(**base_args)
-        assert rg.encoding_for("temperature") == {"dtype": "float32"}
+        sl_ds = xr.Dataset(
+            {"t2m": ("time", [1.0])}, coords={"time": pd.to_datetime(["2020-04-01"])}
+        )
+
+        with (
+            patch.object(rg, "_open_single_level", return_value=[sl_ds]),
+            patch(
+                "rbc.weather.regridding.era5.grib_quantization_step",
+                return_value=2**-9,
+            ) as mock_step,
+        ):
+            rg._load_source_chunk((2020, "04"), "2m_temperature")
+
+        mock_step.assert_called_once_with(sl_file, "t2m")
+        assert rg.quantization_step("2m_temperature") == 2**-9

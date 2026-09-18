@@ -12,6 +12,7 @@ import xarray as xr
 from rbc.weather.icon_dream.downloader import _get_model_config, _normalize_model
 from rbc.weather.icon_dream.mappings import VARIABLE_TO_SHORT_PARAM
 from rbc.weather.regridding.base import GridRegridder
+from rbc.weather.regridding.grib import grib_quantization_step
 from rbc.weather.regridding.regional import build_regional_healpix_pyramid
 from rbc.weather.utils import raw_data_dir
 
@@ -94,6 +95,7 @@ class IconDreamRegridder(GridRegridder):
         label = self.model_config["label"]
         dwd_code = VARIABLE_TO_SHORT_PARAM[variable]
         f = Path(self.source_dir, f"{label}_{year}{month}_{dwd_code}_hourly.grb")
+        self._quantization_steps[variable] = grib_quantization_step(f)
 
         datasets = []
         for ds in cfgrib.open_datasets(f, chunks={}):

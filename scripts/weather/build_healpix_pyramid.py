@@ -215,6 +215,7 @@ def main() -> None:
                 task=key,
                 pyramid=pyramid,
                 encoding=regridder.encoding_for(key[-1]),
+                quantization_step=regridder.quantization_step(key[-1]),
             )
             # Only mark done once the write above actually succeeds.
             regridder.mark_done(key)

@@ -59,6 +59,7 @@ regrid = [
     "zarr",
     "dask[array]",
     "cfgrib",
+    "eccodes",
     "netcdf4",
 ]
 

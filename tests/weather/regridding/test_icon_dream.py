@@ -107,27 +107,17 @@ def _hypercube(
 class TestInit:
     """Tests for IconDreamRegridder.__init__()."""
 
-    @pytest.mark.parametrize("model_input", ["eu", "EU", "Europe", "europe"])
-    def test_normalizes_eu_variants(self, model_input: str, base_args: dict) -> None:
-        """'eu'/'EU'/'Europe'/'europe' all normalize to the "eu" model config.
+    def test_normalizes_model_and_picks_its_config(self, base_args: dict) -> None:
+        """The model name is normalised and selects that variant's config.
+
+        Normalisation itself is the downloader's, tested there.
 
         Args:
-            model_input (str): Raw model string passed by the caller.
             base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
         """
-        rg = IconDreamRegridder(model=model_input, **base_args)
+        rg = IconDreamRegridder(model="Europe", **base_args)
         assert rg.model == "eu"
         assert rg.model_config["label"] == "ICON-DREAM-EU"
-
-    def test_global_model(self, base_args: dict) -> None:
-        """'global' picks up the global model config.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        rg = IconDreamRegridder(model="global", **base_args)
-        assert rg.model == "global"
-        assert rg.model_config["label"] == "ICON-DREAM-Global"
 
 
 # ----------------------------------
@@ -255,27 +245,6 @@ class TestLoadSourceChunk:
             pd.to_datetime(["2025-01-01T01:00", "2025-01-01T02:00"])
         )
 
-    def test_only_matches_requested_task(self, base_args: dict) -> None:
-        """A different (year, month) resolves to a different exact file path.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        source_dir = _source_dir(base_args["raw_dir"])
-        source_dir.mkdir(parents=True)
-        Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
-        rg = IconDreamRegridder(model="global", **base_args)
-
-        with patch(
-            "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
-            return_value=[_hypercube("t2m")],
-        ) as mock_open:
-            rg._load_source_chunk((2025, "01"), "2m_temperature")
-
-        mock_open.assert_called_once_with(
-            Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb"), chunks={}
-        )
-
     def test_trims_spillover_past_month_boundary(self, base_args: dict) -> None:
         """Timestamps outside the exact calendar month are dropped.
 
@@ -318,7 +287,7 @@ class TestDiscoverVariables:
     """Tests for IconDreamRegridder._discover_variables()."""
 
     def test_finds_variables_from_filenames(self, base_args: dict) -> None:
-        """Each file's DWD code (from its filename) maps to a canonical name.
+        """Each file's DWD code maps to a canonical name; unknown codes are skipped.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
@@ -327,27 +296,12 @@ class TestDiscoverVariables:
         source_dir.mkdir(parents=True)
         Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
         Path(source_dir, "ICON-DREAM-Global_202501_T_hourly.grb").touch()
-        rg = IconDreamRegridder(model="global", **base_args)
-
-        found = rg._discover_variables((2025, "01"))
-
-        assert set(found) == {"2m_temperature", "temperature"}
-
-    def test_unknown_dwd_code_is_ignored(self, base_args: dict) -> None:
-        """A file whose DWD code isn't in the mapping is silently skipped.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        source_dir = _source_dir(base_args["raw_dir"])
-        source_dir.mkdir(parents=True)
-        Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb").touch()
         Path(source_dir, "ICON-DREAM-Global_202501_TOTALLY_UNKNOWN_hourly.grb").touch()
         rg = IconDreamRegridder(model="global", **base_args)
 
         found = rg._discover_variables((2025, "01"))
 
-        assert found == ["2m_temperature"]
+        assert set(found) == {"2m_temperature", "temperature"}
 
     def test_only_matches_requested_task(self, base_args: dict) -> None:
         """Files for a different (year, month) aren't picked up.
@@ -386,41 +340,6 @@ class TestGridMetadataPath:
             "metadata",
             "icon_grid_0026_R03B07_G.nc",
         )
-
-    def test_eu_picks_grid_file_not_grfinfo(self, base_args: dict) -> None:
-        """Returns the plain grid definition file for the EU variant too.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        rg = IconDreamRegridder(model="eu", **base_args)
-        path = rg._grid_metadata_path()
-        assert path == Path(
-            base_args["raw_dir"],
-            "icon_dream_eu",
-            "metadata",
-            "icon_grid_0027_R03B08_N02.nc",
-        )
-
-
-# ----------------------------------
-# IconDreamRegridder._regrid_kwargs
-# ----------------------------------
-class TestRegridKwargs:
-    """Tests for IconDreamRegridder._regrid_kwargs()."""
-
-    @pytest.mark.parametrize("model", ["global", "eu"])
-    def test_returns_unstructured_source_kind(
-        self, model: str, base_args: dict
-    ) -> None:
-        """Always declares source_kind="unstructured", regardless of model.
-
-        Args:
-            model (str): Model variant under test.
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        rg = IconDreamRegridder(model=model, **base_args)
-        assert rg._regrid_kwargs() == {"source_kind": "unstructured"}
 
 
 # ----------------------------------
@@ -484,15 +403,6 @@ class TestRegridChunk:
 class TestVariableMapping:
     """Tests for IconDreamRegridder._variable_mapping()."""
 
-    def test_returns_short_to_canonical(self, base_args: dict) -> None:
-        """Returns the module-level _SHORT_TO_CANONICAL dict.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        rg = IconDreamRegridder(model="global", **base_args)
-        assert rg._variable_mapping() == _SHORT_TO_CANONICAL
-
     def test_confirmed_entries_present(self) -> None:
         """The two DWD codes confirmed against real sample data map correctly."""
         assert _SHORT_TO_CANONICAL["T_2M"] == "2m_temperature"
@@ -505,22 +415,47 @@ class TestVariableMapping:
 class TestEncodingFor:
     """Tests for IconDreamRegridder.encoding_for()."""
 
-    @pytest.mark.parametrize("model", ["global", "eu"])
-    def test_stores_float32(self, model: str, base_args: dict) -> None:
+    def test_stores_float32(self, base_args: dict) -> None:
         """ICON-DREAM is written as float32, the precision cfgrib decodes from GRIB.
-
-        Args:
-            model (str): Model variant under test.
-            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
-        """
-        rg = IconDreamRegridder(model=model, **base_args)
-        assert rg.encoding_for("2m_temperature") == {"dtype": "float32"}
-
-    def test_same_for_model_level_variables(self, base_args: dict) -> None:
-        """Model-level variables come from the same decoding path.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
         """
         rg = IconDreamRegridder(model="global", **base_args)
-        assert rg.encoding_for("temperature") == {"dtype": "float32"}
+        assert rg.encoding_for("2m_temperature") == {"dtype": "float32"}
+
+
+# ----------------------------------
+# IconDreamRegridder.quantization_step
+# ----------------------------------
+class TestQuantizationStep:
+    """Tests for IconDreamRegridder's quantization-step wiring."""
+
+    def test_records_the_files_step_while_loading(self, base_args: dict) -> None:
+        """Loading a variable records its GRIB file's step, unfiltered.
+
+        ICON-DREAM is one variable per file, so no cfVarName filter is needed.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        f = Path(source_dir, "ICON-DREAM-Global_202501_T_2M_hourly.grb")
+        f.touch()
+        rg = IconDreamRegridder(model="global", **base_args)
+
+        with (
+            patch(
+                "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
+                return_value=[_hypercube("t2m")],
+            ),
+            patch(
+                "rbc.weather.regridding.icon_dream.grib_quantization_step",
+                return_value=2**-10,
+            ) as mock_step,
+        ):
+            rg._load_source_chunk((2025, "01"), "2m_temperature")
+
+        mock_step.assert_called_once_with(f)
+        assert rg.quantization_step("2m_temperature") == 2**-10

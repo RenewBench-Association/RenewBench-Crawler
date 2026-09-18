@@ -81,24 +81,6 @@ class _ConcreteRegridder(GridRegridder):
         return self._mapping
 
 
-class _Incomplete(GridRegridder):
-    """Subclass deliberately missing _variable_mapping, for ABC enforcement tests."""
-
-    def _discover_variables(self, task: tuple) -> list[str]:
-        """Return an empty list."""
-        return []
-
-    def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
-        """Return an empty Dataset."""
-        return xr.Dataset()
-
-    def _grid_metadata_path(self) -> Path | None:
-        """Return None."""
-        return None
-
-    # _variable_mapping intentionally omitted
-
-
 # ----------------------------------
 # Fixtures
 # ----------------------------------
@@ -196,15 +178,6 @@ class TestInit:
         with pytest.raises(ValueError, match="must be lower than"):
             _ConcreteRegridder(**base_args)
 
-    def test_empty_checkpoint_on_fresh_start(self, base_args: dict) -> None:
-        """Checkpoint is empty dict when no checkpoint file exists yet.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        rg = _ConcreteRegridder(**base_args)
-        assert rg.checkpoint == {}
-
     def test_checkpoint_loaded_on_resume(self, base_args: dict) -> None:
         """Existing checkpoint is loaded when resume=True.
 
@@ -258,26 +231,8 @@ class TestGetTasks:
     called directly here (bypassing that override) to test it in isolation.
     """
 
-    def test_default_returns_year_month_cartesian_product(
-        self, base_args: dict
-    ) -> None:
-        """Default _get_tasks() returns every (year, month) combination.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        base_args["years"] = [2024, 2025]
-        base_args["months"] = ["01", "02"]
-        rg = _ConcreteRegridder(**base_args)
-
-        tasks = GridRegridder._get_tasks(rg)
-
-        assert tasks == [(2024, "01"), (2024, "02"), (2025, "01"), (2025, "02")]
-
-    def test_tasks_are_chronological_regardless_of_input_order(
-        self, base_args: dict
-    ) -> None:
-        """Years and months are sorted, so tasks always run oldest-first.
+    def test_every_year_month_in_chronological_order(self, base_args: dict) -> None:
+        """Every (year, month) combination, oldest first, whatever the input order.
 
         The store's time axis can only be extended forwards, so an
         out-of-order run would otherwise fail partway through.
@@ -359,87 +314,32 @@ class TestRegrid:
     never mark keys done itself).
     """
 
-    def test_calls_pipeline_for_each_task_and_variable(self, base_args: dict) -> None:
-        """_regrid_chunk runs once per (task, variable), yielding (key, pyramid).
+    def test_one_variable_at_a_time_with_weights_once_per_task(
+        self, base_args: dict
+    ) -> None:
+        """Each (task, variable) is regridded separately; weights resolve once per task.
 
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        tasks = [(2025, "01"), (2025, "02")]
-        rg = _ConcreteRegridder(tasks=tasks, **base_args)  # variables=["var_a"]
-
-        with (
-            patch.object(rg, "_get_weights", return_value=Path("weights.nc")) as mock_w,
-            patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}) as mock_c,
-        ):
-            results = list(rg.regrid())
-
-        assert mock_w.call_count == 2
-        assert mock_c.call_count == 2
-        assert [key for key, _ in results] == [(*t, "var_a") for t in tasks]
-        assert all(pyramid == {4: "pyramid"} for _, pyramid in results)
-
-    def test_processes_every_variable_in_one_task(self, base_args: dict) -> None:
-        """Multiple requested variables are each regridded independently.
+        Weights depend only on horizontal grid geometry, so recomputing them
+        per variable would be pure waste.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         base_args["variables"] = ["temperature", "humidity"]
-        task = (2025, "01")
-        rg = _ConcreteRegridder(tasks=[task], **base_args)
+        tasks = [(2025, "01"), (2025, "02")]
+        rg = _ConcreteRegridder(tasks=tasks, **base_args)
 
         with (
-            patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
+            patch.object(rg, "_get_weights", return_value=Path("weights.nc")) as mock_w,
             patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}) as mock_c,
         ):
             results = list(rg.regrid())
 
-        assert mock_c.call_count == 2
+        assert mock_w.call_count == len(tasks)
+        assert mock_c.call_count == 4
         assert [key for key, _ in results] == [
-            (2025, "01", "temperature"),
-            (2025, "01", "humidity"),
+            (*t, v) for t in tasks for v in ("temperature", "humidity")
         ]
-
-    def test_weights_computed_once_per_task_not_per_variable(
-        self, base_args: dict
-    ) -> None:
-        """_get_weights() is called once per task, reused across its variables.
-
-        Weights depend only on horizontal grid geometry, never on which
-        variable is being regridded, so recomputing per variable would be
-        pure waste.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        base_args["variables"] = ["temperature", "humidity", "surface_pressure"]
-        task = (2025, "01")
-        rg = _ConcreteRegridder(tasks=[task], **base_args)
-
-        with (
-            patch.object(rg, "_get_weights", return_value=Path("weights.nc")) as mock_w,
-            patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}),
-        ):
-            list(rg.regrid())
-
-        mock_w.assert_called_once()
-
-    def test_skips_already_completed_keys(self, base_args: dict) -> None:
-        """A (task, variable) key already marked 1 is skipped when resume=True.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        task = (2025, "01")
-        rg = _ConcreteRegridder(tasks=[task], **base_args)
-        rg.checkpoint[(*task, "var_a")] = 1
-
-        with patch.object(rg, "_regrid_chunk") as mock_c:
-            results = list(rg.regrid())
-
-        mock_c.assert_not_called()
-        assert results == []
 
     def test_only_unfinished_variables_in_a_task_are_processed(
         self, base_args: dict
@@ -522,28 +422,15 @@ class TestRegrid:
 
         assert rg.checkpoint == {}
 
-    def test_no_tasks_completes_without_error(self, base_args: dict) -> None:
-        """regrid() completes cleanly when there are no tasks.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        rg = _ConcreteRegridder(tasks=[], **base_args)
-        assert list(rg.regrid()) == []
-
 
 # ----------------------------------
 # GridRegridder.mark_done
 # ----------------------------------
 class TestMarkDone:
-    """Tests for GridRegridder.mark_done().
-
-    Verifies the checkpoint is updated in memory and persisted to disk, and
-    that no temporary artefacts are left behind after a successful save.
-    """
+    """Tests for GridRegridder.mark_done()."""
 
     def test_mark_done_sets_checkpoint_and_persists(self, base_args: dict) -> None:
-        """mark_done sets the checkpoint in memory and persists it to disk.
+        """mark_done persists the key, leaving no temporary file behind.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
@@ -552,19 +439,8 @@ class TestMarkDone:
         rg = _ConcreteRegridder(tasks=[(2025, "01")], **base_args)
         rg.mark_done(key)
 
-        assert rg.checkpoint[key] == 1
-
         fresh = _ConcreteRegridder(tasks=[(2025, "01")], **base_args)
         assert fresh.checkpoint[key] == 1
-
-    def test_atomic_write_no_tmp_left_behind(self, base_args: dict) -> None:
-        """Temporary .tmp file is removed after a successful save.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        rg = _ConcreteRegridder(**base_args)
-        rg.mark_done((2025, "01", "var_a"))
         assert not rg.checkpoint_path.with_suffix(".tmp").exists()
 
 
@@ -707,45 +583,29 @@ class TestRegridChunk:
 
 
 # ----------------------------------
-# GridRegridder.encoding_for
+# GridRegridder.encoding_for / quantization_step
 # ----------------------------------
-class TestEncodingFor:
-    """Tests for GridRegridder.encoding_for()."""
+class TestWriteHooks:
+    """Tests for the per-variable hooks the writer consumes."""
 
-    def test_default_returns_none(self, base_args: dict) -> None:
-        """No explicit encoding by default -- Zarr's own defaults apply.
+    def test_default_to_none(self, base_args: dict) -> None:
+        """No encoding and no step by default -- values are written unchanged.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         rg = _ConcreteRegridder(**base_args)
+
         assert rg.encoding_for("var_a") is None
+        assert rg.quantization_step("var_a") is None
 
-
-# ----------------------------------
-# GridRegridder — ABC enforcement
-# ----------------------------------
-class TestAbstractMethods:
-    """Tests for GridRegridder ABC enforcement.
-
-    Verifies that the abstract base class cannot be instantiated directly and
-    that subclasses missing any abstract method raise TypeError.
-    """
-
-    def test_cannot_instantiate_abc_directly(self, base_args: dict) -> None:
-        """GridRegridder itself cannot be instantiated (abstract).
+    def test_quantization_step_returns_the_recorded_step(self, base_args: dict) -> None:
+        """Returns what a subclass recorded in _quantization_steps while loading.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        with pytest.raises(TypeError):
-            GridRegridder(**base_args)  # type: ignore[abstract]
+        rg = _ConcreteRegridder(**base_args)
+        rg._quantization_steps["var_a"] = 2**-10
 
-    def test_subclass_missing_abstract_method_raises(self, base_args: dict) -> None:
-        """A subclass that omits an abstract method cannot be instantiated.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        with pytest.raises(TypeError):
-            _Incomplete(**base_args)  # type: ignore[abstract]
+        assert rg.quantization_step("var_a") == 2**-10

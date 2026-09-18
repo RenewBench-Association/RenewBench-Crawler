@@ -141,6 +141,7 @@ class HealpixZarrWriter:
         task: tuple,
         pyramid: dict[int, xr.Dataset],
         encoding: dict | None = None,
+        quantization_step: float | None = None,
     ) -> None:
         """Write or grow each level's store for one task's single-variable pyramid.
 
@@ -177,6 +178,10 @@ class HealpixZarrWriter:
                 variable (e.g. `{"dtype": "int32", "scale_factor": ...}`),
                 applied only on that variable's first write. None packs
                 nothing; compression still applies.
+            quantization_step (float | None): The source's own precision step
+                (see `GridRegridder.quantization_step()`). Values are snapped
+                onto that lattice before writing, discarding mantissa bits
+                the source never carried. None writes values unchanged.
 
         Raises:
             ValueError: If the pyramid is missing the shared `min_level`; if
@@ -194,6 +199,7 @@ class HealpixZarrWriter:
         task_start = time.time()
         for level, ds in pyramid.items():
             ds = self._normalize_dim_order(ds)
+            ds = self._snap_to_lattice(ds, quantization_step)
             (variable,) = ds.data_vars
             store_path = self._store_path(model_name, time_res, level)
             level_start = time.time()
@@ -345,6 +351,31 @@ class HealpixZarrWriter:
         return ds.transpose(
             "time", "level", "height", "model_level", "cell", missing_dims="ignore"
         )
+
+    def _snap_to_lattice(self, ds: xr.Dataset, step: float | None) -> xr.Dataset:
+        """Round values onto the source's own precision lattice.
+
+        `round(x / step) * step`, which is exact in float32 for the
+        power-of-two steps every source uses (confirmed on real data: BARRA2
+        scale factors and the GRIB binary scale factors are all powers of
+        two). Error is at most half a step, so the result stays within what
+        the source itself could represent -- the discarded bits are
+        regridding artefacts, not information.
+
+        Args:
+            ds (xr.Dataset): Dataset about to be written.
+            step (float | None): Source precision step; None leaves `ds`
+                untouched.
+
+        Returns:
+            xr.Dataset: Same data, snapped onto the lattice.
+        """
+        if not step:
+            return ds
+        # keep_attrs: _validate_consistency() reads healpix_level/order off
+        # the Dataset, and variable attrs (units, cell_methods) must survive.
+        with xr.set_options(keep_attrs=True):
+            return (ds / step).round() * step
 
     def _chunk_shape(self, da: xr.DataArray, encoding: dict) -> tuple[int, ...]:
         """Return a chunk shape bounded by `_TARGET_CHUNK_BYTES`.
