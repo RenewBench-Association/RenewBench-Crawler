@@ -6,7 +6,6 @@ from pathlib import Path
 
 import dask.array as dsa
 import numpy as np
-import pandas as pd
 import pytest
 import xarray as xr
 
@@ -159,10 +158,8 @@ class TestWeightsCacheDir:
 class TestNormalizeDimOrder:
     """Tests for HealpixZarrWriter._normalize_dim_order().
 
-    Confirmed against real BARRA2 data that xr.concat() (used to build the
-    level/height dims) prepends the new dim first, giving "(level, time,
-    cell)" rather than the contract's required "(time, level, cell)" -- this
-    normalization step is what fixes that before writing.
+    xr.concat(), which builds the level/height dims, prepends the new dim,
+    so variables arrive as "(level, time, cell)".
     """
 
     def test_every_vertical_dim_moves_between_time_and_cell(
@@ -194,26 +191,7 @@ class TestNormalizeDimOrder:
 # HealpixZarrWriter.append
 # ----------------------------------
 class TestAppend:
-    """Tests for HealpixZarrWriter.append().
-
-    Covers first-write/append, multi-level pyramids, the shared min_level
-    guard, duplicate-timestamp rejection, healpix attr consistency, and
-    independence between different (model_name, time_res) combinations.
-    """
-
-    def test_creates_store_on_first_write(self, writer: HealpixZarrWriter) -> None:
-        """First write to a (model, time_res, level) creates its own store.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
-        pyramid = _make_pyramid([4, 7], start=0, n=3)
-        writer.append("era5", "1h", (2025, 1), pyramid)
-
-        opened = xr.open_zarr(
-            Path(writer.base_dir, "era5", "1h", "level_7.zarr"), consolidated=False
-        )
-        assert list(opened["time"].values) == [0, 1, 2]
+    """Tests for HealpixZarrWriter.append()."""
 
     def test_computes_each_block_once_for_all_levels(
         self, writer: HealpixZarrWriter
@@ -229,6 +207,14 @@ class TestAppend:
         computed = []
 
         def count(block: np.ndarray) -> np.ndarray:
+            """Record one computed block's shape and pass it through.
+
+            Args:
+                block (np.ndarray): The block being computed.
+
+            Returns:
+                np.ndarray: The same block.
+            """
             computed.append(block.shape)
             return block
 
@@ -243,7 +229,9 @@ class TestAppend:
 
         assert computed == [(24, 5), (24, 5)]
 
-    def test_writes_every_level_in_pyramid(self, writer: HealpixZarrWriter) -> None:
+    def test_creates_a_store_per_level_on_first_write(
+        self, writer: HealpixZarrWriter
+    ) -> None:
         """Every level in the pyramid gets its own store, not just one.
 
         Args:
@@ -312,6 +300,15 @@ class TestAppend:
         writer.append("era5", "1h", (2025, 1), _make_pyramid([4, 7], start=200, n=4))
 
         def times(model: str, time_res: str) -> list:
+            """Return one store's time axis.
+
+            Args:
+                model (str): Contract "model_name".
+                time_res (str): "1h" or "20min".
+
+            Returns:
+                list: Timestamps on that store's level_7 axis.
+            """
             return list(
                 xr.open_zarr(
                     Path(writer.base_dir, model, time_res, "level_7.zarr"),
@@ -345,6 +342,8 @@ class TestAppend:
         decoded = xr.open_zarr(store_path, consolidated=False)
 
         assert on_disk["T"].dtype == np.dtype("int16")
+        # packing and the codec pipeline apply together
+        assert [c["name"] for c in _codecs(store_path)] == ["bytes", "blosc"]
         np.testing.assert_allclose(decoded["T"].values, original, atol=0.0001)
 
     def test_encoding_applied_when_adding_new_sibling_variable(
@@ -398,32 +397,10 @@ def _codecs(store_path: Path, variable: str = "T") -> list[dict]:
 class TestCompression:
     """Tests for HealpixZarrWriter's compressor/shuffle codec pipeline."""
 
-    def test_default_is_blosc_zlib_with_shuffle(
-        self, writer: HealpixZarrWriter
-    ) -> None:
-        """The default pipeline is Blosc zlib-1 + byte shuffle, and round-trips exactly.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test (default settings).
-        """
-        pyramid = _make_pyramid([4], start=0, n=3)
-        original = pyramid[4]["T"].values.copy()
-        writer.append("era5", "1h", (2025, 1), pyramid)
-
-        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
-        codecs = _codecs(store_path)
-        assert [c["name"] for c in codecs] == ["bytes", "blosc"]
-        assert codecs[1]["configuration"]["cname"] == "zlib"
-        assert codecs[1]["configuration"]["clevel"] == 1
-        assert codecs[1]["configuration"]["shuffle"] == "shuffle"
-        np.testing.assert_array_equal(
-            xr.open_zarr(store_path, consolidated=False)["T"].values, original
-        )
-
     @pytest.mark.parametrize(
         "compressor, shuffle, expected",
         [
-            # zlib + shuffle is the default, covered above
+            ("zlib", True, ["bytes", "blosc"]),  # the default
             ("zstd", True, ["bytes", "blosc"]),
             ("zlib", False, ["bytes", "gzip"]),
             ("zstd", False, ["bytes", "zstd"]),
@@ -452,32 +429,15 @@ class TestCompression:
         writer.append("era5", "1h", (2025, 1), pyramid)
 
         store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
-        assert [c["name"] for c in _codecs(store_path)] == expected
+        codecs = _codecs(store_path)
+        assert [c["name"] for c in codecs] == expected
+        if expected[-1] == "blosc":
+            assert codecs[-1]["configuration"]["cname"] == compressor
+            assert codecs[-1]["configuration"]["clevel"] == 1
+            assert codecs[-1]["configuration"]["shuffle"] == "shuffle"
         np.testing.assert_array_equal(
             xr.open_zarr(store_path, consolidated=False)["T"].values, original
         )
-
-    def test_compression_merges_with_packing_encoding(
-        self, writer: HealpixZarrWriter
-    ) -> None:
-        """Packing (dtype/scale) and the codec pipeline apply together.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
-        pyramid = _make_pyramid([4], start=0, n=3)
-        encoding = {
-            "dtype": "int16",
-            "scale_factor": 0.0001,
-            "add_offset": 0.0,
-            "_FillValue": -32767,
-        }
-        writer.append("era5", "1h", (2025, 1), pyramid, encoding=encoding)
-
-        store_path = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
-        on_disk = xr.open_zarr(store_path, consolidated=False, mask_and_scale=False)
-        assert on_disk["T"].dtype == np.dtype("int16")
-        assert [c["name"] for c in _codecs(store_path)] == ["bytes", "blosc"]
 
     def test_level_below_one_raises(self, tmp_path: Path) -> None:
         """Level 0 is rejected, since Blosc would silently write uncompressed.
@@ -543,20 +503,10 @@ class TestSnapToLattice:
 
         assert all(float(v / self.STEP).is_integer() for v in snapped)
         assert np.max(np.abs(snapped - values)) <= self.STEP / 2
-
-    def test_sub_resolution_drizzle_becomes_exact_zero(
-        self, writer: HealpixZarrWriter
-    ) -> None:
-        """Values below half a step were never representable, so snap to zero.
-
-        This is what restores the sparsity averaging destroys.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
-        out = writer._snap_to_lattice(self._ds([self.STEP / 4, 0.0]), self.STEP)
-
-        assert list(out["T"].values[0]) == [0.0, 0.0]
+        # sub-resolution values were never representable: snapping restores
+        # the sparsity averaging destroyed
+        drizzle = writer._snap_to_lattice(self._ds([self.STEP / 4, 0.0]), self.STEP)
+        assert list(drizzle["T"].values[0]) == [0.0, 0.0]
 
     def test_preserves_nan_attrs_coords_and_laziness(
         self, writer: HealpixZarrWriter
@@ -606,12 +556,7 @@ class TestSnapToLattice:
 # HealpixZarrWriter._chunk_shape
 # ----------------------------------
 class TestChunkShape:
-    """Tests for HealpixZarrWriter._chunk_shape().
-
-    Chunks are otherwise inherited from the incoming dask array, which for
-    GRIB sources is one monolithic chunk per month -- that overran the
-    codecs' 2 GiB buffer limit on real ICON data.
-    """
+    """Tests for HealpixZarrWriter._chunk_shape(), which bounds chunk bytes."""
 
     CODEC_LIMIT = 2**31 - 1
 
@@ -699,95 +644,58 @@ def _named(pyramid: dict[int, xr.Dataset], name: str) -> dict[int, xr.Dataset]:
 class TestSharedTimeAxis:
     """Tests for growing the store-wide time axis across several variables.
 
-    "time" is one dimension shared by every variable, so it has to grow for
-    all of them together. Extending it while writing only one variable left
-    the others short and made the whole store unopenable -- these cover that
-    directly, since it breaks any store with 2+ variables on its 2nd month.
+    "time" is one dimension shared by every variable, so it grows for all of
+    them together and the store stays readable part-way through a month.
     """
 
     def test_two_variables_across_two_months(self, writer: HealpixZarrWriter) -> None:
-        """Every variable stays full length across a second month.
+        """Every variable stays full length, and readable part-way through.
 
         Args:
             writer (HealpixZarrWriter): Writer under test.
         """
-        for name in ("tas", "clt"):
-            writer.append(
-                "era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), name)
-            )
-        for name in ("tas", "clt"):
-            writer.append(
-                "era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), name)
-            )
-
-        opened = xr.open_zarr(
-            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
-        )
-        assert list(opened["time"].values) == [0, 1, 2, 3, 4]
-        assert opened["tas"].sizes["time"] == 5
-        assert opened["clt"].sizes["time"] == 5
-        assert not opened["tas"].isnull().any()
-        assert not opened["clt"].isnull().any()
-
-    def test_store_stays_readable_between_variables(
-        self, writer: HealpixZarrWriter
-    ) -> None:
-        """Mid-month, before every variable is filled, the store still opens.
-
-        The old failure mode left the store unopenable at exactly this point,
-        which also broke the next variable's own consistency check.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
+        store = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
         for name in ("tas", "clt"):
             writer.append(
                 "era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), name)
             )
         writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
 
-        opened = xr.open_zarr(
-            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
-        )
+        # mid-month, with "clt" not yet written for the second month
+        opened = xr.open_zarr(store, consolidated=False)
         assert opened.sizes["time"] == 5
         assert not opened["tas"].isnull().any()
         assert bool(opened["clt"].isel(time=slice(3, 5)).isnull().all())
 
-    def test_variable_added_later_is_backfilled_with_nan(
+        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "clt"))
+
+        opened = xr.open_zarr(store, consolidated=False)
+        assert list(opened["time"].values) == [0, 1, 2, 3, 4]
+        assert not opened["tas"].isnull().any()
+        assert not opened["clt"].isnull().any()
+
+    def test_variable_added_later_is_backfilled_then_fillable(
         self, writer: HealpixZarrWriter
     ) -> None:
-        """A variable added after the fact spans the store's full range.
+        """A variable added after the fact spans the full range, NaN until filled.
 
         Args:
             writer (HealpixZarrWriter): Writer under test.
         """
+        store = Path(writer.base_dir, "era5", "1h", "level_4.zarr")
         writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas"))
         writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
         writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "clt"))
 
-        opened = xr.open_zarr(
-            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
-        )
+        opened = xr.open_zarr(store, consolidated=False)
         assert opened["clt"].sizes["time"] == 5
         assert bool(opened["clt"].isel(time=slice(0, 3)).isnull().all())
         assert not opened["clt"].isel(time=slice(3, 5)).isnull().any()
 
-    def test_backfilling_a_nan_gap_is_allowed(self, writer: HealpixZarrWriter) -> None:
-        """A month a variable skipped can be filled in afterwards.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
-        writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas"))
-        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "tas"))
-        writer.append("era5", "1h", (2025, 2), _named(_make_pyramid([4], 3, 2), "clt"))
-
+        # the skipped month can be filled in afterwards
         writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "clt"))
 
-        opened = xr.open_zarr(
-            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
-        )
-        assert not opened["clt"].isnull().any()
+        assert not xr.open_zarr(store, consolidated=False)["clt"].isnull().any()
 
     def test_out_of_order_month_raises(self, writer: HealpixZarrWriter) -> None:
         """Timestamps before the store's range need inserting, so they're refused.
@@ -894,32 +802,3 @@ class TestVerticalDims:
         assert opened["T"].dims == ("time", "height", "cell")
         assert opened["U"].dims == ("time", "height_1", "cell")
         assert "level" not in opened.sizes
-
-
-# ----------------------------------
-# HealpixZarrWriter.already_written
-# ----------------------------------
-class TestAlreadyWritten:
-    """Tests for HealpixZarrWriter.already_written()."""
-
-    def test_returns_empty_for_nonexistent_store(
-        self, writer: HealpixZarrWriter
-    ) -> None:
-        """A (model, time_res, level) nobody has written yet returns an empty set.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
-        assert writer.already_written("era5", "1h", 7) == set()
-
-    def test_returns_correct_timestamps_after_write(
-        self, writer: HealpixZarrWriter
-    ) -> None:
-        """Returns exactly the timestamps that were written.
-
-        Args:
-            writer (HealpixZarrWriter): Writer under test.
-        """
-        writer.append("era5", "1h", (2025, 1), _make_pyramid([4, 7], start=0, n=3))
-        written = writer.already_written("era5", "1h", 7)
-        assert written == set(pd.to_datetime(np.array([0, 1, 2])))

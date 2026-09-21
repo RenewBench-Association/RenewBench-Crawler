@@ -210,17 +210,6 @@ class TestRegridRegionalToHealpix:
 class TestCoarsenRegional:
     """Tests for coarsen_regional()."""
 
-    def test_basic_single_group(self) -> None:
-        """Four sibling cells average into their one parent cell."""
-        ds = _make_cell_ds([8, 9, 10, 11], [1.0, 2.0, 3.0, 4.0], level=6)
-
-        result = coarsen_regional(ds, target_level=5)
-
-        assert result.sizes["cell"] == 1
-        assert result["cell"].values[0] == 2
-        assert result["var"].values[0] == pytest.approx(2.5)
-        assert result.attrs["healpix_level"] == 5
-
     def test_multiple_non_contiguous_groups(self) -> None:
         """Widely separated parent groups are each averaged independently."""
         cell_ids = [8, 9, 10, 11, 4000, 4001, 4002, 4003]
@@ -231,6 +220,7 @@ class TestCoarsenRegional:
 
         assert list(result["cell"].values) == [2, 1000]
         np.testing.assert_allclose(result["var"].values, [2.5, 25.0])
+        assert result.attrs["healpix_level"] == 5
 
     def test_min_valid_fraction_masks_low_coverage_parent(self) -> None:
         """A parent below the valid-fraction threshold becomes NaN.
@@ -264,7 +254,11 @@ class TestCoarsenRegional:
 
     @pytest.mark.parametrize("target_level", [6, 7])
     def test_raises_for_invalid_target_level(self, target_level: int) -> None:
-        """target_level must be strictly lower than the current level."""
+        """target_level must be strictly lower than the current level.
+
+        Args:
+            target_level (int): Level to coarsen to, at or above the current one.
+        """
         ds = _make_cell_ds([8, 9, 10, 11], [1.0, 2.0, 3.0, 4.0], level=6)
 
         with pytest.raises(ValueError, match="must be lower"):

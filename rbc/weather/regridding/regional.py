@@ -1,10 +1,8 @@
 """REGIONAL.
 
-Workaround for grid-doctor's regional-source coordinate-attachment crash
-(grid-doctor issue #24, confirmed still open upstream). Provides a compact-
-cell weight-application and coarsening pipeline for non-global sources
-(BARRA2, ICON-DREAM EU), bypassing `apply_weight_file()`'s full-global-size
-assumption.
+Compact-cell weight application and coarsening for non-global sources
+(BARRA2, ICON-DREAM EU), working around grid-doctor issue #24:
+`apply_weight_file()` assumes a full-global target size.
 """
 
 from pathlib import Path
@@ -22,17 +20,12 @@ def regrid_regional_to_healpix(
 ) -> xr.Dataset:
     """Regrid a regional source to one compact HEALPix level.
 
-    Bypasses `apply_weight_file()`'s coordinate-attachment crash on regional
-    sources: its weight-file reader sizes the target dimension as
-    `row.max() + 1`, not the count of unique referenced cells, leaving mostly
-    phantom all-zero rows that `_attach_healpix_coords()` can't handle.
-    Confirmed on real BARRA2 data: only ~6% of that nominal size was ever
-    actually referenced — the rest are phantom rows that would silently
-    produce false zero-valued cells if not filtered out, not just a crash.
-
-    Reuses grid-doctor's own dimension-resolution and `xr.apply_ufunc`
-    application (the correct part) — only replaces the matrix construction
-    (dropping phantom rows) and the coordinate-attachment step.
+    Works around `apply_weight_file()`'s crash on regional sources: it sizes
+    the target dimension as `row.max() + 1` rather than the count of unique
+    referenced cells, leaving phantom all-zero rows (on real BARRA2 data only
+    ~6% of that nominal size is ever referenced). Keeps grid-doctor's
+    dimension resolution and weight application, replacing only the matrix
+    construction and coordinate attachment.
 
     Args:
         ds (xr.Dataset): Source dataset, already renamed to canonical
@@ -44,14 +37,13 @@ def regrid_regional_to_healpix(
         xr.Dataset: Compact HEALPix Dataset at the given level — only cells
             actually covered by the source domain, no phantom/padded cells.
     """
-    # Normalize weight-file column names to grid-doctor's expected names
+    # Weight-file column names, normalized to grid-doctor's own.
     wds = xr.open_dataset(weights_path)
     row_name = "row" if "row" in wds else "dst_address"
     col_name = "col" if "col" in wds else "src_address"
     val_name = "S" if "S" in wds else "remap_matrix"
 
-    # Convert to 0-based indexing for matrix construction, if needed
-    # (sometimes a leftover from ESMF's Fortran heritage)
+    # ESMF's Fortran heritage sometimes leaves these 1-based.
     row0 = wds[row_name].values
     col0 = wds[col_name].values
     if row0.min() >= 1:
@@ -62,29 +54,24 @@ def regrid_regional_to_healpix(
     col0 = col0.astype(np.int64)
     vals = wds[val_name].values
 
-    # Determine the number of source cells (columns) from the weight file.
     n_source = int(col0.max()) + 1
 
-    # read the original source_dims attribute from the weight file, if present,
-    # to pass to grid-doctor's dimension resolution function.
+    # The weight file's own source_dims, for grid-doctor's dimension resolution.
     stored_sd = _gd_remap._parse_source_dims_attr(
         wds.attrs.get("grid_doctor_source_dims")
     )
 
-    # This fixes the phantom-row problem in grid-doctor: only keep the rows
-    # that are actually referenced in the weight file, and build a mapping
-    # from the original row indices to a compacted set of indices.
-    # searchsorted rather than a dict lookup per entry: real_cell_ids is
-    # sorted and there is one entry per weight, millions of them at the finer
-    # levels.
+    # Keep only the rows the weight file references, mapping the original
+    # row indices onto a compact set. real_cell_ids is sorted, so
+    # searchsorted does that for all millions of entries at once.
     real_cell_ids = np.unique(row0)
     compact_row = np.searchsorted(real_cell_ids, row0)
     matrix = coo_matrix(
         (vals, (compact_row, col0)), shape=(len(real_cell_ids), n_source)
     ).tocsr()
 
-    # Resolve the source dimensions for weight application, using the stored
-    # source_dims attribute if present, otherwise falling back to auto-detection.
+    # Source dims for weight application: the stored attribute if present,
+    # otherwise auto-detected.
     resolved_sd = _gd_remap._resolve_source_dims_for_weight_application(
         ds,
         n_source=n_source,
@@ -95,8 +82,7 @@ def regrid_regional_to_healpix(
     )
 
     # Core dims consumed by apply_weights_nd must each be a single dask
-    # chunk, the spatial extent can't be split for weight application,
-    # since any target cell can draw from any source cell.
+    # chunk: any target cell can draw from any source cell.
     single_chunk = dict.fromkeys(resolved_sd, -1)
 
     regridded = {}
@@ -160,13 +146,10 @@ def coarsen_regional(
 ) -> xr.Dataset:
     """Coarsen a compact (regional) HEALPix dataset to a lower level.
 
-    `grid_doctor.coarsen_healpix()` can't be reused here — it relies on array
-    *position* directly encoding parent-child relationships (a fast reshape
-    assuming a dense, full-global nested array), confirmed to fail outright on
-    a compact array (reshape `ValueError`). Groups by actual cell-ID value
-    instead. Cross-validated against `coarsen_healpix()`'s own dense-array
-    output as ground truth on real BARRA2 data: identical cells and values
-    (~1e-13 max diff — floating-point noise).
+    Groups by cell-ID value, since `grid_doctor.coarsen_healpix()` relies on
+    array position encoding parent-child relationships, which holds only for
+    a dense full-global array. Cross-validated against its dense output on
+    real BARRA2 data: identical cells and values (~1e-13, float noise).
 
     Args:
         ds (xr.Dataset): Compact HEALPix Dataset with a "cell" dim and
@@ -232,11 +215,10 @@ def build_regional_healpix_pyramid(
 ) -> dict[int, xr.Dataset]:
     """Build a full compact HEALPix pyramid for a regional source.
 
-    Regrids `ds` directly to `max_level` via `regrid_regional_to_healpix()`,
-    then coarsens down to `min_level` via `coarsen_regional()` at each
-    intermediate level — the regional-source equivalent of
-    `grid_doctor.create_healpix_pyramid()`, which can't be used directly here
-    (see this module's other two functions' docstrings for why).
+    Regrids `ds` directly to `max_level`, then coarsens down to `min_level`
+    one level at a time. The regional equivalent of
+    `grid_doctor.create_healpix_pyramid()`; every level stays lazy, so
+    `HealpixZarrWriter` computes and writes them a block at a time.
 
     Args:
         ds (xr.Dataset): Source dataset, already renamed to canonical

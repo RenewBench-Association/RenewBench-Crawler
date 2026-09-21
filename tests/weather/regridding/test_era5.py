@@ -4,7 +4,6 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
@@ -58,41 +57,6 @@ def base_args(tmp_path: Path) -> dict:
         "years": [2020],
         "months": ["04"],
     }
-
-
-# ----------------------------------
-# Era5Regridder._trim_to_month
-# ----------------------------------
-class TestTrimToMonth:
-    """Tests for Era5Regridder._trim_to_month()."""
-
-    def test_drops_out_of_month_timestamps(self, base_args: dict) -> None:
-        """Only timestamps within the exact calendar month survive.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for Era5Regridder.
-        """
-        rg = Era5Regridder(**base_args)
-        # spans late March, three points across April, and early May
-        time = pd.to_datetime(
-            [
-                "2020-03-31T22:00",
-                "2020-03-31T23:00",
-                "2020-04-01T00:00",
-                "2020-04-15T12:00",
-                "2020-04-30T23:00",
-                "2020-05-01T00:00",
-                "2020-05-01T01:00",
-            ]
-        )
-        ds = xr.Dataset({"t2m": ("time", np.arange(len(time)))}, coords={"time": time})
-
-        trimmed = rg._trim_to_month(ds, 2020, "04")
-
-        expected = pd.to_datetime(
-            ["2020-04-01T00:00", "2020-04-15T12:00", "2020-04-30T23:00"]
-        )
-        assert list(trimmed["time"].values) == list(expected)
 
 
 # ----------------------------------

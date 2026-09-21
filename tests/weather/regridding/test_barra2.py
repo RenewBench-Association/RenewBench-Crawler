@@ -315,9 +315,8 @@ class TestLoadSourceChunk:
     ) -> None:
         """A "time: mean" variable's half-hour-offset timestamps shift to on-the-hour.
 
-        Confirmed on real BARRA2 R2 data: interval statistics (e.g.
-        "tasmax") are labeled at the interval's center, half an hour ahead
-        of "time: point" variables for the same nominal timestamp.
+        BARRA2 labels interval statistics at the interval's center, half an
+        hour ahead of "time: point" variables.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
@@ -338,30 +337,6 @@ class TestLoadSourceChunk:
         assert list(result["time"].values) == list(
             pd.to_datetime(["2025-01-01T00:00", "2025-01-01T01:00"])
         )
-
-    def test_shifts_interval_statistic_pressure_level_files(
-        self, base_args: dict
-    ) -> None:
-        """The interval-center shift also applies to pressure-level variables.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
-        """
-        raw_dir = base_args["raw_dir"]
-        _write_var_file(
-            raw_dir,
-            "barra2_C2_1hr_202501_ta1000.nc",
-            "ta1000",
-            1.0,
-            extra_coords={"pressure": 1000.0},
-            time=pd.to_datetime(["2025-01-01T00:30"]),
-            cell_methods="time: mean (interval: 1 hour)",
-        )
-
-        rg = Barra2Regridder(model="C2", **base_args)
-        result = rg._load_source_chunk((2025, "01"), "temperature")
-
-        assert list(result["time"].values) == list(pd.to_datetime(["2025-01-01T00:00"]))
 
 
 # ----------------------------------

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -62,23 +63,50 @@ class _ConcreteRegridder(GridRegridder):
         super().__init__(**kwargs)
 
     def _get_tasks(self) -> list[tuple]:
-        """Return the pre-defined task list supplied at construction time."""
+        """Return the task list supplied at construction time.
+
+        Returns:
+            list[tuple]: The pre-defined tasks.
+        """
         return self._tasks
 
     def _discover_variables(self, task: tuple) -> list[str]:
-        """Return the pre-defined discovered-variables list, regardless of task."""
+        """Return the pre-defined variable list, regardless of task.
+
+        Args:
+            task (tuple): Ignored.
+
+        Returns:
+            list[str]: The pre-defined discovered variables.
+        """
         return self._discovered
 
     def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
-        """Return the pre-defined source Dataset, regardless of task/variable."""
+        """Return the pre-defined source Dataset, regardless of the request.
+
+        Args:
+            task (tuple): Ignored.
+            variable (str): Ignored.
+
+        Returns:
+            xr.Dataset: The pre-defined source dataset.
+        """
         return self._source_ds
 
     def _grid_metadata_path(self) -> Path | None:
-        """Return the pre-defined grid metadata path."""
+        """Return the pre-defined grid metadata path.
+
+        Returns:
+            Path | None: The pre-defined path.
+        """
         return self._grid_path
 
     def _variable_mapping(self) -> dict[str, str]:
-        """Return the pre-defined variable mapping."""
+        """Return the pre-defined variable mapping.
+
+        Returns:
+            dict[str, str]: The pre-defined mapping.
+        """
         return self._mapping
 
 
@@ -179,34 +207,24 @@ class TestInit:
         with pytest.raises(ValueError, match="must be lower than"):
             _ConcreteRegridder(**base_args)
 
-    def test_checkpoint_loaded_on_resume(self, base_args: dict) -> None:
-        """Existing checkpoint is loaded when resume=True.
+    @pytest.mark.parametrize("resume", [True, False])
+    def test_checkpoint_loaded_only_when_resuming(
+        self, base_args: dict, resume: bool
+    ) -> None:
+        """An existing checkpoint is loaded when resuming and ignored otherwise.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+            resume (bool): Whether to resume from the checkpoint.
         """
         saved = {(2025, "01", "var_a"): 1}
-        checkpoint_path = base_args["checkpoint_path"]
-        with open(checkpoint_path, "wb") as f:
+        with open(base_args["checkpoint_path"], "wb") as f:
             pickle.dump(saved, f)
 
+        base_args["resume"] = resume
         rg = _ConcreteRegridder(**base_args)
-        assert rg.checkpoint == saved
 
-    def test_checkpoint_ignored_when_resume_false(self, base_args: dict) -> None:
-        """Existing checkpoint file is ignored when resume=False.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        saved = {(2025, "01", "var_a"): 1}
-        checkpoint_path = base_args["checkpoint_path"]
-        with open(checkpoint_path, "wb") as f:
-            pickle.dump(saved, f)
-
-        base_args["resume"] = False
-        rg = _ConcreteRegridder(**base_args)
-        assert rg.checkpoint == {}
+        assert rg.checkpoint == (saved if resume else {})
 
     def test_corrupted_checkpoint_starts_fresh(self, base_args: dict) -> None:
         """Corrupted checkpoint file is discarded and a fresh checkpoint is returned.
@@ -227,9 +245,8 @@ class TestInit:
 class TestGetTasks:
     """Tests for GridRegridder._get_tasks()'s default implementation.
 
-    _ConcreteRegridder overrides _get_tasks() with a fixed, test-injectable
-    list for use elsewhere in this file, so the base class's own default is
-    called directly here (bypassing that override) to test it in isolation.
+    _ConcreteRegridder overrides _get_tasks() for the other tests here, so
+    the base class's own default is called directly.
     """
 
     def test_every_year_month_in_chronological_order(self, base_args: dict) -> None:
@@ -307,13 +324,7 @@ class TestVariablesForTask:
 # GridRegridder.regrid
 # ----------------------------------
 class TestRegrid:
-    """Tests for GridRegridder.regrid().
-
-    Covers per-variable task iteration, checkpoint skip/resume keyed by
-    (task, variable), weight reuse across variables in one task, dry_run
-    semantics, and the premature-checkpointing regression (regrid() must
-    never mark keys done itself).
-    """
+    """Tests for GridRegridder.regrid()."""
 
     def test_one_variable_at_a_time_with_weights_once_per_task(
         self, base_args: dict
@@ -492,15 +503,39 @@ class TestRenameToCanonical:
 
 
 # ----------------------------------
+# GridRegridder._trim_to_month
+# ----------------------------------
+class TestTrimToMonth:
+    """Tests for GridRegridder._trim_to_month()."""
+
+    def test_drops_out_of_month_timestamps(self, base_args: dict) -> None:
+        """Only timestamps within the exact calendar month survive.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        rg = _ConcreteRegridder(**base_args)
+        time = pd.to_datetime(
+            [
+                "2020-03-31T23:00",
+                "2020-04-01T00:00",
+                "2020-04-15T12:00",
+                "2020-04-30T23:00",
+                "2020-05-01T00:00",
+            ]
+        )
+        ds = xr.Dataset({"t2m": ("time", np.arange(len(time)))}, coords={"time": time})
+
+        trimmed = rg._trim_to_month(ds, 2020, "04")
+
+        assert list(trimmed["time"].values) == list(time[1:4])
+
+
+# ----------------------------------
 # GridRegridder._get_weights
 # ----------------------------------
 class TestGetWeights:
-    """Tests for GridRegridder._get_weights().
-
-    Covers the lat-lon path (weights from the dataset itself), the
-    unstructured path (weights from a separate grid file), and the
-    grid-metadata-coupling fail-fast guard.
-    """
+    """Tests for GridRegridder._get_weights()."""
 
     def test_lat_lon_source_uses_dataset_directly(self, base_args: dict) -> None:
         """When _grid_metadata_path is None, weights are computed from ds itself.

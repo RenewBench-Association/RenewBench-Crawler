@@ -7,7 +7,7 @@ Zarr writer for regridded HEALPix pyramids, per the weather Zarr contract
 import time
 from collections.abc import Hashable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import dask
 import dask.array
@@ -19,61 +19,79 @@ from tqdm import tqdm
 from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 
 # Vertical dimensions the contract uses, in the order they appear between
-# "time" and "cell". A store holds one coordinate array per dimension name,
-# so variables whose level sets differ get numbered siblings
-# ("level", "level_1", ...) -- see _resolve_vertical_dim().
+# "time" and "cell". A store holds one coordinate array per dimension name, so
+# variables whose level sets differ get numbered siblings ("level",
+# "level_1", ...) -- see _resolve_vertical_dim().
 _VERTICAL_DIMS = ("level", "height", "model_level")
 
-# Target uncompressed bytes per Zarr chunk. Chunks are otherwise inherited
-# from the incoming dask array, which for GRIB sources is one monolithic
-# chunk per month (cfgrib doesn't chunk natively) -- that overruns the
-# codecs' hard 2 GiB buffer limit on anything but the smallest domains
-# ("Codec does not support buffers of > 2147483647 bytes"), and left BARRA2
-# only just under it at 1.7 GB.
+# Uncompressed bytes per Zarr chunk, kept well inside the codecs' 2 GiB
+# buffer limit.
 _TARGET_CHUNK_BYTES = 64 * 1024**2
 
 # Timesteps per chunk. Divides every real month length (hourly months are
 # multiples of 24, 20-minute months multiples of 72), so a month written as
-# one region always starts on a chunk boundary. GridRegridder chunks sources
-# by it too, so dask chunks line up with Zarr chunks.
+# one region starts on a chunk boundary.
 TIME_CHUNK = 24
 
-# Default megabytes one time block of the pyramid may occupy, before the
-# source chunk, the float64 regrid intermediates and the lattice-rounding
-# temporaries that are live alongside it. A whole month of a 3D global
-# variable at level 9 would be ~250 GB, which is what blocking it bounds.
-# GridRegridder sizes its source chunks by the same budget.
+# Default megabytes of pyramid computed and written at a time; GridRegridder
+# sizes its source chunks by the same budget.
 DEFAULT_BLOCK_MB = 512
 
-# Source chunks a single block may pull through the regrid. Each one is
-# already sized to the memory budget by GridRegridder._chunk_along_time(), so
-# this is what keeps the input side bounded when the written pyramid is small
+# Source chunks one block may pull through the regrid. Each is already sized
+# to the memory budget, so this bounds the input side for pyramids small
 # enough that the budget alone would allow a whole month per block.
 _MAX_CHUNKS_PER_BLOCK = 4
+
+
+def bytes_per_timestep(ds: xr.Dataset) -> int:
+    """Return the bytes one timestep of `ds` occupies in memory.
+
+    Args:
+        ds (xr.Dataset): Dataset to measure.
+
+    Returns:
+        int: Bytes per timestep, summed over the data variables.
+    """
+    total = 0
+    for da in ds.data_vars.values():
+        cells = int(np.prod([s for d, s in da.sizes.items() if d != "time"]))
+        total += cells * da.dtype.itemsize
+    return total
+
+
+class _LevelPlan(NamedTuple):
+    """One level's reserved store, waiting for its values.
+
+    Attributes:
+        store_path (Path): Store this level is written to.
+        ds (xr.Dataset): Single-variable Dataset to write.
+        variable (Hashable): That variable's name.
+        start (int): Index on the store's time axis where `ds` begins.
+    """
+
+    store_path: Path
+    ds: xr.Dataset
+    variable: Hashable
+    start: int
 
 
 class HealpixZarrWriter:
     """Writes regridded HEALPix pyramids into per-(model, time_res, level) Zarr stores.
 
-    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr" -- one
-    independent Zarr store per (model_name, time_res, level). Surface,
-    pressure-level, height-level, and model-level variables coexist as
-    differently-shaped variables within the same store (distinguished by
-    their own dimensions, e.g. [time, cell] vs. [time, level, cell]), per
-    the contract's "separation... as standard in other Zarr stores" clause.
+    Layout: "<base_dir>/<model_name>/<time_res>/level_<N>.zarr". Surface,
+    pressure-level, height-level, and model-level variables coexist in one
+    store, distinguished by their own dimensions (e.g. [time, cell] vs.
+    [time, level, cell]).
 
-    Every write uses `consolidated=False`, since Zarr itself still flags
-    consolidated metadata as not yet part of the v3 spec. Compression is one
-    writer-wide codec pipeline (see `_build_compressors()`), applied on
-    every variable's first write.
+    Every write uses `consolidated=False`, since Zarr still flags consolidated
+    metadata as not part of the v3 spec.
 
     Attributes:
-        base_dir (Path): Root directory the per-(model, time_res, level)
-            Zarr stores are written under.
+        base_dir (Path): Root directory the stores are written under.
         min_level (int): Shared coarsest HEALPix level, validated against
             every incoming pyramid.
-        compressors (tuple | None): Zarr codec pipeline applied on every
-            variable's first write; None writes raw bytes.
+        compressors (tuple | None): Codec pipeline applied on a variable's
+            first write; None writes raw bytes.
         block_bytes (int): Memory budget for one time block of the pyramid.
     """
 
@@ -89,9 +107,8 @@ class HealpixZarrWriter:
         """Initializes the instance.
 
         Args:
-            base_dir (Path): Root directory for the per-(model, time_res,
-                level) Zarr stores. `to_zarr` creates the full nested path
-                on first write.
+            base_dir (Path): Root directory for the stores; `to_zarr` creates
+                the full nested path on first write.
             min_level (int): Shared coarsest HEALPix level across sources.
             compressor (str): "zlib", "zstd", or "none". Defaults to "zlib".
             compression_level (int): Codec level, >= 1 -- Blosc treats 0 as
@@ -100,9 +117,8 @@ class HealpixZarrWriter:
                 itself uses (measured ~1.4x smaller on packed int32). Ignored
                 for "none". Defaults to True.
             block_memory_mb (int): How much of the pyramid to compute and
-                write at a time (see `_block_timesteps()`). Peak RSS runs
-                roughly 3.5x this; lower it on a memory-tight node, raise it
-                to regrid more of the month in parallel.
+                write at a time (see `_block_timesteps()`). Lower it on a
+                memory-tight node, raise it to regrid more in parallel.
 
         Raises:
             ValueError: If `compressor` is unknown or `compression_level` < 1.
@@ -119,9 +135,9 @@ class HealpixZarrWriter:
         """Build the Zarr codec pipeline for one (compressor, level, shuffle) choice.
 
         Shuffle isn't a standalone Zarr v3 codec, so shuffled pipelines go
-        through Blosc (which bundles it with zlib/zstd); unshuffled ones use
-        the plain Gzip/Zstd codecs. Measured on real BARRA2 data: shuffle is
-        what makes packed int32 compress well (the level barely matters),
+        through Blosc (which bundles it with zlib/zstd) and unshuffled ones
+        use the plain Gzip/Zstd codecs. Measured on real BARRA2 data: shuffle
+        is what makes packed int32 compress well (the level barely matters),
         and Blosc's zstd needs a higher level than zlib to match it.
 
         Args:
@@ -148,9 +164,6 @@ class HealpixZarrWriter:
                 "no compression)."
             )
         if shuffle:
-            # Annotated ternary rather than passing `compressor` straight
-            # through, so the already-validated value narrows to the Literal
-            # BloscCodec expects.
             cname: Literal["zlib", "zstd"] = "zlib" if compressor == "zlib" else "zstd"
             return (BloscCodec(cname=cname, clevel=level, shuffle="shuffle"),)
         if compressor == "zlib":
@@ -168,44 +181,28 @@ class HealpixZarrWriter:
     ) -> None:
         """Write or grow each level's store for one task's single-variable pyramid.
 
-        Each `ds` in `pyramid` carries exactly one data variable. Every
-        level's store is first reserved over the time range it needs, all NaN
-        (`_reserve()`), growing the shared time axis for every variable at
-        once where the store already exists (`_extend_time_axis()`). The
-        values are then filled in one time block at a time, every level from
-        the same computation (`_fill_blocks()`) -- a whole month of a 3D
-        global pyramid is hundreds of GB and never fits in memory. The store
-        stays shape-consistent and readable after every single write.
-
-        `encoding` (e.g. from `GridRegridder.encoding_for()`) is merged with
-        this writer's compression pipeline, and only applies when a variable
-        is written for the first time -- appending new timestamps to an
-        existing variable writes into its already-fixed on-disk schema.
-
-        A vertical dimension is renamed to a numbered sibling when its level
-        values differ from the store's existing ones (see
-        `_resolve_vertical_dim()`), so variables on different pressure/height
-        level sets can coexist.
-
-        Not fully crash-atomic — call `GridRegridder.mark_done()` only after
-        this returns successfully.
+        Every level's store is first reserved over the time range it needs,
+        all NaN, growing the shared time axis for every variable at once where
+        the store exists already. The values are filled in afterwards one time
+        block at a time, every level from the same computation, so a whole
+        month's pyramid is never in memory at once. The store stays
+        shape-consistent and readable after every write, but is not
+        crash-atomic: call `GridRegridder.mark_done()` only once this returns.
 
         Args:
-            model_name (str): Contract "model_name" (e.g. "barra2_c2" --
-                shared by barra2_c2 and barra2_c2_20min, distinguished by
-                time_res instead).
+            model_name (str): Contract "model_name" (e.g. "barra2_c2", shared
+                by barra2_c2 and barra2_c2_20min and distinguished by
+                time_res).
             time_res (str): "1h" or "20min".
-            task (tuple): Task identifier, used only for logging/errors here.
+            task (tuple): Task identifier, used for logging and errors.
             pyramid (dict[int, xr.Dataset]): HEALPix pyramid to write, keyed
-                by level.
-            encoding (dict | None): Packing encoding for this pyramid's one
-                variable (e.g. `{"dtype": "int32", "scale_factor": ...}`),
-                applied only on that variable's first write. None packs
-                nothing; compression still applies.
-            quantization_step (float | None): The source's own precision step
-                (see `GridRegridder.quantization_step()`). Values are snapped
-                onto that lattice before writing, discarding mantissa bits
-                the source never carried. None writes values unchanged.
+                by level, each level carrying exactly one data variable.
+            encoding (dict | None): Packing for that variable (e.g.
+                `{"dtype": "int32", "scale_factor": ...}`), merged with this
+                writer's compression and applied on its first write only.
+            quantization_step (float | None): Source precision step to snap
+                values onto (see `GridRegridder.quantization_step()`). None
+                writes values unchanged.
 
         Raises:
             ValueError: If the pyramid is missing the shared `min_level`; if
@@ -222,73 +219,21 @@ class HealpixZarrWriter:
 
         task_start = time.time()
         chunk, block = self._block_timesteps(pyramid)
-        plans: list[tuple[Path, xr.Dataset, Hashable, int]] = []
-        for level, ds in pyramid.items():
-            ds = self._normalize_dim_order(ds)
-            ds = self._snap_to_lattice(ds, quantization_step)
-            (variable,) = ds.data_vars
-            store_path = self._store_path(model_name, time_res, level)
-            var_encoding: dict = {**(encoding or {}), "compressors": self.compressors}
-            var_encoding["chunks"] = self._chunk_shape(
-                ds[variable], var_encoding, chunk
+        plans = [
+            self._reserve_level(
+                self._store_path(model_name, time_res, level),
+                self._snap_to_lattice(self._normalize_dim_order(ds), quantization_step),
+                task,
+                encoding,
+                chunk,
             )
-            zarr_encoding = {variable: var_encoding}
-
-            if self._store_exists(store_path):
-                existing = xr.open_zarr(store_path, consolidated=False)
-                self._validate_consistency(store_path, ds, existing=existing)
-                ds = self._align_vertical_dims(ds, existing, store_path)
-                existing = self._extend_time_axis(store_path, existing, ds, task)
-
-                if variable not in existing.data_vars:
-                    logger.info(
-                        f"{store_path}: adding new variable '{variable}' for task "
-                        f"{task}..."
-                    )
-                    # Reserve the variable across the store's full time axis so
-                    # every variable spans one shared "time" axis, NaN for the
-                    # months it has no data for.
-                    self._reserve(
-                        store_path, ds, existing["time"], zarr_encoding, chunk, "a"
-                    )
-                    existing = xr.open_zarr(store_path, consolidated=False)
-                start = self._region_start(store_path, ds, variable, existing, task)
-            else:
-                logger.info(f"{store_path}: creating store for task {task}...")
-                self._reserve(store_path, ds, ds["time"], zarr_encoding, chunk, "w")
-                start = 0
-
-            plans.append((store_path, ds, variable, start))
-
+            for level, ds in pyramid.items()
+        ]
         self._fill_blocks(plans, block, task)
         logger.info(
             f"'{model_name}/{time_res}' task {task}: all {len(pyramid)} levels "
             f"written ({time.time() - task_start:.1f}s total)."
         )
-
-    def already_written(self, model_name: str, time_res: str, level: int) -> set:
-        """Return the timestamps a (model, time_res, level) store's time axis spans.
-
-        This is the store-wide axis, not a per-variable record: since
-        variables are NaN-padded to a shared time range, a timestamp here
-        doesn't mean every variable has data for it. `GridRegridder`'s
-        checkpoint, keyed by `(year, month, variable)`, is what actually
-        tracks regridded work.
-
-        Args:
-            model_name (str): Contract "model_name".
-            time_res (str): "1h" or "20min".
-            level (int): HEALPix level.
-
-        Returns:
-            set: `pandas.Timestamp` values on the store's time axis; empty if
-                the store doesn't exist yet.
-        """
-        store_path = self._store_path(model_name, time_res, level)
-        if not self._store_exists(store_path):
-            return set()
-        existing = xr.open_zarr(store_path, consolidated=False)
-        return set(pd.to_datetime(existing["time"].values))
 
     def emit_stac_item(
         self,
@@ -308,11 +253,10 @@ class HealpixZarrWriter:
         return None
 
     def checkpoint_path(self, model_name: str, time_res: str) -> Path:
-        """Return the checkpoint file path for one (model_name, time_res) combination.
+        """Return the checkpoint file path for one (model_name, time_res).
 
-        Checkpointing tracks what a `GridRegridder` has actually finished
-        writing to this destination store, so it lives alongside the Zarr
-        stores it corresponds to.
+        Checkpointing tracks what a `GridRegridder` has finished writing to
+        this destination, so it lives alongside the stores it belongs to.
 
         Args:
             model_name (str): Contract "model_name".
@@ -326,10 +270,9 @@ class HealpixZarrWriter:
     def weights_cache_dir(self, model_name: str) -> Path:
         """Return the ESMF weight-cache directory for one model_name.
 
-        Keyed by model_name only, because weights depend solely on
-        horizontal grid geometry (grid-doctor's own cache key is derived from
-        the actual coordinate arrays), which is identical across temporal
-        resolutions of the same physical grid.
+        Keyed by model_name only: weights depend solely on horizontal grid
+        geometry, which is identical across temporal resolutions of the same
+        physical grid.
 
         Args:
             model_name (str): Contract "model_name".
@@ -352,14 +295,70 @@ class HealpixZarrWriter:
         """
         return Path(self.base_dir, model_name, time_res, f"level_{level}.zarr")
 
-    def _normalize_dim_order(self, ds: xr.Dataset) -> xr.Dataset:
-        """Enforce the contract's dimension order: time, then a vertical dim, then cell.
+    @staticmethod
+    def _open(store_path: Path) -> xr.Dataset:
+        """Open a store's current contents.
 
-        Upstream regridding steps (e.g. xr.concat() prepending a new vertical
-        dimension) don't reliably produce "(time, level, cell)" order --
-        confirmed on real BARRA2 data coming out as "(level, time, cell)"
-        instead. Applies uniformly regardless of which vertical dim (level,
-        height, model_level) or none a given variable has.
+        Args:
+            store_path (Path): Path from `_store_path()`.
+
+        Returns:
+            xr.Dataset: The store, lazily.
+        """
+        return xr.open_zarr(store_path, consolidated=False)
+
+    def _reserve_level(
+        self,
+        store_path: Path,
+        ds: xr.Dataset,
+        task: tuple,
+        encoding: dict | None,
+        chunk: int,
+    ) -> _LevelPlan:
+        """Create or grow one level's store and reserve this variable's range.
+
+        Args:
+            store_path (Path): Path from `_store_path()`.
+            ds (xr.Dataset): Single-variable Dataset, already normalized and
+                snapped.
+            task (tuple): Task identifier, for logging and errors.
+            encoding (dict | None): Packing for the variable, merged with this
+                writer's compression.
+            chunk (int): Timesteps per Zarr chunk.
+
+        Returns:
+            _LevelPlan: Where and at which offset the values go.
+        """
+        (variable,) = ds.data_vars
+        var_encoding: dict = {**(encoding or {}), "compressors": self.compressors}
+        var_encoding["chunks"] = self._chunk_shape(ds[variable], var_encoding, chunk)
+        zarr_encoding = {variable: var_encoding}
+
+        if not self._store_exists(store_path):
+            logger.info(f"{store_path}: creating store for task {task}...")
+            self._reserve(store_path, ds, ds["time"], zarr_encoding, chunk, "w")
+            return _LevelPlan(store_path, ds, variable, 0)
+
+        existing = self._open(store_path)
+        self._validate_consistency(store_path, ds, existing=existing)
+        ds = self._align_vertical_dims(ds, existing, store_path)
+        existing = self._extend_time_axis(store_path, existing, ds, task)
+
+        if variable not in existing.data_vars:
+            logger.info(f"{store_path}: adding new variable '{variable}' for {task}...")
+            # Spans the store's full axis so every variable shares one "time",
+            # NaN for the months this one has no data for.
+            self._reserve(store_path, ds, existing["time"], zarr_encoding, chunk, "a")
+            existing = self._open(store_path)
+
+        start = self._region_start(store_path, ds, variable, existing, task)
+        return _LevelPlan(store_path, ds, variable, start)
+
+    def _normalize_dim_order(self, ds: xr.Dataset) -> xr.Dataset:
+        """Enforce the contract's dimension order: time, vertical dim, cell.
+
+        Applies to whichever vertical dim (level, height, model_level) a
+        variable has, or none.
 
         Args:
             ds (xr.Dataset): Dataset about to be written.
@@ -374,12 +373,9 @@ class HealpixZarrWriter:
     def _snap_to_lattice(self, ds: xr.Dataset, step: float | None) -> xr.Dataset:
         """Round values onto the source's own precision lattice.
 
-        `round(x / step) * step`, which is exact in float32 for the
-        power-of-two steps every source uses (confirmed on real data: BARRA2
-        scale factors and the GRIB binary scale factors are all powers of
-        two). Error is at most half a step, so the result stays within what
-        the source itself could represent -- the discarded bits are
-        regridding artefacts, not information.
+        `round(x / step) * step`, exact in float32 for the power-of-two steps
+        every source uses. The error is at most half a step, so the result
+        stays within what the source itself could represent.
 
         Args:
             ds (xr.Dataset): Dataset about to be written.
@@ -391,8 +387,8 @@ class HealpixZarrWriter:
         """
         if not step:
             return ds
-        # keep_attrs: _validate_consistency() reads healpix_level/order off
-        # the Dataset, and variable attrs (units, cell_methods) must survive.
+        # Dataset attrs carry healpix_level/order for _validate_consistency(),
+        # variable attrs carry units and cell_methods.
         with xr.set_options(keep_attrs=True):
             return (ds / step).round() * step
 
@@ -401,18 +397,15 @@ class HealpixZarrWriter:
     ) -> tuple[int, ...]:
         """Return a chunk shape bounded by `_TARGET_CHUNK_BYTES`.
 
-        Keeps vertical levels whole (there are few of them, and they're
-        usually read together) and splits "cell" to fit the remaining budget.
-        Sized from the *encoded* dtype, since that's what the codec actually
-        sees.
+        Keeps vertical levels whole (there are few, and they are usually read
+        together) and splits "cell" to fit the remaining budget, sized from
+        the encoded dtype the codec actually sees.
 
         Args:
-            da (xr.DataArray): The variable about to be written, already in
-                the contract's dimension order.
-            encoding (dict): This variable's encoding, read for its "dtype"
-                when the variable is packed.
-            time_chunk (int): Timesteps per chunk, from `_block_timesteps()`,
-                so that each written block covers whole chunks.
+            da (xr.DataArray): The variable about to be written, in the
+                contract's dimension order.
+            encoding (dict): That variable's encoding, read for its "dtype".
+            time_chunk (int): Timesteps per chunk, from `_block_timesteps()`.
 
         Returns:
             tuple[int, ...]: Chunk size per dimension, in `da.dims` order.
@@ -423,7 +416,7 @@ class HealpixZarrWriter:
 
         vertical = 1
         for dim, size in sizes.items():
-            if dim != "time" and dim != "cell":
+            if dim not in ("time", "cell"):
                 vertical *= size
 
         budget = _TARGET_CHUNK_BYTES // (itemsize * time_chunk * vertical)
@@ -434,23 +427,98 @@ class HealpixZarrWriter:
             for dim in da.dims
         )
 
+    def _block_timesteps(self, pyramid: dict[int, xr.Dataset]) -> tuple[int, int]:
+        """Return the Zarr time chunk and how many timesteps to write at a time.
+
+        One block of every level is in memory at once, so it is sized to keep
+        that under `block_bytes` -- a whole month of a 3D global variable is
+        hundreds of GB. A block holds a whole number of the incoming dask
+        chunks, so each source chunk is read once and regions stay aligned
+        with the chunks written here.
+
+        Args:
+            pyramid (dict[int, xr.Dataset]): The pyramid about to be written.
+
+        Returns:
+            tuple[int, int]: (timesteps per Zarr chunk, timesteps per block).
+        """
+        per_step = sum(bytes_per_timestep(ds) for ds in pyramid.values())
+        incoming = max(
+            (
+                max(da.chunksizes.get("time", (0,)))
+                for ds in pyramid.values()
+                for da in ds.data_vars.values()
+            ),
+            default=0,
+        )
+        budget = max(1, int(self.block_bytes // max(per_step, 1)))
+        # An eagerly computed pyramid (the regional path) has no chunks to
+        # follow, so the contract's own time chunk applies.
+        unit = min(incoming or TIME_CHUNK, TIME_CHUNK, budget)
+        # The budget covers what is written; the source feeding a block costs
+        # memory too, and dwarfs it where the target is much coarser than the
+        # source (a regional pyramid's compact levels).
+        chunks = max(1, min(budget // unit, _MAX_CHUNKS_PER_BLOCK))
+        return unit, unit * chunks
+
+    def _reserve(
+        self,
+        store_path: Path,
+        ds: xr.Dataset,
+        times: xr.DataArray,
+        encoding: dict,
+        chunk: int,
+        mode: str,
+    ) -> None:
+        """Write the variable's schema and coordinates over `times`, all NaN.
+
+        The NaN array is built chunked and lazily, so the store's chunks are
+        written without computing any regridded value or holding the variable
+        in memory; `_fill_blocks()` fills them afterwards.
+
+        Args:
+            store_path (Path): Path from `_store_path()`.
+            ds (xr.Dataset): Incoming Dataset for one variable.
+            times (xr.DataArray): Time axis the variable should span.
+            encoding (dict): Zarr encoding for that variable.
+            chunk (int): Timesteps per chunk, from `_block_timesteps()`.
+            mode (str): "w" for a new store, "a" for a new variable in one.
+        """
+        (variable,) = ds.data_vars
+        da = ds[variable]
+        rest = {d: s for d, s in da.sizes.items() if d != "time"}
+        blank = dask.array.full(
+            (times.size, *rest.values()),
+            np.nan,
+            dtype=da.dtype,
+            chunks=(chunk, *rest.values()),
+        )
+        template = xr.Dataset(
+            {variable: (("time", *rest), blank, da.attrs)},
+            # Coordinates along time describe the incoming slice, not the span
+            # being reserved, so only the others carry over.
+            coords={
+                **{k: v for k, v in ds.coords.items() if "time" not in v.dims},
+                "time": times,
+            },
+            attrs=ds.attrs,
+        )
+        template.to_zarr(store_path, mode=mode, encoding=encoding, consolidated=False)
+
     def _extend_time_axis(
         self, store_path: Path, existing: xr.Dataset, ds: xr.Dataset, task: tuple
     ) -> xr.Dataset:
         """Grow the store's shared time axis to cover `ds`'s new timestamps.
 
-        "time" is one dimension shared by every variable in a store, so it
-        has to grow for all of them at once -- extending it while writing
-        only one variable leaves the others short, and the store then can't
-        be opened at all. Every variable is therefore extended together here
-        (NaN over the new range, written lazily), and the real values are
-        filled in per variable afterwards by `_write_region()`.
+        "time" is one dimension shared by every variable in a store, so all of
+        them are extended together here (NaN over the new range) and the real
+        values are filled in per variable afterwards.
 
         Args:
             store_path (Path): Path from `_store_path()`.
             existing (xr.Dataset): The store's current contents.
             ds (xr.Dataset): Incoming Dataset for one variable.
-            task (tuple): Task identifier, for logging/errors.
+            task (tuple): Task identifier, for logging and errors.
 
         Returns:
             xr.Dataset: The store's contents, re-opened if it was extended.
@@ -459,8 +527,6 @@ class HealpixZarrWriter:
             ValueError: If the new timestamps start before the store's last
                 one, which would need inserting rather than extending.
         """
-        # pd.Index, not pd.to_datetime: the time coordinate's own dtype is
-        # what has to line up with the store when reindexing.
         existing_times = pd.Index(existing["time"].values)
         incoming_times = pd.Index(ds["time"].values)
         new_times = incoming_times.difference(existing_times)
@@ -483,89 +549,7 @@ class HealpixZarrWriter:
         template.reindex(time=new_times).to_zarr(
             store_path, mode="a", append_dim="time", consolidated=False
         )
-        return xr.open_zarr(store_path, consolidated=False)
-
-    def _block_timesteps(self, pyramid: dict[int, xr.Dataset]) -> tuple[int, int]:
-        """Return the Zarr time chunk and how many timesteps to write at a time.
-
-        One block of every level is in memory at once, so the block is sized
-        to keep that under `block_bytes` -- a whole month of a 3D global
-        variable is hundreds of GB and never fits. A block is a whole number
-        of the incoming dask chunks, so each source chunk is read once rather
-        than re-read by every block overlapping it, and so regions stay
-        aligned with the Zarr chunks written here.
-
-        Args:
-            pyramid (dict[int, xr.Dataset]): The pyramid about to be written.
-
-        Returns:
-            tuple[int, int]: (timesteps per Zarr chunk, timesteps per block).
-        """
-        per_step = 0
-        incoming = 0
-        for ds in pyramid.values():
-            for da in ds.data_vars.values():
-                cells = int(np.prod([s for d, s in da.sizes.items() if d != "time"]))
-                per_step += cells * da.dtype.itemsize
-                incoming = max(incoming, max(da.chunksizes.get("time", (0,))))
-        budget = max(1, int(self.block_bytes // max(per_step, 1)))
-        # An eagerly computed pyramid (the regional path) has no chunks to
-        # follow, so the contract's own time chunk applies.
-        unit = min(incoming or TIME_CHUNK, TIME_CHUNK, budget)
-        # The budget above only covers what is written. The source feeding a
-        # block costs memory too, and can dwarf it where the target is much
-        # coarser than the source (a regional pyramid's compact levels), so a
-        # block also holds only a few of the regridder's already budget-sized
-        # source chunks.
-        chunks = max(1, min(budget // unit, _MAX_CHUNKS_PER_BLOCK))
-        return unit, unit * chunks
-
-    def _reserve(
-        self,
-        store_path: Path,
-        ds: xr.Dataset,
-        times: xr.DataArray,
-        encoding: dict,
-        chunk: int,
-        mode: str,
-    ) -> None:
-        """Write the variable's schema and coordinates over `times`, all NaN.
-
-        The NaN array is built chunked and lazily, so this writes the store's
-        chunks without computing any regridded value and without ever holding
-        the variable in memory; `_fill_blocks()` fills them in afterwards.
-        (`reindex()` on a 0-length array would look simpler but materializes
-        the whole span as one NumPy array -- tens of GB for a 3D global
-        variable.)
-
-        Args:
-            store_path (Path): Path from `_store_path()`.
-            ds (xr.Dataset): Incoming Dataset for one variable.
-            times (xr.DataArray): Time axis the variable should span.
-            encoding (dict): Zarr encoding for the one variable.
-            chunk (int): Timesteps per chunk, from `_block_timesteps()`.
-            mode (str): "w" for a new store, "a" for a new variable in one.
-        """
-        (variable,) = ds.data_vars
-        da = ds[variable]
-        rest = {d: s for d, s in da.sizes.items() if d != "time"}
-        blank = dask.array.full(
-            (times.size, *rest.values()),
-            np.nan,
-            dtype=da.dtype,
-            chunks=(chunk, *rest.values()),
-        )
-        template = xr.Dataset(
-            {variable: (("time", *rest), blank, da.attrs)},
-            # Coordinates along time belong to the incoming slice, not to the
-            # span being reserved, so only the others carry over.
-            coords={
-                **{k: v for k, v in ds.coords.items() if "time" not in v.dims},
-                "time": times,
-            },
-            attrs=ds.attrs,
-        )
-        template.to_zarr(store_path, mode=mode, encoding=encoding, consolidated=False)
+        return self._open(store_path)
 
     def _region_start(
         self,
@@ -583,7 +567,7 @@ class HealpixZarrWriter:
             variable (Hashable): The variable being written.
             existing (xr.Dataset): The store's contents, time axis already
                 covering `ds`.
-            task (tuple): Task identifier, for logging/errors.
+            task (tuple): Task identifier, for errors.
 
         Returns:
             int: Index of `ds`'s first timestamp on the store's time axis.
@@ -593,8 +577,7 @@ class HealpixZarrWriter:
                 the store, or if that slice already holds data.
         """
         store_times = pd.Index(existing["time"].values)
-        incoming_times = pd.Index(ds["time"].values)
-        positions = store_times.get_indexer(incoming_times)
+        positions = store_times.get_indexer(pd.Index(ds["time"].values))
         start, stop = int(positions.min()), int(positions.max()) + 1
         if stop - start != len(positions):
             raise ValueError(
@@ -611,39 +594,29 @@ class HealpixZarrWriter:
             )
         return start
 
-    def _fill_blocks(
-        self,
-        plans: list[tuple[Path, xr.Dataset, Hashable, int]],
-        block: int,
-        task: tuple,
-    ) -> None:
+    def _fill_blocks(self, plans: list[_LevelPlan], block: int, task: tuple) -> None:
         """Fill every level's reserved region, one time block at a time.
 
-        Each block is computed for all levels in one `dask.compute()` call:
-        the coarser levels derive from the finer ones, so computing them
-        separately would repeat the regrid per level.
+        Each block is computed for all levels in one `dask.compute()` call,
+        since the coarser levels derive from the finer ones.
 
         Args:
-            plans (list): One (store_path, ds, variable, start) per level.
+            plans (list[_LevelPlan]): One plan per level, from
+                `_reserve_level()`.
             block (int): Timesteps per block, from `_block_timesteps()`.
             task (tuple): Task identifier, for the progress bar.
         """
-        steps = plans[0][1].sizes["time"]
-        # region= writes only the data variable; the store already owns every
-        # coordinate, and xarray rejects ones that lack the region dimension.
-        slabs = [
-            ds[[variable]].drop_vars(ds[[variable]].coords)
-            for _, ds, variable, _ in plans
-        ]
+        steps = plans[0].ds.sizes["time"]
+        # region= writes the data variable alone: the store owns every
+        # coordinate already, and xarray rejects ones without the region dim.
+        slabs = [p.ds[[p.variable]].drop_vars(p.ds[[p.variable]].coords) for p in plans]
         for t0 in tqdm(range(0, steps, block), desc=f"Writing {task}", unit="block"):
             stop = min(t0 + block, steps)
-            computed = dask.compute(
-                *[slab.isel(time=slice(t0, stop)) for slab in slabs]
-            )
-            for (store_path, _, _, start), done in zip(plans, computed):
+            computed = dask.compute(*[s.isel(time=slice(t0, stop)) for s in slabs])
+            for plan, done in zip(plans, computed):
                 done.to_zarr(
-                    store_path,
-                    region={"time": slice(start + t0, start + stop)},
+                    plan.store_path,
+                    region={"time": slice(plan.start + t0, plan.start + stop)},
                     consolidated=False,
                 )
 
@@ -682,10 +655,9 @@ class HealpixZarrWriter:
         """Return the store dimension name one variable's vertical levels belong on.
 
         A store holds a single coordinate array per dimension name, so
-        variables whose level sets differ can't share one (confirmed on real
-        BARRA2 data: "ta" has pressure levels [1000, 950] but "ua" only
-        [1000]). Variables with identical levels share a coordinate;
-        otherwise the first free numbered sibling is used.
+        variables whose level sets differ can't share one. Variables with
+        identical levels share a coordinate; otherwise the first free numbered
+        sibling is used.
 
         Args:
             base (str): Base dimension name, e.g. "level".
@@ -723,11 +695,10 @@ class HealpixZarrWriter:
         """Validate an incoming Dataset's HEALPix attrs against an existing store.
 
         Args:
-            store_path (Path): Path from `_store_path()`, used only for the
-                error message.
+            store_path (Path): Path from `_store_path()`, for the error message.
             ds (xr.Dataset): Incoming Dataset about to be appended.
             existing (xr.Dataset): The store's current contents, already
-                opened by the caller (avoids opening it twice).
+                opened by the caller.
 
         Raises:
             ValueError: If `healpix_level` or `healpix_order` don't match.

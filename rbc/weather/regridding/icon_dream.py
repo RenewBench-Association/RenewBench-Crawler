@@ -6,34 +6,31 @@ HEALPix regridder for ICON-DREAM NWP data (unstructured icosahedral, Global/EU).
 from pathlib import Path
 
 import cfgrib  # type: ignore[import-untyped]
-import pandas as pd
 import xarray as xr
 
 from rbc.weather.icon_dream.downloader import _get_model_config, _normalize_model
 from rbc.weather.icon_dream.mappings import VARIABLE_TO_SHORT_PARAM
 from rbc.weather.regridding.base import GridRegridder
-from rbc.weather.regridding.grib import grib_quantization_step
+from rbc.weather.regridding.grib import (
+    flatten_forecast_dims,
+    grib_quantization_step,
+)
 from rbc.weather.regridding.regional import build_regional_healpix_pyramid
 from rbc.weather.utils import raw_data_dir
 
 # Reverse of icon_dream/mappings.py's own short-code -> canonical mapping.
-# cfgrib's own decoded variable name diverges from DWD's short code (e.g.
-# "T_2M" decodes as "t2m"), so this can't be used to rename by matching
-# against cfgrib's name directly -- _load_source_chunk() instead renames each
-# file's one variable to its DWD code (read from the filename, which the
-# downloader itself embeds verbatim) before this mapping is applied, so every
-# entry here is usable without per-variable real-data verification.
+# Keyed by DWD short code: _load_source_chunk() renames each file's variable
+# to the code in its filename first, since cfgrib's decoded name diverges
+# from it (e.g. "T_2M" decodes as "t2m").
 _SHORT_TO_CANONICAL = {v: k for k, v in VARIABLE_TO_SHORT_PARAM.items()}
 
 
 class IconDreamRegridder(GridRegridder):
     """HEALPix regridder for ICON-DREAM NWP data.
 
-    Unstructured icosahedral source: Global is genuinely global coverage and
-    uses grid-doctor's own pyramid path directly; EU is regional and hits the
-    same regional-source crash as BARRA2 (grid-doctor issue #24), so
-    _regrid_chunk() is overridden to use rbc.weather.regridding.regional's
-    workaround only for that variant.
+    Unstructured icosahedral source. Global uses grid-doctor's own pyramid
+    path; EU is regional and hits grid-doctor issue #24, so `_regrid_chunk()`
+    routes it through rbc.weather.regridding.regional instead.
 
     One instance per model variant (global/eu), each its own source_name/raw_dir.
 
@@ -53,9 +50,8 @@ class IconDreamRegridder(GridRegridder):
         self.model = _normalize_model(model)
         self.model_config = _get_model_config(self.model)
         super().__init__(**kwargs)
-        # Computed once here (raw_dir only exists after super().__init__()),
-        # rather than on every _load_source_chunk()/_grid_metadata_path()
-        # call -- invariant for the lifetime of this instance.
+        # Invariant for this instance; raw_dir only exists after super().
+
         self.model_dir = Path(self.raw_dir, self.model_config["raw_folder"])
         self.source_dir = raw_data_dir(
             self.raw_dir,
@@ -66,22 +62,11 @@ class IconDreamRegridder(GridRegridder):
     def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
         """Open and flatten the raw ICON-DREAM file for one task and variable.
 
-        The file's exact path is built directly from the variable's DWD code
-        -- the same filename the downloader itself writes -- since
-        ICON-DREAM is genuinely one variable per file. Every ICON-DREAM GRIB
-        file (single- and model-level alike) carries a (time, step) forecast
-        structure -- confirmed on real sample data, unlike ERA5 where only
-        single-level files split this way -- so the opened hypercube is
-        flattened via valid_time. Forecast cycles spill past calendar-month
-        boundaries the same way ERA5's do, so the result is trimmed to the
-        exact month.
-
-        The file's one variable is renamed to its DWD short code, read
-        directly from the filename (the downloader's own naming embeds it
-        verbatim: "{label}_{year}{month}_{dwd_code}_hourly.grb") rather than
-        from cfgrib's decoded variable name, which diverges from it (e.g.
-        "T_2M" decodes as "t2m") -- this is what lets _variable_mapping()
-        reuse icon_dream/mappings.py's own short-code table directly.
+        ICON-DREAM writes one variable per file, so the path is built from
+        the variable's DWD code, and the file's one variable is renamed to
+        that code (cfgrib's decoded name diverges from it). Every file carries
+        a (time, step) forecast structure, flattened onto valid times, whose
+        cycles spill past month boundaries and are trimmed off.
 
         Args:
             task (tuple): (year, month) task identifier.
@@ -99,31 +84,18 @@ class IconDreamRegridder(GridRegridder):
 
         datasets = []
         for ds in cfgrib.open_datasets(f, chunks={"time": 1}):
-            if "step" in ds.dims:
-                ds = (
-                    ds.stack(_flat=("time", "step"))
-                    .swap_dims({"_flat": "valid_time"})
-                    .drop_vars(["time", "step", "_flat"])
-                    .rename({"valid_time": "time"})
-                )
+            ds = flatten_forecast_dims(ds)
             (var_name,) = ds.data_vars
-            # "generalVerticalLayer" only appears on model-level files
-            # (e.g. "T", not "T_2M") -- rename() would raise if asked to
-            # rename a name absent from a given file, hence the check.
-            # Unlike "values" (a bare dim, no coordinate), it's also a
-            # coordinate variable, so rename() is used (not rename_dims())
-            # to keep the dimension and its coordinate values in sync.
+            # "generalVerticalLayer" appears on model-level files only, and
+            # carries a coordinate, so rename() keeps dim and values in sync.
             renames: dict[str, str] = {str(var_name): dwd_code, "values": "cell"}
             if "generalVerticalLayer" in ds.dims:
                 renames["generalVerticalLayer"] = "model_level"
             datasets.append(ds.rename(renames))
 
-        # join="outer" explicit: a single file can split into multiple
-        # cfgrib hypercubes with genuinely different time coverage (e.g.
-        # distinct step groupings), the same real divergence BARRA2's own
-        # merge fix was made explicit for. compat="no_conflicts" explicit:
-        # keeps requiring overlapping values to agree, rather than silently
-        # picking one (xarray's own upcoming "override" default).
+        # One file can split into hypercubes with different time coverage,
+        # so join="outer"; compat="no_conflicts" requires overlapping values
+        # to agree instead of silently picking one.
         merged = xr.merge(datasets, join="outer", compat="no_conflicts")
         return self._trim_to_month(merged, year, month)
 
@@ -151,22 +123,6 @@ class IconDreamRegridder(GridRegridder):
             if canonical:
                 found.append(canonical)
         return found
-
-    def _trim_to_month(self, ds: xr.Dataset, year: int, month: str) -> xr.Dataset:
-        """Drop timestamps outside the exact calendar month.
-
-        Args:
-            ds (xr.Dataset): Merged dataset, possibly spanning past month
-                boundaries due to forecast-cycle spillover.
-            year (int): Task year.
-            month (str): Task month, zero-padded.
-
-        Returns:
-            xr.Dataset: Dataset trimmed to [year-month-01, end of month].
-        """
-        start = pd.Timestamp(year=year, month=int(month), day=1)
-        end = start + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)
-        return ds.sel(time=slice(start, end))
 
     def _grid_metadata_path(self) -> Path | None:
         """Return this model's grid definition file (not the -grfinfo one).

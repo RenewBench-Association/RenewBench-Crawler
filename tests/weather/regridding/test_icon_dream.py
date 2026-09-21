@@ -221,6 +221,14 @@ class TestLoadSourceChunk:
         rg = IconDreamRegridder(model="global", **base_args)
 
         def _hypercube_at(step_hours: int) -> xr.Dataset:
+            """Build one cfgrib hypercube at a given forecast step.
+
+            Args:
+                step_hours (int): Forecast step, in hours.
+
+            Returns:
+                xr.Dataset: A (time, step, values) hypercube.
+            """
             init_time = pd.to_datetime(["2025-01-01T00:00"]).values
             step = pd.to_timedelta([step_hours], unit="h").values
             valid_time = init_time[:, None] + step[None, :]

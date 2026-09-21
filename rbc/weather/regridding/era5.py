@@ -6,18 +6,19 @@ HEALPix regridder for ERA5 reanalysis data (global lat-lon).
 from pathlib import Path
 
 import cfgrib  # type: ignore[import-untyped]
-import pandas as pd
 import xarray as xr
 
 from rbc.weather.era5.mappings import MODEL_CONFIG
 from rbc.weather.regridding.base import GridRegridder
-from rbc.weather.regridding.grib import grib_quantization_step
+from rbc.weather.regridding.grib import (
+    flatten_forecast_dims,
+    grib_quantization_step,
+)
 from rbc.weather.utils import raw_data_dir
 
-# Native cfgrib variable name -> canonical name, verified against real sample
-# data and cross-referenced with rbc/weather/era5/mappings.py's own canonical
-# names (cfgrib's naming differs from the CDS short-param codes there, e.g.
-# cfgrib gives "u10", CDS's own short code is "10u").
+# Native cfgrib variable name -> canonical name. cfgrib's naming differs from
+# the CDS short-param codes in rbc/weather/era5/mappings.py (e.g. cfgrib gives
+# "u10" where CDS gives "10u").
 VARIABLE_MAPPING = {
     # Single-level, flat-time hypercube
     "sp": "surface_pressure",
@@ -45,10 +46,9 @@ VARIABLE_MAPPING = {
     "w": "vertical_velocity",
 }
 
-# cfgrib names that come from pressure-level ("_pl_") files -- everything
-# else in VARIABLE_MAPPING comes from single-level ("_sl_") files. Used to
-# pick which file a requested canonical variable lives in, since (unlike
-# BARRA2/ICON-DREAM) several variables share one ERA5 file.
+# cfgrib names that come from pressure-level ("_pl_") files; everything else
+# in VARIABLE_MAPPING comes from single-level ("_sl_") files. Several ERA5
+# variables share one file, so this picks which file to open.
 _PRESSURE_LEVEL_CFGRIB_NAMES = {"z", "t", "u", "v", "q", "w"}
 
 _CANONICAL_TO_CFGRIB = {v: k for k, v in VARIABLE_MAPPING.items()}
@@ -83,22 +83,16 @@ class Era5Regridder(GridRegridder):
     def _load_source_chunk(self, task: tuple, variable: str) -> xr.Dataset:
         """Open the raw ERA5 file for one task, selecting just one variable.
 
-        Unlike BARRA2/ICON-DREAM, several ERA5 variables share one file per
-        (year, month, level_type), so the file itself can't be picked by
-        variable alone -- this opens the one file (sl or pl, whichever
-        contains the requested variable) and immediately narrows to just
-        that cfgrib name before anything else. Confirmed that xarray's backend
-        arrays stay lazy per-variable regardless of how many variables share a
-        file, so the other variables in that file are never actually read from
-        disk as long as nothing else touches them. One timestep per chunk is
-        the granularity reads happen at; `GridRegridder._chunk_along_time()`
-        groups them up to the memory budget.
+        Several ERA5 variables share one file per (year, month, level_type),
+        so this opens the sl or pl file holding the requested variable and
+        narrows to its cfgrib name; the file's other variables stay lazy and
+        are never read. Reads happen one timestep at a time, which
+        `GridRegridder._chunk_along_time()` groups up to the memory budget.
 
         Single-level files carry two cfgrib hypercubes: flat-time analysis
         variables, and (time, step) forecast-structured accumulated/extreme
-        variables (confirmed on real sample data), the latter flattened via
-        valid_time. Forecast-cycle valid times spill past calendar-month
-        boundaries, so the result is trimmed to the exact month.
+        ones, the latter flattened onto valid times that spill past month
+        boundaries and are trimmed off.
 
         Args:
             task (tuple): (year, month) task identifier.
@@ -134,11 +128,9 @@ class Era5Regridder(GridRegridder):
     def _discover_variables(self, task: tuple) -> list[str]:
         """Return every canonical ERA5 variable actually downloaded for one task.
 
-        Unlike BARRA2/ICON-DREAM this isn't filename-only: several variables
-        share one file, and the filename's own CDS-style codes diverge from
-        cfgrib's decoded names (the same kind of divergence VARIABLE_MAPPING
-        exists to bridge), so the sl/pl files are opened (lazily -- cheap,
-        no bulk data read) to see what cfgrib actually decoded.
+        The sl/pl files are opened (lazily, no bulk read) to see what cfgrib
+        decoded: several variables share one file, and the filenames carry
+        CDS-style codes rather than cfgrib's names.
 
         Args:
             task (tuple): (year, month) task identifier.
@@ -165,8 +157,8 @@ class Era5Regridder(GridRegridder):
     def _open_pressure_level(self, path: Path) -> xr.Dataset:
         """Open a pressure-level file, renaming its level dim to match the contract.
 
-        cfgrib names this dimension "isobaricInhPa"; the weather Zarr contract
-        uses "level" uniformly for pressure-level variables across sources.
+        cfgrib names this dimension "isobaricInhPa"; the contract uses
+        "level" for pressure-level variables across all sources.
 
         Args:
             path (Path): Path to the pressure-level .grib file.
@@ -188,31 +180,9 @@ class Era5Regridder(GridRegridder):
         """
         opened = []
         for ds in cfgrib.open_datasets(path, chunks={"time": 1}):
-            if "step" in ds.dims:
-                ds = (
-                    ds.stack(_flat=("time", "step"))
-                    .swap_dims({"_flat": "valid_time"})
-                    .drop_vars(["time", "step", "_flat"])
-                    .rename({"valid_time": "time"})
-                )
+            ds = flatten_forecast_dims(ds)
             opened.append(ds)
         return opened
-
-    def _trim_to_month(self, ds: xr.Dataset, year: int, month: str) -> xr.Dataset:
-        """Drop timestamps outside the exact calendar month.
-
-        Args:
-            ds (xr.Dataset): Merged dataset, possibly spanning past month
-                boundaries due to forecast-cycle spillover.
-            year (int): Task year.
-            month (str): Task month, zero-padded.
-
-        Returns:
-            xr.Dataset: Dataset trimmed to [year-month-01, end of month].
-        """
-        start = pd.Timestamp(year=year, month=int(month), day=1)
-        end = start + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)
-        return ds.sel(time=slice(start, end))
 
     def _grid_metadata_path(self) -> Path | None:
         """ERA5 is global lat-lon with no separate grid definition file.
@@ -231,17 +201,13 @@ class Era5Regridder(GridRegridder):
         return VARIABLE_MAPPING
 
     def encoding_for(self, variable: str) -> dict | None:
-        """Store ERA5 as float32, the precision its source files actually carry.
+        """Store ERA5 as float32, the precision its source files carry.
 
-        GRIB packs per message (its own reference value and scale per
-        timestep/level), so there's no file-wide scale_factor/add_offset to
-        reuse the way BARRA2's NetCDF has. Confirmed on real data instead:
-        the messages are 16-bit (`bitsPerValue: 16`, binary scale 2**-9) and
-        cfgrib decodes them to float32 -- the float64 that would otherwise be
-        written is purely an artefact of regridding, carrying no information.
+        The messages are 16-bit (`bitsPerValue: 16`, binary scale 2**-9) and
+        cfgrib decodes them to float32; the float64 comes from regridding.
 
         Args:
-            variable (str): Canonical variable name (unused -- every ERA5
+            variable (str): Canonical variable name (unused: every ERA5
                 variable comes from the same GRIB decoding path).
 
         Returns:

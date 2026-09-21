@@ -127,13 +127,11 @@ def _canonical_to_native(variable: str) -> tuple[str, str]:
 class Barra2Regridder(GridRegridder):
     """HEALPix regridder for BARRA2 reanalysis data.
 
-    Regional lat-lon source (Australia + surrounding): no separate grid
-    file, but every BARRA2 domain hits grid-doctor's regional-source
-    coordinate-attachment crash (grid-doctor issue #24) -- _regrid_chunk()
-    is overridden to use rbc.weather.regridding.regional's compact-cell
-    workaround instead of grid_doctor.create_healpix_pyramid().
+    Regional lat-lon source (Australia + surrounding), with no separate grid
+    file. Every BARRA2 domain hits grid-doctor issue #24, so `_regrid_chunk()`
+    routes through rbc.weather.regridding.regional's compact-cell path.
 
-    One instance per model variant (R2/C2/C2_20min) -- each its own
+    One instance per model variant (R2/C2/C2_20min), each its own
     source_name/raw_dir, since they differ in native resolution and
     pressure-level sets.
 
@@ -153,15 +151,10 @@ class Barra2Regridder(GridRegridder):
         self.model = model
         self.model_config = MODEL_CONFIG[model]
         self.temporal_res = self.model_config["temporal_res"]
-        # Populated by _load_source_chunk() as each variable's raw file(s)
-        # are opened; read back by encoding_for(). One file's packing is
-        # reused for every level of a consolidated pressure-/height-level
-        # variable -- see _packed_encoding()'s docstring for why that's safe.
+        # Populated by _load_source_chunk(), read back by encoding_for().
         self._native_encodings: dict[str, dict | None] = {}
         super().__init__(**kwargs)
-        # Computed once here (raw_dir only exists after super().__init__()),
-        # rather than on every _load_source_chunk() call -- invariant for the
-        # lifetime of this instance.
+        # Invariant for this instance; raw_dir only exists after super().
         self.source_dir = raw_data_dir(
             self.raw_dir,
             self.model_config["raw_folder"],
@@ -201,16 +194,11 @@ class Barra2Regridder(GridRegridder):
             f = Path(self.source_dir, f"{prefix}{base}{suffix}")
             ds = xr.open_dataset(f, chunks={})[[base]]
             self._native_encodings[variable] = _packed_encoding(ds[base].encoding)
-            shift = _interval_center_shift(ds[base].attrs.get("cell_methods", ""))
-            ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
-            if shift is not None:
-                ds = ds.assign_coords(time=ds["time"] + shift)
-            return ds
+            return self._align_to_shared_clock(ds, base)
 
-        # Pressure-/height-level: one file per level, and the level set
-        # itself isn't known ahead of time, so glob by base then filter with
-        # an anchored regex -- e.g. base "ta" must not also match "tas", a
-        # different, single-level variable that happens to start the same way.
+        # Pressure-/height-level: one file per level, the level set unknown
+        # ahead of time. The anchored regex keeps base "ta" from matching
+        # "tas", a different single-level variable.
         level_coord = "height" if kind == "height" else "pressure"
         code_pattern = (
             re.compile(rf"^{re.escape(base)}(\d+)m$")
@@ -223,36 +211,20 @@ class Barra2Regridder(GridRegridder):
             if not code_pattern.match(code):
                 continue
             ds = xr.open_dataset(f, chunks={})[[code]]
-            # The level value comes from the file's own scalar
-            # "pressure"/"height" coordinate, not the filename -- confirmed
-            # on real data the two always agree, but the file's own value is
-            # the authoritative one, and using it needs no caveat in STAC
-            # metadata (a filename-inferred value would). That coordinate is
-            # then dropped: kept as a loose scalar rather than consolidated
-            # into this method's own level/height dimension, it would
-            # conflict once different variables have different level
-            # coverage (confirmed on real data: "ta" has levels [1000, 950]
-            # but "ua" only has [1000], so a shared "pressure" coordinate
-            # named the same across both raises a MergeError).
+            # The level comes from the file's own scalar coordinate, which is
+            # authoritative. It is then dropped: variables differ in level
+            # coverage ("ta" has [1000, 950] where "ua" has [1000]), so a
+            # loose scalar of the same name raises a MergeError.
             level = float(ds[level_coord].item())
             if variable not in self._native_encodings:
                 # scale_factor is identical across a variable's level files
-                # (confirmed on real data); add_offset differs per level,
-                # but any one file's is safe to reuse for the whole
-                # consolidated variable -- see _packed_encoding()'s
-                # docstring. Only the first level file's is kept.
+                # and add_offset has headroom to spare, so the first file's
+                # packing covers the consolidated variable.
                 self._native_encodings[variable] = _packed_encoding(ds[code].encoding)
-            shift = _interval_center_shift(ds[code].attrs.get("cell_methods", ""))
-            ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
-            if shift is not None:
-                ds = ds.assign_coords(time=ds["time"] + shift)
-            level_das.append((level, ds[code]))
+            level_das.append((level, self._align_to_shared_clock(ds, code)[code]))
 
-        # Level coordinate values are cast to float64 to match the dtype raw
-        # source files themselves use for physical coordinates (confirmed
-        # against real ERA5/BARRA2 data: lat/lon and ERA5's own pressure-level
-        # coordinate are all float64 natively) -- these would otherwise come
-        # out int64, since they're built here from plain Python floats/ints.
+        # float64 matches the dtype sources use for physical coordinates;
+        # built from Python numbers these would come out int64.
         level_das.sort(key=lambda pair: pair[0], reverse=(kind == "pressure"))
         levels, das = zip(*level_das)
         dim_name = "level" if kind == "pressure" else "height"
@@ -264,6 +236,24 @@ class Barra2Regridder(GridRegridder):
         )
         native_name = f"{base}_{'plev' if kind == 'pressure' else 'height'}"
         return xr.Dataset({native_name: stacked})
+
+    @staticmethod
+    def _align_to_shared_clock(ds: xr.Dataset, code: str) -> xr.Dataset:
+        """Drop non-grid coordinates and put interval statistics on the shared clock.
+
+        Args:
+            ds (xr.Dataset): One raw file's single variable.
+            code (str): That variable's BARRA2 short code.
+
+        Returns:
+            xr.Dataset: Same data, keeping only time/lat/lon coordinates, with
+                interval statistics shifted onto the point-variable clock.
+        """
+        shift = _interval_center_shift(ds[code].attrs.get("cell_methods", ""))
+        ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
+        if shift is not None:
+            ds = ds.assign_coords(time=ds["time"] + shift)
+        return ds
 
     def _discover_variables(self, task: tuple) -> list[str]:
         """Return every canonical BARRA2 variable actually downloaded for one task.
@@ -314,9 +304,8 @@ class Barra2Regridder(GridRegridder):
     def _regrid_chunk(self, ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
         """Build the pyramid via the regional-source workaround.
 
-        grid_doctor.create_healpix_pyramid() crashes on any regional source
-        (grid-doctor issue #24, confirmed still open) -- see
-        rbc.weather.regridding.regional's module docstring for the fix.
+        grid_doctor.create_healpix_pyramid() crashes on regional sources
+        (grid-doctor issue #24); see rbc.weather.regridding.regional.
 
         Args:
             ds (xr.Dataset): Renamed source dataset to regrid.

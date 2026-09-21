@@ -9,12 +9,16 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import grid_doctor as gd
-import numpy as np
+import pandas as pd
 import xarray as xr
 from loguru import logger
 from tqdm.dask import TqdmCallback
 
-from rbc.weather.regridding.store import DEFAULT_BLOCK_MB, TIME_CHUNK
+from rbc.weather.regridding.store import (
+    DEFAULT_BLOCK_MB,
+    TIME_CHUNK,
+    bytes_per_timestep,
+)
 
 
 class GridRegridder(ABC):
@@ -135,12 +139,11 @@ class GridRegridder(ABC):
         """Regrid all unfinished (task, variable) pairs, one variable at a time.
 
         Skips checkpointed (task, variable) keys. Weights are resolved once
-        per task (from whichever variable is loaded first) and reused for
-        every other variable in that task, since they depend only on
-        horizontal grid geometry. If `dry_run`, resolves weights but skips
+        per task and reused for its other variables, since they depend only on
+        horizontal grid geometry. `dry_run` resolves weights but skips
         regridding and yielding. Each yielded pyramid stays lazy, so that
-        `HealpixZarrWriter.append()` can compute and write it one time block
-        at a time. The caller writes it, then calls `mark_done(key)`.
+        `HealpixZarrWriter.append()` can compute and write it a block at a
+        time; the caller writes it, then calls `mark_done(key)`.
 
         Yields:
             tuple[tuple, dict[int, xr.Dataset]]: (key, pyramid) pairs, where
@@ -185,9 +188,8 @@ class GridRegridder(ABC):
     def mark_done(self, key: tuple) -> None:
         """Mark a (task, variable) key done and persist the checkpoint.
 
-        Call only after `HealpixZarrWriter.append()` for this key succeeds —
-        not inside `regrid()`, so a crash between yield and write can't mark a
-        key done that was never actually written.
+        Call only after `HealpixZarrWriter.append()` for this key succeeds, so
+        that a crash between yield and write leaves the key unfinished.
 
         Args:
             key (tuple): The `(*task, variable)` key that was successfully written.
@@ -198,9 +200,8 @@ class GridRegridder(ABC):
     def _get_tasks(self) -> list[tuple]:
         """Return (year, month) tasks for every configured year/month.
 
-        Every source uses the same task granularity, since weights depend only
-        on horizontal geometry, not on which month is being processed.
-        Override only if a source genuinely needs a different task shape.
+        Every source uses the same task granularity; override only if one
+        needs a different task shape.
 
         Returns:
             list[tuple]: (year, month) tuples in chronological order, since
@@ -287,6 +288,22 @@ class GridRegridder(ABC):
         }
         return ds.rename_vars(mapping)
 
+    def _trim_to_month(self, ds: xr.Dataset, year: int, month: str) -> xr.Dataset:
+        """Drop timestamps outside the exact calendar month.
+
+        Args:
+            ds (xr.Dataset): Dataset that may span past month boundaries,
+                as forecast-cycle spillover does.
+            year (int): Task year.
+            month (str): Task month, zero-padded.
+
+        Returns:
+            xr.Dataset: Dataset trimmed to [year-month-01, end of month].
+        """
+        start = pd.Timestamp(year=year, month=int(month), day=1)
+        end = start + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)
+        return ds.sel(time=slice(start, end))
+
     def _regrid_kwargs(self) -> dict:
         """Extra keyword arguments forwarded to `create_healpix_pyramid()`.
 
@@ -317,9 +334,8 @@ class GridRegridder(ABC):
 
         Regridding averages the source's evenly spaced values into arbitrary
         floats; `HealpixZarrWriter` snaps them back onto this step, dropping
-        mantissa bits the source never carried (measured on regridded float32
-        precipitation: 26.05 -> 13.76 bits/value, error <= half a step).
-        Subclasses record it in `self._quantization_steps` while loading.
+        mantissa bits the source never carried. Subclasses record it in
+        `self._quantization_steps` while loading.
 
         Args:
             variable (str): Canonical variable name.
@@ -367,11 +383,9 @@ class GridRegridder(ABC):
     def _chunk_along_time(self, ds: xr.Dataset) -> xr.Dataset:
         """Group the source's single-timestep chunks into ones that fit the budget.
 
-        Sources open one timestep per chunk, which is safe for any variable
-        but leaves a task per timestep; merging them up to `block_memory_mb`
-        regrids more of the month in parallel. Merging never reads more than
-        the chunk being built, whereas splitting larger chunks would read the
-        whole of each one -- 2.8 GB per read for a 3D global variable.
+        Sources open one timestep per chunk, safe for any variable but a task
+        per timestep; merging them up to `block_memory_mb` regrids more of the
+        month in parallel while each read stays within the budget.
 
         Args:
             ds (xr.Dataset): Renamed source dataset.
@@ -381,18 +395,14 @@ class GridRegridder(ABC):
         """
         if "time" not in ds.dims:
             return ds
-        per_step = 0
-        for da in ds.data_vars.values():
-            cells = int(np.prod([s for d, s in da.sizes.items() if d != "time"]))
-            per_step += cells * da.dtype.itemsize
-        steps = max(1, int(self.block_bytes // max(per_step, 1)))
+        steps = max(1, int(self.block_bytes // max(bytes_per_timestep(ds), 1)))
         return ds.chunk({"time": min(steps, TIME_CHUNK)})
 
     def _regrid_chunk(self, ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
         """Regrid `ds` to the full pyramid, max_level down to min_level.
 
-        Works for lat-lon and unstructured sources. BARRA2 must override this
-        once the regional-source crash fix lands (Phase 2).
+        Handles lat-lon and unstructured global sources; regional sources
+        override it (see rbc.weather.regridding.regional).
 
         Args:
             ds (xr.Dataset): Renamed source dataset to regrid.

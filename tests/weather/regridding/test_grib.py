@@ -1,12 +1,44 @@
 # tests/weather/regridding/test_grib.py
-"""Tests for rbc.weather.regridding.grib: grib_quantization_step."""
+"""Tests for rbc.weather.regridding.grib."""
 
 from pathlib import Path
 
 import eccodes
 import numpy as np
+import pandas as pd
+import xarray as xr
 
-from rbc.weather.regridding.grib import grib_quantization_step
+from rbc.weather.regridding.grib import flatten_forecast_dims, grib_quantization_step
+
+
+class TestFlattenForecastDims:
+    """Tests for flatten_forecast_dims()."""
+
+    def test_step_hypercube_collapses_onto_valid_times(self) -> None:
+        """A (time, step) cube becomes one flat time dim of its valid times."""
+        init = pd.to_datetime(["2020-04-01T00:00"]).values
+        step = pd.to_timedelta([1, 2], unit="h").values
+        ds = xr.Dataset(
+            {"tp": (("time", "step"), [[0.1, 0.2]])},
+            coords={
+                "time": init,
+                "step": step,
+                "valid_time": (("time", "step"), init[:, None] + step[None, :]),
+            },
+        )
+
+        flat = flatten_forecast_dims(ds)
+
+        assert flat["tp"].dims == ("time",)
+        assert list(flat["time"].values) == list(
+            pd.to_datetime(["2020-04-01T01:00", "2020-04-01T02:00"])
+        )
+
+    def test_flat_hypercube_passes_through(self) -> None:
+        """A cube without a "step" dim is returned unchanged."""
+        ds = xr.Dataset({"t2m": ("time", [1.0, 2.0])}, coords={"time": [0, 1]})
+
+        assert flatten_forecast_dims(ds) is ds
 
 
 def _write_grib(path: Path, messages: list[tuple[str, float]]) -> list[int]:
