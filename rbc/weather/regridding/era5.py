@@ -87,11 +87,12 @@ class Era5Regridder(GridRegridder):
         (year, month, level_type), so the file itself can't be picked by
         variable alone -- this opens the one file (sl or pl, whichever
         contains the requested variable) and immediately narrows to just
-        that cfgrib name before anything else. Everything opens with
-        chunks={} (dask-lazy): confirmed that xarray's backend arrays stay
-        lazy per-variable regardless of how many variables share a file, so
-        the other variables in that file are never actually read from disk
-        as long as nothing else touches them.
+        that cfgrib name before anything else. Confirmed that xarray's backend
+        arrays stay lazy per-variable regardless of how many variables share a
+        file, so the other variables in that file are never actually read from
+        disk as long as nothing else touches them. One timestep per chunk is
+        the granularity reads happen at; `GridRegridder._chunk_along_time()`
+        groups them up to the memory budget.
 
         Single-level files carry two cfgrib hypercubes: flat-time analysis
         variables, and (time, step) forecast-structured accumulated/extreme
@@ -173,7 +174,7 @@ class Era5Regridder(GridRegridder):
         Returns:
             xr.Dataset: Opened dataset with "isobaricInhPa" renamed to "level".
         """
-        ds = xr.open_dataset(path, engine="cfgrib", chunks={})
+        ds = xr.open_dataset(path, engine="cfgrib", chunks={"time": 1})
         return ds.rename({"isobaricInhPa": "level"})
 
     def _open_single_level(self, path: Path) -> list[xr.Dataset]:
@@ -186,7 +187,7 @@ class Era5Regridder(GridRegridder):
             list[xr.Dataset]: One or more datasets, all with a flat time dim.
         """
         opened = []
-        for ds in cfgrib.open_datasets(path, chunks={}):
+        for ds in cfgrib.open_datasets(path, chunks={"time": 1}):
             if "step" in ds.dims:
                 ds = (
                     ds.stack(_flat=("time", "step"))

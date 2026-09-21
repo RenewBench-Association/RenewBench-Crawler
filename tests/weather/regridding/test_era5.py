@@ -203,7 +203,7 @@ class TestLoadSourceChunk:
         ) as mock_pl:
             result = rg._load_source_chunk((2020, "04"), "geopotential")
 
-        mock_pl.assert_called_once_with(pl_file, engine="cfgrib", chunks={})
+        mock_pl.assert_called_once_with(pl_file, engine="cfgrib", chunks={"time": 1})
         assert set(result.data_vars) == {"z"}
         assert "level" in result["z"].dims
         assert "isobaricInhPa" not in result.dims

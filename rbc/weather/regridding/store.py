@@ -9,11 +9,13 @@ from collections.abc import Hashable
 from pathlib import Path
 from typing import Literal
 
+import dask
+import dask.array
 import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
-from tqdm.dask import TqdmCallback
+from tqdm import tqdm
 from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 
 # Vertical dimensions the contract uses, in the order they appear between
@@ -35,6 +37,19 @@ _TARGET_CHUNK_BYTES = 64 * 1024**2
 # one region always starts on a chunk boundary. GridRegridder chunks sources
 # by it too, so dask chunks line up with Zarr chunks.
 TIME_CHUNK = 24
+
+# Default megabytes one time block of the pyramid may occupy, before the
+# source chunk, the float64 regrid intermediates and the lattice-rounding
+# temporaries that are live alongside it. A whole month of a 3D global
+# variable at level 9 would be ~250 GB, which is what blocking it bounds.
+# GridRegridder sizes its source chunks by the same budget.
+DEFAULT_BLOCK_MB = 512
+
+# Source chunks a single block may pull through the regrid. Each one is
+# already sized to the memory budget by GridRegridder._chunk_along_time(), so
+# this is what keeps the input side bounded when the written pyramid is small
+# enough that the budget alone would allow a whole month per block.
+_MAX_CHUNKS_PER_BLOCK = 4
 
 
 class HealpixZarrWriter:
@@ -59,6 +74,7 @@ class HealpixZarrWriter:
             every incoming pyramid.
         compressors (tuple | None): Zarr codec pipeline applied on every
             variable's first write; None writes raw bytes.
+        block_bytes (int): Memory budget for one time block of the pyramid.
     """
 
     def __init__(
@@ -68,6 +84,7 @@ class HealpixZarrWriter:
         compressor: str = "zlib",
         compression_level: int = 1,
         shuffle: bool = True,
+        block_memory_mb: int = DEFAULT_BLOCK_MB,
     ) -> None:
         """Initializes the instance.
 
@@ -82,12 +99,17 @@ class HealpixZarrWriter:
             shuffle (bool): Byte-shuffle before compressing, the filter NetCDF
                 itself uses (measured ~1.4x smaller on packed int32). Ignored
                 for "none". Defaults to True.
+            block_memory_mb (int): How much of the pyramid to compute and
+                write at a time (see `_block_timesteps()`). Peak RSS runs
+                roughly 3.5x this; lower it on a memory-tight node, raise it
+                to regrid more of the month in parallel.
 
         Raises:
             ValueError: If `compressor` is unknown or `compression_level` < 1.
         """
         self.base_dir = Path(base_dir)
         self.min_level = min_level
+        self.block_bytes = block_memory_mb * 1024**2
         self.compressors = self._build_compressors(
             compressor, compression_level, shuffle
         )
@@ -146,13 +168,14 @@ class HealpixZarrWriter:
     ) -> None:
         """Write or grow each level's store for one task's single-variable pyramid.
 
-        Each `ds` in `pyramid` carries exactly one data variable. With no
-        store yet, `mode="w"` creates it. Otherwise the shared time axis is
-        grown for every variable at once (`_extend_time_axis()`), then this
-        one variable's slice is filled (`_write_region()`); a variable not in
-        the store yet is created spanning the store's full time range, NaN
-        where it has no data. The store therefore stays shape-consistent and
-        readable after every single write.
+        Each `ds` in `pyramid` carries exactly one data variable. Every
+        level's store is first reserved over the time range it needs, all NaN
+        (`_reserve()`), growing the shared time axis for every variable at
+        once where the store already exists (`_extend_time_axis()`). The
+        values are then filled in one time block at a time, every level from
+        the same computation (`_fill_blocks()`) -- a whole month of a 3D
+        global pyramid is hundreds of GB and never fits in memory. The store
+        stays shape-consistent and readable after every single write.
 
         `encoding` (e.g. from `GridRegridder.encoding_for()`) is merged with
         this writer's compression pipeline, and only applies when a variable
@@ -198,14 +221,17 @@ class HealpixZarrWriter:
             )
 
         task_start = time.time()
+        chunk, block = self._block_timesteps(pyramid)
+        plans: list[tuple[Path, xr.Dataset, Hashable, int]] = []
         for level, ds in pyramid.items():
             ds = self._normalize_dim_order(ds)
             ds = self._snap_to_lattice(ds, quantization_step)
             (variable,) = ds.data_vars
             store_path = self._store_path(model_name, time_res, level)
-            level_start = time.time()
             var_encoding: dict = {**(encoding or {}), "compressors": self.compressors}
-            var_encoding["chunks"] = self._chunk_shape(ds[variable], var_encoding)
+            var_encoding["chunks"] = self._chunk_shape(
+                ds[variable], var_encoding, chunk
+            )
             zarr_encoding = {variable: var_encoding}
 
             if self._store_exists(store_path):
@@ -214,35 +240,27 @@ class HealpixZarrWriter:
                 ds = self._align_vertical_dims(ds, existing, store_path)
                 existing = self._extend_time_axis(store_path, existing, ds, task)
 
-                if variable in existing.data_vars:
-                    self._write_region(store_path, ds, variable, existing, task)
-                else:
+                if variable not in existing.data_vars:
                     logger.info(
                         f"{store_path}: adding new variable '{variable}' for task "
                         f"{task}..."
                     )
-                    # Pad to the store's full time range so every variable
-                    # spans one shared "time" axis; reindex fills the months
-                    # this variable has no data for lazily, as NaN.
-                    padded = ds.reindex(time=existing["time"])
-                    with TqdmCallback(desc=str(store_path)):
-                        padded.to_zarr(
-                            store_path,
-                            mode="a",
-                            consolidated=False,
-                            encoding=zarr_encoding,
-                        )
+                    # Reserve the variable across the store's full time axis so
+                    # every variable spans one shared "time" axis, NaN for the
+                    # months it has no data for.
+                    self._reserve(
+                        store_path, ds, existing["time"], zarr_encoding, chunk, "a"
+                    )
+                    existing = xr.open_zarr(store_path, consolidated=False)
+                start = self._region_start(store_path, ds, variable, existing, task)
             else:
                 logger.info(f"{store_path}: creating store for task {task}...")
-                with TqdmCallback(desc=str(store_path)):
-                    ds.to_zarr(
-                        store_path, mode="w", consolidated=False, encoding=zarr_encoding
-                    )
+                self._reserve(store_path, ds, ds["time"], zarr_encoding, chunk, "w")
+                start = 0
 
-            logger.info(
-                f"{store_path}: write finished ({time.time() - level_start:.1f}s)."
-            )
+            plans.append((store_path, ds, variable, start))
 
+        self._fill_blocks(plans, block, task)
         logger.info(
             f"'{model_name}/{time_res}' task {task}: all {len(pyramid)} levels "
             f"written ({time.time() - task_start:.1f}s total)."
@@ -378,26 +396,30 @@ class HealpixZarrWriter:
         with xr.set_options(keep_attrs=True):
             return (ds / step).round() * step
 
-    def _chunk_shape(self, da: xr.DataArray, encoding: dict) -> tuple[int, ...]:
+    def _chunk_shape(
+        self, da: xr.DataArray, encoding: dict, time_chunk: int
+    ) -> tuple[int, ...]:
         """Return a chunk shape bounded by `_TARGET_CHUNK_BYTES`.
 
-        Chunks the time axis into `TIME_CHUNK` blocks, keeps vertical levels
-        whole (there are few of them, and they're usually read together), and
-        splits "cell" to fit the remaining budget. Sized from the *encoded*
-        dtype, since that's what the codec actually sees.
+        Keeps vertical levels whole (there are few of them, and they're
+        usually read together) and splits "cell" to fit the remaining budget.
+        Sized from the *encoded* dtype, since that's what the codec actually
+        sees.
 
         Args:
             da (xr.DataArray): The variable about to be written, already in
                 the contract's dimension order.
             encoding (dict): This variable's encoding, read for its "dtype"
                 when the variable is packed.
+            time_chunk (int): Timesteps per chunk, from `_block_timesteps()`,
+                so that each written block covers whole chunks.
 
         Returns:
             tuple[int, ...]: Chunk size per dimension, in `da.dims` order.
         """
         itemsize = np.dtype(encoding.get("dtype", da.dtype)).itemsize
         sizes = dict(da.sizes)
-        time_chunk = min(TIME_CHUNK, sizes.get("time", 1))
+        time_chunk = min(time_chunk, sizes.get("time", 1))
 
         vertical = 1
         for dim, size in sizes.items():
@@ -463,24 +485,108 @@ class HealpixZarrWriter:
         )
         return xr.open_zarr(store_path, consolidated=False)
 
-    def _write_region(
+    def _block_timesteps(self, pyramid: dict[int, xr.Dataset]) -> tuple[int, int]:
+        """Return the Zarr time chunk and how many timesteps to write at a time.
+
+        One block of every level is in memory at once, so the block is sized
+        to keep that under `block_bytes` -- a whole month of a 3D global
+        variable is hundreds of GB and never fits. A block is a whole number
+        of the incoming dask chunks, so each source chunk is read once rather
+        than re-read by every block overlapping it, and so regions stay
+        aligned with the Zarr chunks written here.
+
+        Args:
+            pyramid (dict[int, xr.Dataset]): The pyramid about to be written.
+
+        Returns:
+            tuple[int, int]: (timesteps per Zarr chunk, timesteps per block).
+        """
+        per_step = 0
+        incoming = 0
+        for ds in pyramid.values():
+            for da in ds.data_vars.values():
+                cells = int(np.prod([s for d, s in da.sizes.items() if d != "time"]))
+                per_step += cells * da.dtype.itemsize
+                incoming = max(incoming, max(da.chunksizes.get("time", (0,))))
+        budget = max(1, int(self.block_bytes // max(per_step, 1)))
+        # An eagerly computed pyramid (the regional path) has no chunks to
+        # follow, so the contract's own time chunk applies.
+        unit = min(incoming or TIME_CHUNK, TIME_CHUNK, budget)
+        # The budget above only covers what is written. The source feeding a
+        # block costs memory too, and can dwarf it where the target is much
+        # coarser than the source (a regional pyramid's compact levels), so a
+        # block also holds only a few of the regridder's already budget-sized
+        # source chunks.
+        chunks = max(1, min(budget // unit, _MAX_CHUNKS_PER_BLOCK))
+        return unit, unit * chunks
+
+    def _reserve(
+        self,
+        store_path: Path,
+        ds: xr.Dataset,
+        times: xr.DataArray,
+        encoding: dict,
+        chunk: int,
+        mode: str,
+    ) -> None:
+        """Write the variable's schema and coordinates over `times`, all NaN.
+
+        The NaN array is built chunked and lazily, so this writes the store's
+        chunks without computing any regridded value and without ever holding
+        the variable in memory; `_fill_blocks()` fills them in afterwards.
+        (`reindex()` on a 0-length array would look simpler but materializes
+        the whole span as one NumPy array -- tens of GB for a 3D global
+        variable.)
+
+        Args:
+            store_path (Path): Path from `_store_path()`.
+            ds (xr.Dataset): Incoming Dataset for one variable.
+            times (xr.DataArray): Time axis the variable should span.
+            encoding (dict): Zarr encoding for the one variable.
+            chunk (int): Timesteps per chunk, from `_block_timesteps()`.
+            mode (str): "w" for a new store, "a" for a new variable in one.
+        """
+        (variable,) = ds.data_vars
+        da = ds[variable]
+        rest = {d: s for d, s in da.sizes.items() if d != "time"}
+        blank = dask.array.full(
+            (times.size, *rest.values()),
+            np.nan,
+            dtype=da.dtype,
+            chunks=(chunk, *rest.values()),
+        )
+        template = xr.Dataset(
+            {variable: (("time", *rest), blank, da.attrs)},
+            # Coordinates along time belong to the incoming slice, not to the
+            # span being reserved, so only the others carry over.
+            coords={
+                **{k: v for k, v in ds.coords.items() if "time" not in v.dims},
+                "time": times,
+            },
+            attrs=ds.attrs,
+        )
+        template.to_zarr(store_path, mode=mode, encoding=encoding, consolidated=False)
+
+    def _region_start(
         self,
         store_path: Path,
         ds: xr.Dataset,
         variable: Hashable,
         existing: xr.Dataset,
         task: tuple,
-    ) -> None:
-        """Fill one variable's slice of the already-extended time axis.
+    ) -> int:
+        """Return the store index `ds`'s first timestamp belongs at.
 
         Args:
             store_path (Path): Path from `_store_path()`.
             ds (xr.Dataset): Incoming Dataset for one variable.
-            variable (Hashable): The variable being written, as unpacked
-                from `ds.data_vars`.
+            variable (Hashable): The variable being written.
             existing (xr.Dataset): The store's contents, time axis already
                 covering `ds`.
             task (tuple): Task identifier, for logging/errors.
+
+        Returns:
+            int: Index of `ds`'s first timestamp on the store's time axis.
 
         Raises:
             ValueError: If the incoming timestamps aren't a contiguous run in
@@ -503,16 +609,43 @@ class HealpixZarrWriter:
                 f"{store_times[start]}..{store_times[stop - 1]}. Refusing to "
                 "overwrite it."
             )
+        return start
 
-        logger.info(f"{store_path}: filling '{variable}' for task {task}...")
+    def _fill_blocks(
+        self,
+        plans: list[tuple[Path, xr.Dataset, Hashable, int]],
+        block: int,
+        task: tuple,
+    ) -> None:
+        """Fill every level's reserved region, one time block at a time.
+
+        Each block is computed for all levels in one `dask.compute()` call:
+        the coarser levels derive from the finer ones, so computing them
+        separately would repeat the regrid per level.
+
+        Args:
+            plans (list): One (store_path, ds, variable, start) per level.
+            block (int): Timesteps per block, from `_block_timesteps()`.
+            task (tuple): Task identifier, for the progress bar.
+        """
+        steps = plans[0][1].sizes["time"]
         # region= writes only the data variable; the store already owns every
         # coordinate, and xarray rejects ones that lack the region dimension.
-        slab = ds[[variable]]
-        slab = slab.drop_vars(list(slab.coords))
-        with TqdmCallback(desc=str(store_path)):
-            slab.to_zarr(
-                store_path, region={"time": slice(start, stop)}, consolidated=False
+        slabs = [
+            ds[[variable]].drop_vars(ds[[variable]].coords)
+            for _, ds, variable, _ in plans
+        ]
+        for t0 in tqdm(range(0, steps, block), desc=f"Writing {task}", unit="block"):
+            stop = min(t0 + block, steps)
+            computed = dask.compute(
+                *[slab.isel(time=slice(t0, stop)) for slab in slabs]
             )
+            for (store_path, _, _, start), done in zip(plans, computed):
+                done.to_zarr(
+                    store_path,
+                    region={"time": slice(start + t0, start + stop)},
+                    consolidated=False,
+                )
 
     def _align_vertical_dims(
         self, ds: xr.Dataset, existing: xr.Dataset, store_path: Path

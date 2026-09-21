@@ -11,3 +11,6 @@ healpix_max_level:
 compressor: zlib
 compression_level: 1
 shuffle: true
+# Pyramid bytes computed and written at a time; peak memory is roughly 3.5x
+# this. Lower it on a memory-tight node, raise it for more parallelism.
+block_memory_mb: 512

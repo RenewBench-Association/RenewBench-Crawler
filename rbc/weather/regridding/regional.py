@@ -74,9 +74,11 @@ def regrid_regional_to_healpix(
     # This fixes the phantom-row problem in grid-doctor: only keep the rows
     # that are actually referenced in the weight file, and build a mapping
     # from the original row indices to a compacted set of indices.
+    # searchsorted rather than a dict lookup per entry: real_cell_ids is
+    # sorted and there is one entry per weight, millions of them at the finer
+    # levels.
     real_cell_ids = np.unique(row0)
-    id_to_compact = {cid: i for i, cid in enumerate(real_cell_ids)}
-    compact_row = np.array([id_to_compact[c] for c in row0], dtype=np.int64)
+    compact_row = np.searchsorted(real_cell_ids, row0)
     matrix = coo_matrix(
         (vals, (compact_row, col0)), shape=(len(real_cell_ids), n_source)
     ).tocsr()
@@ -122,6 +124,37 @@ def regrid_regional_to_healpix(
     return _gd_select.attach_cell_coords(result, real_cell_ids, level=level)
 
 
+def _coarsen_cells(
+    block: np.ndarray,
+    order: np.ndarray | None,
+    starts: np.ndarray,
+    divisor: int,
+    min_valid_fraction: float,
+) -> np.ndarray:
+    """Average each parent's children along the last (cell) axis of one block.
+
+    Args:
+        block (np.ndarray): Values with "cell" as the last axis.
+        order (np.ndarray | None): Permutation grouping each parent's children
+            together, or None when they already are.
+        starts (np.ndarray): Index where each parent's children begin.
+        divisor (int): How many children a parent has (4**delta).
+        min_valid_fraction (float): Fraction of those children that must be
+            non-NaN for the parent to get a value.
+
+    Returns:
+        np.ndarray: Same leading axes, one value per parent.
+    """
+    if order is not None:
+        block = block[..., order]
+    valid = ~np.isnan(block)
+    sums = np.add.reduceat(np.where(valid, block, 0.0), starts, axis=-1)
+    counts = np.add.reduceat(valid, starts, axis=-1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means = sums / counts
+    return np.where(counts / divisor >= min_valid_fraction, means, np.nan)
+
+
 def coarsen_regional(
     ds: xr.Dataset, target_level: int, min_valid_fraction: float = 0.5
 ) -> xr.Dataset:
@@ -158,28 +191,40 @@ def coarsen_regional(
         )
     divisor = 4**delta
 
-    cell_ids = ds["cell"].values
-    parent_ids = xr.DataArray(cell_ids // divisor, dims="cell", name="parent")
-    ds2 = ds.assign_coords(parent=parent_ids)
+    parents = ds["cell"].values // divisor
+    # reduceat needs each parent's children adjacent; compact cell ids arrive
+    # ascending, so the permutation is normally unnecessary.
+    order = (
+        None if np.all(np.diff(parents) >= 0) else np.argsort(parents, kind="stable")
+    )
+    unique_parents, starts = np.unique(
+        parents if order is None else parents[order], return_index=True
+    )
 
     data_vars = {}
-    for name, da in ds2.data_vars.items():
+    for name, da in ds.data_vars.items():
         if "cell" not in da.dims:
             data_vars[name] = da
             continue
-        grouped = da.groupby("parent")
-        mean_val = grouped.mean(dim="cell", skipna=True)
-        valid_frac = da.notnull().groupby(ds2["parent"]).sum(dim="cell") / divisor
-        data_vars[name] = mean_val.where(valid_frac >= min_valid_fraction)
+        data_vars[name] = xr.apply_ufunc(
+            _coarsen_cells,
+            da,
+            input_core_dims=[["cell"]],
+            output_core_dims=[["cell"]],
+            exclude_dims={"cell"},
+            dask="parallelized",
+            kwargs={
+                "order": order,
+                "starts": starts,
+                "divisor": divisor,
+                "min_valid_fraction": min_valid_fraction,
+            },
+            output_dtypes=[np.float64],
+            dask_gufunc_kwargs={"output_sizes": {"cell": len(unique_parents)}},
+        )
 
-    result = xr.Dataset(data_vars)
-    result = result.rename({"parent": "cell"})
-    parent_ids_sorted = result["cell"].values
-    result.attrs.update(ds.attrs)
-    result.attrs["healpix_level"] = target_level
-    return _gd_select.attach_cell_coords(
-        result.drop_vars("cell"), parent_ids_sorted, level=target_level
-    )
+    result = xr.Dataset(data_vars, attrs={**ds.attrs, "healpix_level": target_level})
+    return _gd_select.attach_cell_coords(result, unique_parents, level=target_level)
 
 
 def build_regional_healpix_pyramid(
@@ -204,10 +249,6 @@ def build_regional_healpix_pyramid(
         dict[int, xr.Dataset]: Pyramid keyed by level, max_level down to min_level.
     """
     finest = regrid_regional_to_healpix(ds, weights_path, level=max_level)
-    # Materialize now, before coarsening: chaining coarsen_regional()'s
-    # groupby().mean() lazily over several levels makes dask graph
-    # *construction* itself expensive, independent of compute cost.
-    finest = finest.compute()
     pyramid = {max_level: finest}
     current = finest
     for level in range(max_level - 1, min_level - 1, -1):

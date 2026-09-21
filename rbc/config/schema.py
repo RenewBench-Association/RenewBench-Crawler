@@ -325,6 +325,8 @@ class RegridHealpixConfig(BaseModel):
         compression_level (int): Codec level, >= 1 (Blosc treats 0 as "no
             compression").
         shuffle (bool): Byte-shuffle filter before compressing, as NetCDF does.
+        block_memory_mb (int): How much of a pyramid to compute and write at
+            a time; peak memory runs roughly 3.5x this.
     """
 
     source: Literal["regrid_healpix"] = "regrid_healpix"
@@ -335,6 +337,7 @@ class RegridHealpixConfig(BaseModel):
     compressor: Literal["zlib", "zstd", "none"] = "zlib"
     compression_level: int = Field(default=1, ge=1)
     shuffle: bool = True
+    block_memory_mb: int = Field(default=512, ge=1)
 
 
 # ----------------------------------

@@ -8,13 +8,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
 
-import dask
 import grid_doctor as gd
+import numpy as np
 import xarray as xr
 from loguru import logger
 from tqdm.dask import TqdmCallback
 
-from rbc.weather.regridding.store import TIME_CHUNK
+from rbc.weather.regridding.store import DEFAULT_BLOCK_MB, TIME_CHUNK
 
 
 class GridRegridder(ABC):
@@ -47,6 +47,7 @@ class GridRegridder(ABC):
         dry_run (bool): If True, resolve inputs/weights but skip the actual regrid
             and skip yielding data.
         resume (bool): If True, load an existing checkpoint on init.
+        block_bytes (int): Memory budget for one source time chunk.
         checkpoint (dict): Dict tracking regrid status per `(*task, variable)`
             key (1=done).
         checkpoint_path (Path): Path to the checkpoint file for resuming regridding.
@@ -65,6 +66,7 @@ class GridRegridder(ABC):
         months: list[str] | None = None,
         dry_run: bool = False,
         resume: bool = True,
+        block_memory_mb: int = DEFAULT_BLOCK_MB,
     ) -> None:
         """Initializes the instance.
 
@@ -89,6 +91,8 @@ class GridRegridder(ABC):
                 the actual regrid. Defaults to False.
             resume (bool, optional): If True, load an existing checkpoint on
                 init. Defaults to True.
+            block_memory_mb (int, optional): Budget for one source time chunk
+                (see `_chunk_along_time()`); matches the writer's own.
 
         Raises:
             FileNotFoundError: If raw_dir does not exist.
@@ -119,6 +123,7 @@ class GridRegridder(ABC):
         self.months = sorted(months) if months else [f"{i:02d}" for i in range(1, 13)]
         self.dry_run = dry_run
         self.resume = resume
+        self.block_bytes = block_memory_mb * 1024**2
 
         self.checkpoint_path = Path(checkpoint_path)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,9 +138,9 @@ class GridRegridder(ABC):
         per task (from whichever variable is loaded first) and reused for
         every other variable in that task, since they depend only on
         horizontal grid geometry. If `dry_run`, resolves weights but skips
-        regridding and yielding. Each yielded pyramid is computed and held in
-        memory. The caller writes it via `HealpixZarrWriter.append()`, then
-        calls `mark_done(key)`.
+        regridding and yielding. Each yielded pyramid stays lazy, so that
+        `HealpixZarrWriter.append()` can compute and write it one time block
+        at a time. The caller writes it, then calls `mark_done(key)`.
 
         Yields:
             tuple[tuple, dict[int, xr.Dataset]]: (key, pyramid) pairs, where
@@ -153,10 +158,7 @@ class GridRegridder(ABC):
                 logger.info(f"Task {key}: loading source data...")
                 ds = self._load_source_chunk(task, variable)
                 ds = self._rename_to_canonical(ds)
-                # Sources open as one chunk per month; time chunks regrid in
-                # parallel and give the progress bar real steps.
-                if "time" in ds.dims:
-                    ds = ds.chunk({"time": TIME_CHUNK})
+                ds = self._chunk_along_time(ds)
 
                 if weights is None:
                     logger.info(f"Task {task}: resolving HEALPix weights...")
@@ -175,11 +177,6 @@ class GridRegridder(ABC):
                 )
                 with TqdmCallback(desc=f"Task {key}"):
                     pyramid = self._regrid_chunk(ds, weights)
-                    # Coarser levels derive from the finer ones, so computing
-                    # them in one call runs the regrid once, not once per
-                    # level when the writer stores each.
-                    levels = dask.persist(*pyramid.values())
-                    pyramid = dict(zip(pyramid, levels, strict=True))
                 logger.info(f"Task {key}: regridding complete.")
                 yield key, pyramid
 
@@ -366,6 +363,30 @@ class GridRegridder(ABC):
         return gd.cached_weights(
             geometry_ds, level=self.max_level, cache_path=self.weights_cache_dir
         )
+
+    def _chunk_along_time(self, ds: xr.Dataset) -> xr.Dataset:
+        """Group the source's single-timestep chunks into ones that fit the budget.
+
+        Sources open one timestep per chunk, which is safe for any variable
+        but leaves a task per timestep; merging them up to `block_memory_mb`
+        regrids more of the month in parallel. Merging never reads more than
+        the chunk being built, whereas splitting larger chunks would read the
+        whole of each one -- 2.8 GB per read for a 3D global variable.
+
+        Args:
+            ds (xr.Dataset): Renamed source dataset.
+
+        Returns:
+            xr.Dataset: Same data, chunked along time.
+        """
+        if "time" not in ds.dims:
+            return ds
+        per_step = 0
+        for da in ds.data_vars.values():
+            cells = int(np.prod([s for d, s in da.sizes.items() if d != "time"]))
+            per_step += cells * da.dtype.itemsize
+        steps = max(1, int(self.block_bytes // max(per_step, 1)))
+        return ds.chunk({"time": min(steps, TIME_CHUNK)})
 
     def _regrid_chunk(self, ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
         """Regrid `ds` to the full pyramid, max_level down to min_level.

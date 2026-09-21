@@ -186,6 +186,7 @@ def main() -> None:
         compressor=cfg.compressor,
         compression_level=cfg.compression_level,
         shuffle=cfg.shuffle,
+        block_memory_mb=cfg.block_memory_mb,
     )
 
     for name in args.sources:
@@ -203,6 +204,7 @@ def main() -> None:
             months=args.months,
             dry_run=args.dry_run,
             resume=args.resume,
+            block_memory_mb=cfg.block_memory_mb,
             **_EXTRA_KWARGS.get(name, {}),
         )
 

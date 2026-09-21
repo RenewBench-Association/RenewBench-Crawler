@@ -423,39 +423,27 @@ class TestRegrid:
 
         assert rg.checkpoint == {}
 
-    def test_regrids_each_time_chunk_once_for_all_levels(self, base_args: dict) -> None:
-        """The source is split into time chunks, each regridded once for all levels.
+    def test_source_is_chunked_along_time(self, base_args: dict) -> None:
+        """The source is split into time chunks before it is regridded.
 
-        Coarser levels derive from the finer ones, so a lazy pyramid would
-        repeat the regrid for every level the writer stores.
+        Sources open as one chunk per month, which the regrid would then have
+        to hold whole; the writer computes and stores the pyramid by chunk
+        instead (see HealpixZarrWriter.append()).
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         source = xr.Dataset({"var_a": (("time", "x"), np.zeros((48, 3)))})
         rg = _ConcreteRegridder(tasks=[(2025, "01")], source_ds=source, **base_args)
-        regridded_blocks = []
-
-        def regrid(block: np.ndarray) -> np.ndarray:
-            regridded_blocks.append(block.shape)
-            return block
-
-        def lazy_pyramid(ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
-            meta = np.empty((0, 0))
-            finest = ds.copy(
-                data={"var_a": ds["var_a"].data.map_blocks(regrid, meta=meta)}
-            )
-            return {5: finest, 4: finest / 2}
 
         with (
             patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
-            patch.object(rg, "_regrid_chunk", side_effect=lazy_pyramid),
+            patch.object(rg, "_regrid_chunk", return_value={4: "pyramid"}) as mock_c,
         ):
-            ((_, pyramid),) = rg.regrid()
-            for ds in pyramid.values():
-                ds.compute()
+            list(rg.regrid())
 
-        assert regridded_blocks == [(24, 3), (24, 3)]
+        regridded = mock_c.call_args.args[0]
+        assert regridded["var_a"].chunksizes["time"] == (24, 24)
 
 
 # ----------------------------------

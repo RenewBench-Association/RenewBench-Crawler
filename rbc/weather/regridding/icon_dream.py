@@ -98,7 +98,7 @@ class IconDreamRegridder(GridRegridder):
         self._quantization_steps[variable] = grib_quantization_step(f)
 
         datasets = []
-        for ds in cfgrib.open_datasets(f, chunks={}):
+        for ds in cfgrib.open_datasets(f, chunks={"time": 1}):
             if "step" in ds.dims:
                 ds = (
                     ds.stack(_flat=("time", "step"))

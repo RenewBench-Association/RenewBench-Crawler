@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from rbc.weather.regridding.store import HealpixZarrWriter
+from rbc.weather.regridding.store import TIME_CHUNK, HealpixZarrWriter
 
 
 # ----------------------------------
@@ -214,6 +214,34 @@ class TestAppend:
             Path(writer.base_dir, "era5", "1h", "level_7.zarr"), consolidated=False
         )
         assert list(opened["time"].values) == [0, 1, 2]
+
+    def test_computes_each_block_once_for_all_levels(
+        self, writer: HealpixZarrWriter
+    ) -> None:
+        """A time block is computed once and written to every level's store.
+
+        The coarser levels derive from the finer ones, so computing a level
+        at a time would repeat the regrid for each of them.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        computed = []
+
+        def count(block: np.ndarray) -> np.ndarray:
+            computed.append(block.shape)
+            return block
+
+        pyramid = _make_pyramid([4, 5], start=0, n=48)
+        finest = pyramid[5]["T"].chunk({"time": 24})
+        pyramid[5] = pyramid[5].copy(
+            data={"T": finest.data.map_blocks(count, meta=np.empty((0, 0)))}
+        )
+        pyramid[4] = pyramid[4].copy(data={"T": pyramid[5]["T"].data / 2})
+
+        writer.append("era5", "1h", (2025, 1), pyramid)
+
+        assert computed == [(24, 5), (24, 5)]
 
     def test_writes_every_level_in_pyramid(self, writer: HealpixZarrWriter) -> None:
         """Every level in the pyramid gets its own store, not just one.
@@ -603,7 +631,7 @@ class TestChunkShape:
             dsa.zeros(shape, chunks=shape), dims=("time", "model_level", "cell")
         )
 
-        chunks = writer._chunk_shape(da, {"dtype": "float32"})
+        chunks = writer._chunk_shape(da, {"dtype": "float32"}, TIME_CHUNK)
 
         assert np.prod(chunks) * 4 < self.CODEC_LIMIT
 
@@ -617,7 +645,9 @@ class TestChunkShape:
         """
         da = xr.DataArray(np.zeros((744, 3, 100_000)), dims=("time", "level", "cell"))
 
-        t_chunk, lev_chunk, cell_chunk = writer._chunk_shape(da, {"dtype": "float32"})
+        t_chunk, lev_chunk, cell_chunk = writer._chunk_shape(
+            da, {"dtype": "float32"}, TIME_CHUNK
+        )
 
         assert t_chunk == 24
         assert lev_chunk == 3  # kept whole
@@ -631,7 +661,7 @@ class TestChunkShape:
         """
         da = xr.DataArray(np.zeros((3, 5)), dims=("time", "cell"))
 
-        assert writer._chunk_shape(da, {"dtype": "float64"}) == (3, 5)
+        assert writer._chunk_shape(da, {"dtype": "float64"}, TIME_CHUNK) == (3, 5)
 
     def test_encoded_dtype_drives_the_budget(self, writer: HealpixZarrWriter) -> None:
         """Packing to a narrower dtype allows proportionally more cells per chunk.
@@ -643,8 +673,8 @@ class TestChunkShape:
             dsa.zeros((744, 5_000_000), chunks=(744, 5_000_000)), dims=("time", "cell")
         )
 
-        wide = writer._chunk_shape(da, {"dtype": "float64"})[1]
-        narrow = writer._chunk_shape(da, {"dtype": "int16"})[1]
+        wide = writer._chunk_shape(da, {"dtype": "float64"}, TIME_CHUNK)[1]
+        narrow = writer._chunk_shape(da, {"dtype": "int16"}, TIME_CHUNK)[1]
 
         # 4x, give or take integer-division rounding
         assert narrow == pytest.approx(wide * 4, rel=1e-6)
