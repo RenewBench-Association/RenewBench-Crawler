@@ -12,24 +12,6 @@ from rbc.weather.icon_dream.mappings import MODEL_CONFIG, VARIABLE_TO_SHORT_PARA
 from rbc.weather.utils import get_short_param, raw_data_dir
 
 
-def _expected_file(
-    downloader: IconDreamDownloader, year: int, month: str, dwd_code: str
-) -> Path:
-    """Build the file path IconDreamDownloader itself would write for one variable.
-
-    Args:
-        downloader (IconDreamDownloader): Instance under test.
-        year (int): Year.
-        month (str): Month (zero-padded).
-        dwd_code (str): DWD parameter short code.
-
-    Returns:
-        Path: Expected local file path under downloader.output_path.
-    """
-    filename = f"{downloader.model_config['label']}_{year}{month}_{dwd_code}_hourly.grb"
-    return Path(downloader.output_path, filename)
-
-
 def _data_dir(base_dir: Path, model: str = "global") -> Path:
     """Return the expected raw-data directory for one model variant.
 
@@ -560,8 +542,7 @@ def test_download_variables_already_exists(
         downloader (IconDreamDownloader): Instance of IconDreamDownloader.
     """
     # Create a dummy file
-    dummy_file = _expected_file(downloader, 2020, "01", "T")
-    dummy_file.parent.mkdir(parents=True, exist_ok=True)
+    dummy_file = Path(downloader.output_path, "ICON-DREAM-Global_202001_T_hourly.grb")
     dummy_file.write_text("dummy content")
 
     status = downloader._download_variables(
@@ -592,7 +573,9 @@ def test_download_variables_success(downloader: IconDreamDownloader) -> None:
 
         assert status == 1
         # File should exist
-        assert _expected_file(downloader, 2020, "01", "T").exists()
+        assert Path(
+            downloader.output_path, "ICON-DREAM-Global_202001_T_hourly.grb"
+        ).exists()
 
 
 def test_download_variables_network_error(

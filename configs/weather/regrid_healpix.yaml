@@ -1,5 +1,5 @@
-raw_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/raw/weather/
-dst_data_base_dir: /Users/Beckert/devel/RenewBench-Association/testdata/processed/weather/healpix/
+raw_data_base_dir: /lsdf/raw/weather/
+dst_data_base_dir: /lsdf/processed/weather/healpix/
 healpix_min_level: 0
 healpix_max_level:
   era5: 8
@@ -11,6 +11,4 @@ healpix_max_level:
 compressor: zlib
 compression_level: 1
 shuffle: true
-# Pyramid bytes computed and written at a time; peak memory is roughly 3.5x
-# this. Lower it on a memory-tight node, raise it for more parallelism.
-block_memory_mb: 512
+block_memory_mb: 8192  # ~20 GB peak RSS on ICON global 3D; below 8192, 3D variables get shorter Zarr chunks

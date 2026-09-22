@@ -153,35 +153,33 @@ def test_config_with_access_rejects_placeholders(
         schema.model_validate(bad_cfg_dict)
 
 
-def test_regrid_healpix_compression_defaults(source_configs: dict) -> None:
-    """The regrid schema defaults to zlib level 1 with shuffle.
-
-    Args:
-        source_configs (dict): Dictionary of all source configurations.
-    """
-    schema = SCHEMA_REGISTRY["regrid_healpix"]
-    cfg = schema.model_validate(source_configs["regrid_healpix"])
-
-    assert cfg.compressor == "zlib"
-    assert cfg.compression_level == 1
-    assert cfg.shuffle is True
-
-
 @pytest.mark.parametrize(
-    "override",
-    [{"compression_level": 0}, {"compressor": "lz4"}],
-    ids=["level_zero", "unknown_compressor"],
+    "override, expected",
+    [
+        ({}, ("zlib", 1, True)),
+        ({"compression_level": 0}, None),
+        ({"compressor": "lz4"}, None),
+    ],
+    ids=["defaults", "level_zero", "unknown_compressor"],
 )
-def test_regrid_healpix_rejects_bad_compression(
-    source_configs: dict, override: dict
+def test_regrid_healpix_compression(
+    source_configs: dict, override: dict, expected: tuple | None
 ) -> None:
-    """Level 0 (Blosc: no compression) and unknown compressors are rejected.
+    """Compression fields fall back to zlib level 1 with shuffle, or are rejected.
 
     Args:
         source_configs (dict): Dictionary of all source configurations.
-        override (dict): Invalid compression field to merge in.
+        override (dict): Compression fields to merge in; empty for defaults.
+        expected (tuple | None): Expected (compressor, level, shuffle), or
+            None if the override is invalid.
     """
     schema = SCHEMA_REGISTRY["regrid_healpix"]
+    cfg_dict = {**source_configs["regrid_healpix"], **override}
 
-    with pytest.raises(ValidationError):
-        schema.model_validate({**source_configs["regrid_healpix"], **override})
+    if expected is None:
+        with pytest.raises(ValidationError):
+            schema.model_validate(cfg_dict)
+        return
+
+    cfg = schema.model_validate(cfg_dict)
+    assert (cfg.compressor, cfg.compression_level, cfg.shuffle) == expected

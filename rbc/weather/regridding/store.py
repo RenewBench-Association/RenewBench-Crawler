@@ -111,14 +111,14 @@ class HealpixZarrWriter:
                 the full nested path on first write.
             min_level (int): Shared coarsest HEALPix level across sources.
             compressor (str): "zlib", "zstd", or "none". Defaults to "zlib".
-            compression_level (int): Codec level, >= 1 -- Blosc treats 0 as
-                "no compression". Defaults to 1.
+            compression_level (int): Codec level, >= 1. Defaults to 1.
             shuffle (bool): Byte-shuffle before compressing, the filter NetCDF
                 itself uses (measured ~1.4x smaller on packed int32). Ignored
                 for "none". Defaults to True.
             block_memory_mb (int): How much of the pyramid to compute and
                 write at a time (see `_block_timesteps()`). Lower it on a
-                memory-tight node, raise it to regrid more in parallel.
+                memory-tight node, raise it for longer Zarr time chunks and
+                fewer blocks per task.
 
         Raises:
             ValueError: If `compressor` is unknown or `compression_level` < 1.
@@ -160,8 +160,8 @@ class HealpixZarrWriter:
             )
         if level < 1:
             raise ValueError(
-                f"compression_level must be >= 1, got {level} (Blosc treats 0 as "
-                "no compression)."
+                f"compression_level must be >= 1, got {level}; pass "
+                "compressor='none' to write uncompressed."
             )
         if shuffle:
             cname: Literal["zlib", "zstd"] = "zlib" if compressor == "zlib" else "zstd"

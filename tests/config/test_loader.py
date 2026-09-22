@@ -9,20 +9,6 @@ import rbc.config.loader as loader
 from rbc.config.schema import SCHEMA_REGISTRY
 
 
-def _override_value(value):
-    """Produce a schema-valid override, distinct from the original value.
-
-    Args:
-        value: Original config value.
-
-    Returns:
-        A different value of a type the same field would still accept.
-    """
-    if isinstance(value, int):
-        return value + 1
-    return "override"
-
-
 # ----------------------------------
 # Tests
 # ----------------------------------
@@ -60,12 +46,11 @@ class TestLoadConfig:
         """
         assert source in source_configs, f"Missing test cfg for source '{source}'"
         cfg_dict = source_configs[source]
+
+        # "1" is accepted by each field type in the schemas (str, Path, int),
+        # and matches no value in the fixture.
         overrides = {
-            k: (
-                {sub_k: _override_value(sub_v) for sub_k, sub_v in v.items()}
-                if isinstance(v, dict)
-                else _override_value(v)
-            )
+            k: ({sub_k: "1" for sub_k in v} if isinstance(v, dict) else "1")
             for k, v in cfg_dict.items()
         }
 
@@ -79,9 +64,9 @@ class TestLoadConfig:
         for k, expected_v in overrides.items():
             if isinstance(expected_v, dict):
                 for sub_k, sub_v in expected_v.items():
-                    assert received_cfg_dict[k][sub_k] == sub_v
+                    assert str(received_cfg_dict[k][sub_k]) == sub_v
             else:
-                assert received_cfg_dict[k] == expected_v
+                assert str(received_cfg_dict[k]) == expected_v
 
     def test_load_config_missing_file(self, tmp_configs_dir: Path) -> None:
         """Failure path for "load_config" function when YAML is missing.
