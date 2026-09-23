@@ -325,7 +325,7 @@ class RegridHealpixConfig(BaseModel):
         compression_level (int): Codec level, >= 1.
         shuffle (bool): Byte-shuffle filter before compressing, as NetCDF does.
         block_memory_mb (int): How much of a pyramid to compute and write at
-            a time; peak memory runs roughly 3.5x this.
+            a time.
     """
 
     source: Literal["regrid_healpix"] = "regrid_healpix"

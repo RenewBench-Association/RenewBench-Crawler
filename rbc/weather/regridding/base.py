@@ -8,10 +8,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import grid_doctor as gd
-import pandas as pd
 import xarray as xr
 from loguru import logger
-from tqdm.dask import TqdmCallback
 
 from rbc.weather.regridding.store import (
     DEFAULT_BLOCK_MB,
@@ -27,34 +25,15 @@ class GridRegridder(ABC):
     Subclasses implement `_get_tasks()`, `_discover_variables()`,
     `_load_source_chunk()`, `_grid_metadata_path()`, and `_variable_mapping()`.
     `regrid()` handles the checkpoint loop, weights, and pyramid construction;
-    override `_regrid_chunk()`/`_regrid_kwargs()` only if a source needs
-    something other than the generic path (e.g. BARRA2's regional coverage).
+    override `_regrid_chunk()` only if a source needs something other than
+    the generic path (e.g. BARRA2's regional coverage).
 
-    One variable is loaded, regridded, and written at a time, so peak memory
-    scales with one variable's footprint regardless of how many were
-    requested together.
+    One variable is loaded, regridded, and written at a time, and each is
+    streamed in time blocks, so peak memory follows `block_memory_mb`.
 
     Attributes:
-        raw_dir (Path): Root of this source's already-downloaded raw files.
-        source_name (str): Canonical short name (e.g. "era5", "icon_dream_global");
-            used as the per-source subdirectory name in the combined store.
-        weights_cache_dir (Path): Where grid-doctor's ESMF weight files are cached.
-        min_level (int): Coarsest HEALPix pyramid level to retain — shared across
-            all sources feeding the same store, so cross-source comparison always
-            has a common level to compare at.
-        max_level (int): Finest HEALPix level computed directly from native data —
-            chosen per source, close to that source's own native resolution, not
-            shared across sources.
-        variables (list[str]): Canonical variable names to regrid.
-        years (list[int]): Years to process.
-        months (list[str]): Zero-padded months to process (e.g. "01").
-        dry_run (bool): If True, resolve inputs/weights but skip the actual regrid
-            and skip yielding data.
-        resume (bool): If True, load an existing checkpoint on init.
-        block_bytes (int): Memory budget for one source time chunk.
-        checkpoint (dict): Dict tracking regrid status per `(*task, variable)`
-            key (1=done).
-        checkpoint_path (Path): Path to the checkpoint file for resuming regridding.
+        block_bytes (int): Memory budget for one time block, from `block_memory_mb`.
+        checkpoint (dict): Dict tracking regrid status per (task, variable) key (1=done).
     """
 
     def __init__(
@@ -75,28 +54,31 @@ class GridRegridder(ABC):
         """Initializes the instance.
 
         Args:
-            raw_dir (Path): Root of this source's already-downloaded raw files.
-            source_name (str): Canonical short name for this source, used as the
-                per-source subdirectory name in the combined store.
-            weights_cache_dir (Path): Directory for grid-doctor's cached ESMF
-                weight files.
-            checkpoint_path (Path): Path to the checkpoint file. Normally
-                `HealpixZarrWriter.checkpoint_path(model_name, time_res)`, so
-                it lives alongside the Zarr store this source/model variant
-                actually writes into.
-            min_level (int): Coarsest HEALPix pyramid level to retain.
+            raw_dir (Path): Path to this source's already-downloaded raw files.
+            source_name (str): Canonical short name for this source (e.g. "era5",
+                "icon_dream_global"), used as the per-source subdirectory name
+                in the combined store.
+            weights_cache_dir (Path): Path to the directory for grid-doctor's
+                cached ESMF weight files.
+            checkpoint_path (Path): Path to the checkpoint file for resuming.
+                Normally `HealpixZarrWriter.checkpoint_path(model_name,
+                time_res)`, so it lives alongside the Zarr store this
+                source/model variant writes into.
+            min_level (int): Coarsest HEALPix pyramid level to retain. Shared
+                across all sources feeding the same store, so cross-source
+                comparison always has a common level.
             max_level (int): Finest HEALPix pyramid level to compute directly
-                from native data.
-            variables (list[str]): Canonical variable names to regrid.
-            years (list[int]): Years to process.
-            months (list[str] | None, optional): Zero-padded months to
-                process. Defaults to all 12 months.
-            dry_run (bool, optional): If True, resolve inputs/weights but skip
-                the actual regrid. Defaults to False.
-            resume (bool, optional): If True, load an existing checkpoint on
-                init. Defaults to True.
-            block_memory_mb (int, optional): Budget for one source time chunk
-                (see `_chunk_along_time()`); matches the writer's own.
+                from native data. Chosen per source, close to its own native
+                resolution, not shared across sources.
+            variables (list[str]): List of canonical variable names to regrid.
+            years (list[int]): List of years to regrid.
+            months (list[str] | None): List of zero-padded months (01-12). If
+                None, defaults to all months.
+            dry_run (bool): If True, resolve inputs and weights but skip the
+                actual regrid.
+            resume (bool): If True, load an existing checkpoint on init.
+            block_memory_mb (int): Memory budget for one time block; matches
+                the writer's own (see `_chunk_along_time()`).
 
         Raises:
             FileNotFoundError: If raw_dir does not exist.
@@ -175,13 +157,10 @@ class GridRegridder(ABC):
                     continue
 
                 logger.info(
-                    f"Task {key}: regridding to level {self.max_level} "
-                    f"(pyramid down to level {self.min_level})..."
+                    f"Task {key}: pyramid from level {self.max_level} down to "
+                    f"{self.min_level}, computed block-wise while writing."
                 )
-                with TqdmCallback(desc=f"Task {key}"):
-                    pyramid = self._regrid_chunk(ds, weights)
-                logger.info(f"Task {key}: regridding complete.")
-                yield key, pyramid
+                yield key, self._regrid_chunk(ds, weights)
 
         logger.info(f"All regridding tasks completed for '{self.source_name}'!")
 
@@ -222,9 +201,7 @@ class GridRegridder(ABC):
         Returns:
             list[str]: Canonical variable names to process for this task.
         """
-        if self.variables:
-            return self.variables
-        return self._discover_variables(task)
+        return self.variables or self._discover_variables(task)
 
     @abstractmethod
     def _discover_variables(self, task: tuple) -> list[str]:
@@ -298,36 +275,28 @@ class GridRegridder(ABC):
             month (str): Task month, zero-padded.
 
         Returns:
-            xr.Dataset: Dataset trimmed to [year-month-01, end of month].
+            xr.Dataset: Dataset holding only this month's timestamps.
         """
-        start = pd.Timestamp(year=year, month=int(month), day=1)
-        end = start + pd.offsets.MonthEnd(1) + pd.Timedelta(hours=23)
-        return ds.sel(time=slice(start, end))
+        in_month = (ds.time.dt.year == year) & (ds.time.dt.month == int(month))
+        return ds.isel(time=in_month.values)
 
-    def _regrid_kwargs(self) -> dict:
-        """Extra keyword arguments forwarded to `create_healpix_pyramid()`.
-
-        Returns:
-            dict: Extra kwargs, e.g. `{"source_kind": "unstructured"}` for
-                ICON-DREAM. Empty by default.
-        """
-        return {}
-
+    @abstractmethod
     def encoding_for(self, variable: str) -> dict | None:
         """Return a `to_zarr()` encoding dict for one canonical variable.
 
-        Passed straight through to `HealpixZarrWriter.append()`. None by
-        default (Zarr's own default dtype/compression apply); override to
-        reuse a source's native on-disk packing (e.g. BARRA2's own
-        int32 + scale_factor/add_offset).
+        Passed straight through to `HealpixZarrWriter.append()`. Regridding
+        produces float64 whatever the source carried, so every source states
+        the precision worth keeping -- a dtype (e.g. {"dtype": "float32"}) or
+        the source's own packing, as BARRA2 reuses its int32 +
+        scale_factor/add_offset.
 
         Args:
             variable (str): Canonical variable name.
 
         Returns:
-            dict | None: None by default.
+            dict | None: Encoding for this variable, or None to write it as
+                regridded.
         """
-        return None
 
     def quantization_step(self, variable: str) -> float | None:
         """Return the source's own precision step for one canonical variable.
@@ -364,20 +333,15 @@ class GridRegridder(ABC):
                 configured but it does not exist on disk.
         """
         grid_path = self._grid_metadata_path()
-        if grid_path is None:
-            return gd.cached_weights(
-                ds, level=self.max_level, cache_path=self.weights_cache_dir
-            )
-
-        if not grid_path.exists():
+        if grid_path is not None and not grid_path.exists():
             raise FileNotFoundError(
                 f"Grid metadata file not found at '{grid_path}'. "
                 f"Run the '{self.source_name}' downloader's download_metadata() "
                 "first."
             )
-        geometry_ds = xr.open_dataset(grid_path)
+        source = ds if grid_path is None else xr.open_dataset(grid_path)
         return gd.cached_weights(
-            geometry_ds, level=self.max_level, cache_path=self.weights_cache_dir
+            source, level=self.max_level, cache_path=self.weights_cache_dir
         )
 
     def _chunk_along_time(self, ds: xr.Dataset) -> xr.Dataset:
@@ -416,5 +380,4 @@ class GridRegridder(ABC):
             max_level=self.max_level,
             min_level=self.min_level,
             weights_path=weights,
-            **self._regrid_kwargs(),
         )

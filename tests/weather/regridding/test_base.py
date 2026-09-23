@@ -26,6 +26,7 @@ class _ConcreteRegridder(GridRegridder):
         _discovered (list[str]): Variable list returned by _discover_variables.
         _grid_path (Path | None): Path returned by _grid_metadata_path.
         _mapping (dict[str, str]): Mapping returned by _variable_mapping.
+        _encoding (dict | None): Encoding returned by encoding_for.
     """
 
     def __init__(
@@ -35,6 +36,7 @@ class _ConcreteRegridder(GridRegridder):
         discovered: list[str] | None = None,
         grid_path: Path | None = None,
         mapping: dict[str, str] | None = None,
+        encoding: dict | None = None,
         **kwargs,
     ) -> None:
         """Initialise the regridder with fixed test doubles.
@@ -49,6 +51,8 @@ class _ConcreteRegridder(GridRegridder):
             grid_path (Path | None): Path returned by _grid_metadata_path.
             mapping (dict[str, str] | None): Mapping returned by
                 _variable_mapping. Defaults to an empty dict.
+            encoding (dict | None): Encoding returned by encoding_for.
+                Defaults to None.
             **kwargs: Forwarded to GridRegridder.__init__.
         """
         self._tasks = tasks or []
@@ -60,6 +64,7 @@ class _ConcreteRegridder(GridRegridder):
         self._discovered = discovered or []
         self._grid_path = grid_path
         self._mapping = mapping or {}
+        self._encoding = encoding
         super().__init__(**kwargs)
 
     def _get_tasks(self) -> list[tuple]:
@@ -108,6 +113,17 @@ class _ConcreteRegridder(GridRegridder):
             dict[str, str]: The pre-defined mapping.
         """
         return self._mapping
+
+    def encoding_for(self, variable: str) -> dict | None:
+        """Return the pre-defined encoding, regardless of the variable.
+
+        Args:
+            variable (str): Ignored.
+
+        Returns:
+            dict | None: The pre-defined encoding.
+        """
+        return self._encoding
 
 
 # ----------------------------------
@@ -530,6 +546,21 @@ class TestTrimToMonth:
 
         assert list(trimmed["time"].values) == list(time[1:4])
 
+    def test_keeps_sub_hourly_end_of_month(self, base_args: dict) -> None:
+        """The month's final sub-hourly steps survive, not just its last full hour.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        rg = _ConcreteRegridder(**base_args)
+        time = pd.date_range("2020-04-01", "2020-05-01", freq="20min")
+        ds = xr.Dataset({"t2m": ("time", np.arange(len(time)))}, coords={"time": time})
+
+        trimmed = rg._trim_to_month(ds, 2020, "04")
+
+        assert trimmed.sizes["time"] == 30 * 72
+        assert trimmed["time"].values[-1] == np.datetime64("2020-04-30T23:40")
+
 
 # ----------------------------------
 # GridRegridder._get_weights
@@ -611,7 +642,7 @@ class TestRegridChunk:
     """Tests for GridRegridder._regrid_chunk()."""
 
     def test_forwards_correct_kwargs(self, base_args: dict) -> None:
-        """min_level/max_level aren't swapped, and _regrid_kwargs() is forwarded.
+        """The cached weight file and an unswapped min_level/max_level are forwarded.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
@@ -620,14 +651,9 @@ class TestRegridChunk:
         weights = Path("weights.nc")
         rg = _ConcreteRegridder(**base_args)
 
-        with (
-            patch.object(
-                rg, "_regrid_kwargs", return_value={"source_kind": "unstructured"}
-            ),
-            patch(
-                "rbc.weather.regridding.base.gd.create_healpix_pyramid"
-            ) as mock_create,
-        ):
+        with patch(
+            "rbc.weather.regridding.base.gd.create_healpix_pyramid"
+        ) as mock_create:
             mock_create.return_value = {4: "pyramid"}
             rg._regrid_chunk(ds, weights)
 
@@ -636,7 +662,6 @@ class TestRegridChunk:
             max_level=rg.max_level,
             min_level=rg.min_level,
             weights_path=weights,
-            source_kind="unstructured",
         )
 
 
@@ -646,15 +671,14 @@ class TestRegridChunk:
 class TestWriteHooks:
     """Tests for the per-variable hooks the writer consumes."""
 
-    def test_default_to_none(self, base_args: dict) -> None:
-        """No encoding and no step by default -- values are written unchanged.
+    def test_quantization_step_defaults_to_none(self, base_args: dict) -> None:
+        """No step until a subclass records one -- values are written unchanged.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
         rg = _ConcreteRegridder(**base_args)
 
-        assert rg.encoding_for("var_a") is None
         assert rg.quantization_step("var_a") is None
 
     def test_quantization_step_returns_the_recorded_step(self, base_args: dict) -> None:

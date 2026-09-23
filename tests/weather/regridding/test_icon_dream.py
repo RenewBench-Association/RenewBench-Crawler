@@ -429,7 +429,6 @@ class TestRegridChunk:
             max_level=rg.max_level,
             min_level=rg.min_level,
             weights_path=weights,
-            source_kind="unstructured",
         )
         assert result is sentinel
 

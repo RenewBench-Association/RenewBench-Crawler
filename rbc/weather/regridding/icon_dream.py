@@ -146,14 +146,6 @@ class IconDreamRegridder(GridRegridder):
         )
         return Path(self.model_dir, "metadata", grid_file)
 
-    def _regrid_kwargs(self) -> dict:
-        """ICON-DREAM is unstructured -- grid-doctor needs this told explicitly.
-
-        Returns:
-            dict: {"source_kind": "unstructured"}.
-        """
-        return {"source_kind": "unstructured"}
-
     def _regrid_chunk(self, ds: xr.Dataset, weights: Path) -> dict[int, xr.Dataset]:
         """Regrid via the regional workaround for EU; grid-doctor's own path for Global.
 
