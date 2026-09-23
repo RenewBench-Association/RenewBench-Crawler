@@ -176,6 +176,7 @@ class TestNormalizeDimOrder:
                 "ta": (("level", "time", "cell"), np.zeros((3, 2, 5))),
                 "ta_height": (("height", "time", "cell"), np.zeros((2, 2, 5))),
                 "t_model": (("model_level", "time", "cell"), np.zeros((4, 2, 5))),
+                "tke": (("model_level_half", "time", "cell"), np.zeros((5, 2, 5))),
             }
         )
 
@@ -185,6 +186,7 @@ class TestNormalizeDimOrder:
         assert result["ta"].dims == ("time", "level", "cell")
         assert result["ta_height"].dims == ("time", "height", "cell")
         assert result["t_model"].dims == ("time", "model_level", "cell")
+        assert result["tke"].dims == ("time", "model_level_half", "cell")
 
 
 # ----------------------------------

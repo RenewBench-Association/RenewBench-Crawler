@@ -24,6 +24,14 @@ from rbc.weather.utils import raw_data_dir
 # from it (e.g. "T_2M" decodes as "t2m").
 _SHORT_TO_CANONICAL = {v: k for k, v in VARIABLE_TO_SHORT_PARAM.items()}
 
+# cfgrib's model-level dim names -> the contract's. ICON stores most 3D
+# variables on the layers between model interfaces, but TKE on the interfaces
+# themselves, giving it one level more than its siblings.
+_VERTICAL_DIM_RENAMES = {
+    "generalVerticalLayer": "model_level",
+    "generalVertical": "model_level_half",
+}
+
 
 class IconDreamRegridder(GridRegridder):
     """HEALPix regridder for ICON-DREAM NWP data.
@@ -86,11 +94,14 @@ class IconDreamRegridder(GridRegridder):
         for ds in cfgrib.open_datasets(f, chunks={"time": 1}):
             ds = flatten_forecast_dims(ds)
             (var_name,) = ds.data_vars
-            # "generalVerticalLayer" appears on model-level files only, and
-            # carries a coordinate, so rename() keeps dim and values in sync.
+            # Model-level files carry one of cfgrib's two vertical dims, both
+            # with a coordinate, so rename() keeps dim and values in sync:
+            # "generalVerticalLayer" for the N layers most variables use, and
+            # "generalVertical" for the N+1 interfaces bounding them (TKE).
             renames: dict[str, str] = {str(var_name): dwd_code, "values": "cell"}
-            if "generalVerticalLayer" in ds.dims:
-                renames["generalVerticalLayer"] = "model_level"
+            for native, canonical in _VERTICAL_DIM_RENAMES.items():
+                if native in ds.dims:
+                    renames[native] = canonical
             datasets.append(ds.rename(renames))
 
         # One file can split into hypercubes with different time coverage,

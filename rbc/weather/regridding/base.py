@@ -3,7 +3,6 @@
 Shared abstract base class for source-specific HEALPix regridders.
 """
 
-import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,6 +18,7 @@ from rbc.weather.regridding.store import (
     TIME_CHUNK,
     bytes_per_timestep,
 )
+from rbc.weather.utils import load_checkpoint, save_checkpoint
 
 
 class GridRegridder(ABC):
@@ -131,7 +131,7 @@ class GridRegridder(ABC):
 
         self.checkpoint_path = Path(checkpoint_path)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        self.checkpoint: dict = self._load_checkpoint()
+        self.checkpoint: dict = load_checkpoint(self.checkpoint_path, self.resume)
         # Filled by subclasses' _load_source_chunk(); see quantization_step().
         self._quantization_steps: dict[str, float | None] = {}
 
@@ -195,7 +195,7 @@ class GridRegridder(ABC):
             key (tuple): The `(*task, variable)` key that was successfully written.
         """
         self.checkpoint[key] = 1
-        self._save_checkpoint()
+        save_checkpoint(self.checkpoint_path, self.checkpoint)
 
     def _get_tasks(self) -> list[tuple]:
         """Return (year, month) tasks for every configured year/month.
@@ -418,31 +418,3 @@ class GridRegridder(ABC):
             weights_path=weights,
             **self._regrid_kwargs(),
         )
-
-    # ----------------------------------------------------------------
-    # Checkpoint helpers
-    # ----------------------------------------------------------------
-    def _load_checkpoint(self) -> dict:
-        """Load checkpoint from disk if resuming, otherwise return empty dict.
-
-        Returns:
-            dict: Loaded checkpoint or empty dict.
-        """
-        if self.resume and self.checkpoint_path.is_file():
-            logger.info(f"Resuming from checkpoint: '{self.checkpoint_path}'")
-            try:
-                with open(self.checkpoint_path, "rb") as f:
-                    return pickle.load(f)
-            except (EOFError, pickle.UnpicklingError):
-                logger.warning("Checkpoint file is corrupted. Starting fresh.")
-                return {}
-
-        logger.info("No checkpoint (first run or resume=False). Starting fresh.")
-        return {}
-
-    def _save_checkpoint(self) -> None:
-        """Save checkpoint to disk atomically."""
-        temp_path = self.checkpoint_path.with_suffix(".tmp")
-        with open(temp_path, "wb") as f:
-            pickle.dump(self.checkpoint, f)
-        temp_path.replace(self.checkpoint_path)

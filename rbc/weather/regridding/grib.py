@@ -38,7 +38,7 @@ def grib_quantization_step(path: Path, cf_var_name: str | None = None) -> float 
     GRIB packs each message (timestep/level) independently with its own
     scale: one real ICON-DREAM file carries binary scales of 2**-11, 2**-10
     and 2**-9. Taking the finest keeps whatever precision any single message
-    had. Only message headers are read (7,440 of a 6.3 GB file in ~2 s).
+    had. Only message headers are read.
 
     Args:
         path (Path): GRIB file.

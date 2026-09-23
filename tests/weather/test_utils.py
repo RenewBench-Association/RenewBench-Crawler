@@ -12,6 +12,7 @@ from rbc.weather.utils import (
     WeatherDownloader,
     download_file_streaming,
     get_short_param,
+    save_checkpoint,
 )
 
 
@@ -191,20 +192,20 @@ class TestInit:
 
 
 # ----------------------------------
-# WeatherDownloader._save_checkpoint
+# save_checkpoint
 # ----------------------------------
 class TestSaveCheckpoint:
-    """Tests for WeatherDownloader._save_checkpoint.
+    """Tests for save_checkpoint.
 
     Verifies that the checkpoint is written to disk and that no temporary
     artefacts are left behind after a successful save.
     """
 
     def test_writes_checkpoint_to_disk(self, base_args: dict) -> None:
-        """Checkpoint is persisted to disk after _save_checkpoint."""
+        """Checkpoint is persisted to disk after save_checkpoint."""
         dl = _ConcreteDownloader(**base_args)
         dl.checkpoint[(2020, "01", "var_a")] = 1
-        dl._save_checkpoint()
+        save_checkpoint(dl.checkpoint_path, dl.checkpoint)
 
         with open(dl.checkpoint_path, "rb") as f:
             loaded = pickle.load(f)
@@ -213,7 +214,7 @@ class TestSaveCheckpoint:
     def test_atomic_write_no_tmp_left_behind(self, base_args: dict) -> None:
         """Temporary .tmp file is removed after a successful save."""
         dl = _ConcreteDownloader(**base_args)
-        dl._save_checkpoint()
+        save_checkpoint(dl.checkpoint_path, dl.checkpoint)
         assert not dl.checkpoint_path.with_suffix(".tmp").exists()
 
 
@@ -254,7 +255,7 @@ class TestDownloadData:
         task = (2020, "01", "var_a")
         dl = _ConcreteDownloader(tasks=[task], **base_args)
 
-        with patch.object(dl, "_save_checkpoint") as mock_save:
+        with patch("rbc.weather.utils.save_checkpoint") as mock_save:
             dl.download_data()
 
         mock_save.assert_called_once()
@@ -276,7 +277,7 @@ class TestDownloadData:
         task = (2020, "01", "var_a")
         dl = _ConcreteDownloader(tasks=[task], **base_args)
 
-        with patch.object(dl, "_save_checkpoint") as mock_save:
+        with patch("rbc.weather.utils.save_checkpoint") as mock_save:
             dl.download_data()
 
         mock_save.assert_not_called()

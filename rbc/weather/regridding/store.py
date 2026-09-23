@@ -22,7 +22,7 @@ from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 # "time" and "cell". A store holds one coordinate array per dimension name, so
 # variables whose level sets differ get numbered siblings ("level",
 # "level_1", ...) -- see _resolve_vertical_dim().
-_VERTICAL_DIMS = ("level", "height", "model_level")
+_VERTICAL_DIMS = ("level", "height", "model_level", "model_level_half")
 
 # Uncompressed bytes per Zarr chunk, kept well inside the codecs' 2 GiB
 # buffer limit.
@@ -357,8 +357,7 @@ class HealpixZarrWriter:
     def _normalize_dim_order(self, ds: xr.Dataset) -> xr.Dataset:
         """Enforce the contract's dimension order: time, vertical dim, cell.
 
-        Applies to whichever vertical dim (level, height, model_level) a
-        variable has, or none.
+        Applies to whichever of `_VERTICAL_DIMS` a variable has, or none.
 
         Args:
             ds (xr.Dataset): Dataset about to be written.
@@ -366,9 +365,7 @@ class HealpixZarrWriter:
         Returns:
             xr.Dataset: Same data, with every variable's dims reordered.
         """
-        return ds.transpose(
-            "time", "level", "height", "model_level", "cell", missing_dims="ignore"
-        )
+        return ds.transpose("time", *_VERTICAL_DIMS, "cell", missing_dims="ignore")
 
     def _snap_to_lattice(self, ds: xr.Dataset, step: float | None) -> xr.Dataset:
         """Round values onto the source's own precision lattice.

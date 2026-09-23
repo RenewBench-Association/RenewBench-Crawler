@@ -60,7 +60,10 @@ def _source_dir(raw_dir: Path, model: str = "global") -> Path:
 
 
 def _hypercube(
-    var_name: str, values_size: int = 2, with_level: bool = False
+    var_name: str,
+    values_size: int = 2,
+    with_level: bool = False,
+    level_dim: str = "generalVerticalLayer",
 ) -> xr.Dataset:
     """Build a minimal synthetic (time, step, values) hypercube, like real ICON-DREAM GRIB.
 
@@ -69,7 +72,9 @@ def _hypercube(
             independent of the file's own DWD code, since real cfgrib output
             diverges from it (e.g. "T_2M" decodes as "t2m").
         values_size (int): Size of the unstructured "values" dim.
-        with_level (bool): If True, adds a "generalVerticalLayer" dim (model-level shape).
+        with_level (bool): If True, adds a vertical dim (model-level shape).
+        level_dim (str): Which of cfgrib's vertical dims to use --
+            "generalVerticalLayer" (layers) or "generalVertical" (interfaces).
 
     Returns:
         xr.Dataset: Synthetic dataset with one data variable named `var_name`.
@@ -87,13 +92,8 @@ def _hypercube(
             1, 3, 2, values_size
         )
         return xr.Dataset(
-            {
-                var_name: (
-                    ("time", "step", "generalVerticalLayer", "values"),
-                    level_data,
-                )
-            },
-            coords={**coords, "generalVerticalLayer": [111.0, 112.0]},
+            {var_name: (("time", "step", level_dim, "values"), level_data)},
+            coords={**coords, level_dim: [111.0, 112.0]},
         )
     flat_data = np.arange(1 * 3 * values_size, dtype=float).reshape(1, 3, values_size)
     return xr.Dataset(
@@ -204,6 +204,35 @@ class TestLoadSourceChunk:
         assert result.sizes["model_level"] == 2
         assert list(result["model_level"].values) == [111.0, 112.0]
         assert "cell" in result["T"].dims
+
+    def test_renames_half_level_dim(self, base_args: dict) -> None:
+        """The "generalVertical" dim TKE carries is renamed to "model_level_half".
+
+        ICON puts most 3D variables on the layers between model interfaces,
+        but TKE on the interfaces themselves, so it has one level more and
+        needs its own dim rather than sharing "model_level".
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for IconDreamRegridder.
+        """
+        source_dir = _source_dir(base_args["raw_dir"])
+        source_dir.mkdir(parents=True)
+        f = Path(source_dir, "ICON-DREAM-Global_202501_TKE_hourly.grb")
+        f.touch()
+        rg = IconDreamRegridder(model="global", **base_args)
+
+        with patch(
+            "rbc.weather.regridding.icon_dream.cfgrib.open_datasets",
+            return_value=[
+                _hypercube("tke", with_level=True, level_dim="generalVertical")
+            ],
+        ):
+            result = rg._load_source_chunk((2025, "01"), "turbulent_kinetic_energy")
+
+        assert "model_level_half" in result["TKE"].dims
+        assert "generalVertical" not in result.dims
+        assert "model_level" not in result.dims
+        assert list(result["model_level_half"].values) == [111.0, 112.0]
 
     def test_merges_multiple_hypercubes_from_one_file(self, base_args: dict) -> None:
         """Several cfgrib hypercubes from one file merge into one Dataset.
