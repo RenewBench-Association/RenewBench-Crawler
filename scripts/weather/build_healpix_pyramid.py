@@ -7,9 +7,10 @@ each (model_name, time_res, healpix_level) into its own Zarr store.
 
 import argparse
 from argparse import ArgumentParser
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
+import pandas as pd
 from loguru import logger
 
 from rbc.config.loader import load_config, parse_key_value_pairs
@@ -178,20 +179,18 @@ def _parse_max_level_overrides(pairs: list[str] | None) -> dict[str, int]:
     return overrides
 
 
-def _regrid_source(
-    name: str, shard: int, shards: int, args: argparse.Namespace, cfg: Any
-) -> None:
-    """Regrid one source's share of the variables.
+def _build(name: str, args: argparse.Namespace, cfg: Any) -> tuple:
+    """Build the writer and regridder for one source.
 
     Args:
         name (str): Source key, e.g. "icon_dream_global".
-        shard (int): Index of this worker among `shards`.
-        shards (int): How many workers are splitting this source's variables.
         args (argparse.Namespace): Parsed command-line flags.
         cfg (Any): Loaded regrid_healpix configuration.
+
+    Returns:
+        tuple: (writer, regridder, model_name, time_res).
     """
     min_level = args.healpix_min_level or cfg.healpix_min_level
-    max_level_overrides = _parse_max_level_overrides(args.healpix_max_level)
     model_name = _MODEL_NAME[name]
     time_res = _TIME_RES[name]
 
@@ -209,21 +208,39 @@ def _regrid_source(
         weights_cache_dir=writer.weights_cache_dir(model_name),
         checkpoint_path=writer.checkpoint_path(model_name, time_res),
         min_level=min_level,
-        max_level=max_level_overrides.get(name, cfg.healpix_max_level[name]),
+        max_level=_parse_max_level_overrides(args.healpix_max_level).get(
+            name, cfg.healpix_max_level[name]
+        ),
         variables=args.variables or [],
         years=args.years,
         months=args.months,
         dry_run=args.dry_run,
         resume=args.resume,
         block_memory_mb=cfg.block_memory_mb,
-        shard=shard,
-        shards=shards,
         **_EXTRA_KWARGS.get(name, {}),
     )
+    return writer, regridder, model_name, time_res
 
-    # regrid() yields one (year, month, variable) key + single-variable
-    # pyramid at a time.
-    for key, pyramid in regridder.regrid():
+
+def _regrid_key(name: str, key: tuple, args: argparse.Namespace, cfg: Any) -> tuple:
+    """Regrid and write one `(year, month, variable)` key.
+
+    The unit of work handed to a worker. It does not touch the checkpoint:
+    the manager records the key once this returns, so that a worker dying
+    mid-write leaves the key unfinished.
+
+    Args:
+        name (str): Source key, e.g. "icon_dream_global".
+        key (tuple): The (year, month, variable) key to regrid.
+        args (argparse.Namespace): Parsed command-line flags.
+        cfg (Any): Loaded regrid_healpix configuration.
+
+    Returns:
+        tuple: The key that was written, for the manager to record.
+    """
+    writer, regridder, model_name, time_res = _build(name, args, cfg)
+    pyramid = regridder.regrid_key(key)
+    if pyramid:
         writer.append(
             model_name=model_name,
             time_res=time_res,
@@ -232,15 +249,14 @@ def _regrid_source(
             encoding=regridder.encoding_for(key[-1]),
             quantization_step=regridder.quantization_step(key[-1]),
         )
-        # Only mark done once the write above actually succeeds.
-        regridder.mark_done(key)
         writer.emit_stac_item(
             model_name=model_name, time_res=time_res, task=key, pyramid=pyramid
         )
+    return key
 
 
 def main() -> None:
-    """Coordinate HEALPix regridding across configured sources."""
+    """Hand out every (year, month, variable) task and record what finishes."""
     args = parse_arguments()
 
     overrides = parse_key_value_pairs(args.cfg_options) if args.cfg_options else None
@@ -250,20 +266,39 @@ def main() -> None:
     logger.info(f"Config for the '{SOURCE}' regrid:\n{cfg}")
 
     for name in args.sources:
-        if args.workers == 1:
-            _regrid_source(name, 0, 1, args, cfg)
+        writer, regridder, model_name, time_res = _build(name, args, cfg)
+        keys = regridder.pending_keys()
+        if not keys:
+            logger.info(f"'{name}': nothing left to regrid.")
             continue
 
-        logger.info(f"'{name}': splitting its variables across {args.workers} workers.")
+        # Reserved before any worker starts: the axis can only grow forwards,
+        # so a worker reaching a later month first would lock the earlier
+        # ones out.
+        times = pd.DatetimeIndex([]).append(
+            [regridder.expected_times(task) for task in regridder.tasks()]
+        )
+        writer.reserve_time_axis(
+            model_name,
+            time_res,
+            times.sort_values(),
+            range(regridder.min_level, regridder.max_level + 1),
+        )
+
+        logger.info(f"'{name}': {len(keys)} task(s) over {args.workers} worker(s).")
+        if args.workers == 1:
+            for key in keys:
+                regridder.mark_done(_regrid_key(name, key, args, cfg))
+            continue
+
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
-            futures = [
-                pool.submit(_regrid_source, name, shard, args.workers, args, cfg)
-                for shard in range(args.workers)
-            ]
-            # result() re-raises in the parent, so one worker's failure is not
-            # mistaken for a completed run.
-            for future in futures:
-                future.result()
+            futures = {pool.submit(_regrid_key, name, key, args, cfg) for key in keys}
+            # as_completed hands the next free task to the next free worker,
+            # so a short 2D variable never waits behind a long 3D one.
+            for done in as_completed(futures):
+                # result() re-raises here, so a worker's failure stops the run
+                # instead of being recorded as finished.
+                regridder.mark_done(done.result())
 
 
 if __name__ == "__main__":

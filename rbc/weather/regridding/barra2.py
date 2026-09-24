@@ -151,6 +151,9 @@ class Barra2Regridder(GridRegridder):
         self.model = model
         self.model_config = MODEL_CONFIG[model]
         self.temporal_res = self.model_config["temporal_res"]
+        # C2_20min is the one sub-hourly source; the folder name doubles as a
+        # pandas offset alias ("1h", "20min").
+        self.time_freq = str(self.model_config["temporal_res_folder"])
         # Populated by _load_source_chunk(), read back by encoding_for().
         self._native_encodings: dict[str, dict | None] = {}
         super().__init__(**kwargs)

@@ -5,7 +5,7 @@ Zarr writer for regridded HEALPix pyramids, per the weather Zarr contract
 """
 
 import time
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterable
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -29,6 +29,11 @@ _VERTICAL_DIMS = ("level", "height", "model_level", "model_level_half")
 # Uncompressed bytes per Zarr chunk, kept well inside the codecs' 2 GiB
 # buffer limit.
 _TARGET_CHUNK_BYTES = 64 * 1024**2
+
+# Cell-ordering scheme grid-doctor stamps on every pyramid it builds. Used
+# when reserving a store before any pyramid exists; a divergence surfaces at
+# the first write, in _validate_consistency().
+HEALPIX_ORDER = "nested"
 
 # Timesteps per chunk. Divides every real month length (hourly months are
 # multiples of 24, 20-minute months multiples of 72), so a month written as
@@ -242,6 +247,47 @@ class HealpixZarrWriter:
             f"'{model_name}/{time_res}' task {task}: all {len(pyramid)} levels "
             f"written ({time.time() - task_start:.1f}s total)."
         )
+
+    def reserve_time_axis(
+        self,
+        model_name: str,
+        time_res: str,
+        times: pd.DatetimeIndex,
+        levels: Iterable[int],
+    ) -> None:
+        """Create or extend each level's store to span `times`, before any fill.
+
+        Reserving the whole run's axis up front is what lets workers write
+        months in any order: the axis can only grow forwards, so a worker
+        reaching February first would otherwise lock January out. Each store
+        is created holding the time coordinate alone -- variables add
+        themselves on first write -- and reserved timesteps cost almost
+        nothing, since unwritten chunks equal the fill value and Zarr does
+        not store them.
+
+        Args:
+            model_name (str): Contract "model_name".
+            time_res (str): "1h" or "20min".
+            times (pd.DatetimeIndex): Every timestamp the run will write.
+            levels (Iterable[int]): HEALPix levels to reserve.
+
+        Raises:
+            ValueError: If an existing store already holds timestamps after
+                `times`, which would need inserting rather than appending.
+        """
+        for level in levels:
+            store_path = self._store_path(model_name, time_res, level)
+            axis = xr.Dataset(
+                coords={"time": times},
+                attrs={"healpix_level": level, "healpix_order": HEALPIX_ORDER},
+            )
+            if not self._store_exists(store_path):
+                axis.to_zarr(store_path, mode="w", consolidated=False)
+                logger.info(f"{store_path}: reserved {times.size} timesteps.")
+                continue
+            self._extend_time_axis(
+                store_path, self._open(store_path), axis, ("reserve",)
+            )
 
     def emit_stac_item(
         self,

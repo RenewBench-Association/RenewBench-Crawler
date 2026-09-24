@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import grid_doctor as gd
+import pandas as pd
 import xarray as xr
 from loguru import logger
 
@@ -28,7 +29,7 @@ from rbc.weather.utils import (
 class GridRegridder(ABC):
     """Abstract base for source-specific HEALPix regridders.
 
-    Subclasses implement `_get_tasks()`, `_discover_variables()`,
+    Subclasses implement `tasks()`, `_discover_variables()`,
     `_load_source_chunk()`, `_grid_metadata_path()`, and `_variable_mapping()`.
     `regrid()` handles the checkpoint loop, weights, and pyramid construction;
     override `_regrid_chunk()` only if a source needs something other than
@@ -39,8 +40,12 @@ class GridRegridder(ABC):
 
     Attributes:
         block_bytes (int): Memory budget for one time block, from `block_memory_mb`.
-        checkpoint (dict): Dict tracking regrid status per (task, variable) key (1=done).
+        markers (Path): Directory of one marker file per finished key.
+        time_freq (str): This source's temporal resolution, as a pandas
+            offset alias; sets what `expected_times()` reserves.
     """
+
+    time_freq = "1h"
 
     def __init__(
         self,
@@ -56,8 +61,6 @@ class GridRegridder(ABC):
         dry_run: bool = False,
         resume: bool = True,
         block_memory_mb: int = DEFAULT_BLOCK_MB,
-        shard: int = 0,
-        shards: int = 1,
     ) -> None:
         """Initializes the instance.
 
@@ -87,14 +90,10 @@ class GridRegridder(ABC):
             resume (bool): If True, load an existing checkpoint on init.
             block_memory_mb (int): Memory budget for one time block; matches
                 the writer's own (see `_chunk_along_time()`).
-            shard (int): Index of this worker among `shards`, which takes
-                every `shards`-th variable of each task.
-            shards (int): How many workers are splitting the variables.
 
         Raises:
             FileNotFoundError: If raw_dir does not exist.
-            ValueError: If min_level is not lower than max_level, or if
-                `shard` is not within `shards`.
+            ValueError: If min_level is not lower than max_level.
         """
         self.raw_dir = Path(raw_dir)
         if not self.raw_dir.is_dir():
@@ -107,11 +106,6 @@ class GridRegridder(ABC):
             raise ValueError(
                 f"min_level ({min_level}) must be lower than max_level ({max_level})."
             )
-
-        if not 0 <= shard < shards:
-            raise ValueError(f"shard ({shard}) must be in range(shards) ({shards}).")
-        self.shard = shard
-        self.shards = shards
 
         self.source_name = source_name
         self.weights_cache_dir = Path(weights_cache_dir)
@@ -137,51 +131,91 @@ class GridRegridder(ABC):
         # Filled by subclasses' _load_source_chunk(); see quantization_step().
         self._quantization_steps: dict[str, float | None] = {}
 
-    def regrid(self) -> Iterator[tuple[tuple, dict[int, xr.Dataset]]]:
-        """Regrid all unfinished (task, variable) pairs, one variable at a time.
+    def pending_keys(self) -> list[tuple]:
+        """Return every `(*task, variable)` key still to be regridded.
 
-        Skips checkpointed (task, variable) keys. Weights are resolved once
-        per task and reused for its other variables, since they depend only on
-        horizontal grid geometry. `dry_run` resolves weights but skips
-        regridding and yielding. Each yielded pyramid stays lazy, so that
-        `HealpixZarrWriter.append()` can compute and write it a block at a
-        time; the caller writes it, then calls `mark_done(key)`.
+        The caller's full picture of the work: a manager hands these out to
+        workers, and a single-process run walks them in order.
+
+        Returns:
+            list[tuple]: Unfinished keys, chronological by task.
+        """
+        keys = []
+        for task in self.tasks():
+            for variable in self._variables_for_task(task):
+                key = (*task, variable)
+                if self.resume and is_marked_done(self.markers, key):
+                    logger.info(f"Task {key}: previously regridded. Skipping.")
+                    continue
+                keys.append(key)
+        return keys
+
+    def expected_times(self, task: tuple) -> pd.DatetimeIndex:
+        """Return the timestamps this source will write for one task.
+
+        Lets a manager reserve the store's whole time axis before any worker
+        runs, so workers only ever fill regions. Override where a source's
+        stamps don't sit on a plain `time_freq` grid from the month's start.
+
+        Args:
+            task (tuple): (year, month) task identifier.
+
+        Returns:
+            pd.DatetimeIndex: One entry per timestep of that month.
+        """
+        year, month = task
+        start = pd.Timestamp(year=int(year), month=int(month), day=1)
+        end = start + pd.offsets.MonthBegin(1)
+        return pd.date_range(start, end, freq=self.time_freq, inclusive="left")
+
+    def regrid_key(self, key: tuple) -> dict[int, xr.Dataset]:
+        """Regrid one `(*task, variable)` key into a lazy pyramid.
+
+        The pyramid is a dask graph, so `HealpixZarrWriter.append()` computes
+        and writes it a block at a time rather than materializing a month.
+        Call `mark_done(key)` only once that write succeeds.
+
+        Args:
+            key (tuple): A key from `pending_keys()`.
+
+        Returns:
+            dict[int, xr.Dataset]: Pyramid keyed by HEALPix level, or an empty
+                dict on a dry run.
+        """
+        *head, variable = key
+        task = tuple(head)
+
+        logger.info(f"Task {key}: loading source data...")
+        ds = self._chunk_along_time(
+            self._rename_to_canonical(self._load_source_chunk(task, variable))
+        )
+        weights = self._get_weights(ds)
+
+        if self.dry_run:
+            logger.info(f"Task {key}: DRY RUN - resolved inputs and weights.")
+            return {}
+
+        logger.info(
+            f"Task {key}: pyramid from level {self.max_level} down to "
+            f"{self.min_level}, computed block-wise while writing."
+        )
+        return self._regrid_chunk(ds, weights)
+
+    def regrid(self) -> Iterator[tuple[tuple, dict[int, xr.Dataset]]]:
+        """Regrid every unfinished key in turn, one variable at a time.
+
+        Args:
+            None
 
         Yields:
             tuple[tuple, dict[int, xr.Dataset]]: (key, pyramid) pairs, where
                 key is `(*task, variable)` and pyramid is keyed by HEALPix
                 level from min_level to max_level.
         """
-        for task in self._get_tasks():
-            weights: Path | None = None
-            for variable in self._variables_for_task(task):
-                key = (*task, variable)
-                if self.resume and is_marked_done(self.markers, key):
-                    logger.info(f"Task {key}: previously regridded. Skipping.")
-                    continue
-
-                logger.info(f"Task {key}: loading source data...")
-                ds = self._load_source_chunk(task, variable)
-                ds = self._rename_to_canonical(ds)
-                ds = self._chunk_along_time(ds)
-
-                if weights is None:
-                    logger.info(f"Task {task}: resolving HEALPix weights...")
-                    weights = self._get_weights(ds)
-
-                if self.dry_run:
-                    logger.info(
-                        f"Task {key}: DRY RUN - resolved inputs and weights, "
-                        "skipping regrid."
-                    )
-                    continue
-
-                logger.info(
-                    f"Task {key}: pyramid from level {self.max_level} down to "
-                    f"{self.min_level}, computed block-wise while writing."
-                )
-                yield key, self._regrid_chunk(ds, weights)
-
+        for key in self.pending_keys():
+            pyramid = self.regrid_key(key)
+            if pyramid:
+                yield key, pyramid
         logger.info(f"All regridding tasks completed for '{self.source_name}'!")
 
     def mark_done(self, key: tuple) -> None:
@@ -195,7 +229,7 @@ class GridRegridder(ABC):
         """
         mark_done(self.markers, key)
 
-    def _get_tasks(self) -> list[tuple]:
+    def tasks(self) -> list[tuple]:
         """Return (year, month) tasks for every configured year/month.
 
         Every source uses the same task granularity; override only if one
@@ -208,21 +242,19 @@ class GridRegridder(ABC):
         return [(year, month) for year in self.years for month in self.months]
 
     def _variables_for_task(self, task: tuple) -> list[str]:
-        """Return canonical variable names this worker processes for one task.
+        """Return canonical variable names to process for one task.
 
         Returns `self.variables` if the user requested specific ones;
         otherwise discovers what's actually available via
-        `_discover_variables()`. Either way only this worker's share is
-        returned, so sibling workers cover the rest without coordinating.
+        `_discover_variables()`.
 
         Args:
-            task (tuple): Task identifier returned by `_get_tasks()`.
+            task (tuple): Task identifier returned by `tasks()`.
 
         Returns:
             list[str]: Canonical variable names to process for this task.
         """
-        variables = self.variables or self._discover_variables(task)
-        return variables[self.shard :: self.shards]
+        return self.variables or self._discover_variables(task)
 
     @abstractmethod
     def _discover_variables(self, task: tuple) -> list[str]:
@@ -230,12 +262,10 @@ class GridRegridder(ABC):
 
         Filename-only where possible, cheaply enough to leave the real load
         to `_load_source_chunk()`. Only used when the user didn't request
-        specific variables via `self.variables`. The order must be stable
-        across processes, since parallel workers split this list by position
-        (see `_variables_for_task()`).
+        specific variables via `self.variables`.
 
         Args:
-            task (tuple): Task identifier returned by `_get_tasks()`.
+            task (tuple): Task identifier returned by `tasks()`.
 
         Returns:
             list[str]: Canonical variable names found for this task.
@@ -246,7 +276,7 @@ class GridRegridder(ABC):
         """Load the raw source file(s) for one task, for exactly one variable.
 
         Args:
-            task (tuple): Task identifier returned by `_get_tasks()`.
+            task (tuple): Task identifier returned by `tasks()`.
             variable (str): Canonical variable name to load -- one of
                 `_variables_for_task(task)`.
 

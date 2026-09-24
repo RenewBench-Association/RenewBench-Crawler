@@ -21,7 +21,7 @@ class _ConcreteRegridder(GridRegridder):
     """Minimal concrete implementation of GridRegridder used only in tests.
 
     Attributes:
-        _tasks (list[tuple]): Task list returned by _get_tasks.
+        _tasks (list[tuple]): Task list returned by tasks.
         _source_ds (xr.Dataset): Dataset returned by _load_source_chunk,
             regardless of which variable is requested.
         _discovered (list[str]): Variable list returned by _discover_variables.
@@ -43,7 +43,7 @@ class _ConcreteRegridder(GridRegridder):
         """Initialise the regridder with fixed test doubles.
 
         Args:
-            tasks (list[tuple] | None): Task tuples returned by _get_tasks.
+            tasks (list[tuple] | None): Task tuples returned by tasks.
                 Defaults to an empty list when None.
             source_ds (xr.Dataset | None): Dataset returned by
                 _load_source_chunk. Defaults to a tiny synthetic Dataset.
@@ -68,7 +68,7 @@ class _ConcreteRegridder(GridRegridder):
         self._encoding = encoding
         super().__init__(**kwargs)
 
-    def _get_tasks(self) -> list[tuple]:
+    def tasks(self) -> list[tuple]:
         """Return the task list supplied at construction time.
 
         Returns:
@@ -253,12 +253,12 @@ class TestInit:
 
 
 # ----------------------------------
-# GridRegridder._get_tasks (default implementation)
+# GridRegridder.tasks (default implementation)
 # ----------------------------------
 class TestGetTasks:
-    """Tests for GridRegridder._get_tasks()'s default implementation.
+    """Tests for GridRegridder.tasks()'s default implementation.
 
-    _ConcreteRegridder overrides _get_tasks() for the other tests here, so
+    _ConcreteRegridder overrides tasks() for the other tests here, so
     the base class's own default is called directly.
     """
 
@@ -275,7 +275,7 @@ class TestGetTasks:
         base_args["months"] = ["03", "01", "02"]
         rg = _ConcreteRegridder(**base_args)
 
-        tasks = GridRegridder._get_tasks(rg)
+        tasks = GridRegridder.tasks(rg)
 
         assert tasks == [
             (2024, "01"),
@@ -296,7 +296,7 @@ class TestGetTasks:
         del base_args["months"]
         rg = _ConcreteRegridder(**base_args)
 
-        tasks = GridRegridder._get_tasks(rg)
+        tasks = GridRegridder.tasks(rg)
 
         assert tasks == [(2025, f"{i:02d}") for i in range(1, 13)]
 
@@ -332,41 +332,6 @@ class TestVariablesForTask:
 
         assert rg._variables_for_task((2025, "01")) == ["temperature", "humidity"]
 
-    def test_workers_split_discovered_variables_exactly_once(
-        self, base_args: dict
-    ) -> None:
-        """Every discovered variable goes to exactly one of three workers.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-        """
-        base_args["variables"] = []
-        discovered = [f"var_{i}" for i in range(8)]
-
-        shares = [
-            _ConcreteRegridder(
-                discovered=discovered, shard=shard, shards=3, **base_args
-            )._variables_for_task((2025, "01"))
-            for shard in range(3)
-        ]
-
-        assert sorted(v for share in shares for v in share) == sorted(discovered)
-        assert [len(share) for share in shares] == [3, 3, 2]
-
-    @pytest.mark.parametrize("shard, shards", [(3, 3), (-1, 2), (0, 0)])
-    def test_shard_outside_shards_raises(
-        self, base_args: dict, shard: int, shards: int
-    ) -> None:
-        """A worker index outside range(shards) is rejected at construction.
-
-        Args:
-            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-            shard (int): Worker index to test.
-            shards (int): Worker count to test.
-        """
-        with pytest.raises(ValueError, match="must be in range"):
-            _ConcreteRegridder(shard=shard, shards=shards, **base_args)
-
 
 # ----------------------------------
 # GridRegridder.regrid
@@ -374,13 +339,12 @@ class TestVariablesForTask:
 class TestRegrid:
     """Tests for GridRegridder.regrid()."""
 
-    def test_one_variable_at_a_time_with_weights_once_per_task(
-        self, base_args: dict
-    ) -> None:
-        """Each (task, variable) is regridded separately; weights resolve once per task.
+    def test_one_pyramid_per_key_in_chronological_order(self, base_args: dict) -> None:
+        """Each (task, variable) is regridded separately, oldest task first.
 
-        Weights depend only on horizontal grid geometry, so recomputing them
-        per variable would be pure waste.
+        Weights are resolved per key rather than cached per task, so that a
+        key is self-contained and can run in its own worker process;
+        grid-doctor's own on-disk cache keeps that cheap after the first.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
@@ -395,7 +359,7 @@ class TestRegrid:
         ):
             results = list(rg.regrid())
 
-        assert mock_w.call_count == len(tasks)
+        assert mock_w.call_count == 4
         assert mock_c.call_count == 4
         assert [key for key, _ in results] == [
             (*t, v) for t in tasks for v in ("temperature", "humidity")
