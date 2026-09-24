@@ -202,67 +202,28 @@ def exclusive_lock(path: Path, timeout: float = 3600.0) -> Generator[None]:
         lock.rmdir()
 
 
-def marker_dir(checkpoint_path: Path) -> Path:
-    """Return the marker directory belonging to a checkpoint file path.
+def adopt_marker_files(checkpoint_path: Path, checkpoint: dict) -> dict:
+    """Fold an older run's per-key marker files into a checkpoint dict.
+
+    An interim version recorded one file per finished key in a "status.d"
+    directory. Reading those back keeps a store written that way resumable.
 
     Args:
-        checkpoint_path (Path): The `status.pickle` path a caller configured.
+        checkpoint_path (Path): File the checkpoint is stored in.
+        checkpoint (dict): Checkpoint loaded from that file.
 
     Returns:
-        Path: Sibling directory holding one marker file per finished key.
+        dict: `checkpoint`, plus any key only the markers knew about.
     """
-    return checkpoint_path.with_suffix(".d")
-
-
-def is_marked_done(markers: Path, key: tuple) -> bool:
-    """Whether one key has already been finished.
-
-    Args:
-        markers (Path): Directory from `marker_dir()`.
-        key (tuple): The key to test.
-
-    Returns:
-        bool: True if a marker for `key` exists.
-    """
-    return (markers / f"{'-'.join(str(part) for part in key)}.done").exists()
-
-
-def mark_done(markers: Path, key: tuple) -> None:
-    """Record one key as finished.
-
-    One file per key, so processes working on different keys never touch the
-    same file -- a single shared checkpoint would lose whichever keys were
-    written by the process that saved first.
-
-    Args:
-        markers (Path): Directory from `marker_dir()`.
-        key (tuple): The key that was successfully written.
-    """
-    markers.mkdir(parents=True, exist_ok=True)
-    (markers / f"{'-'.join(str(part) for part in key)}.done").touch()
-
-
-def migrate_checkpoint(checkpoint_path: Path, markers: Path) -> None:
-    """Convert a legacy pickled checkpoint into marker files, once.
-
-    Keeps a store written by an earlier run resumable: without this, its
-    finished keys would be regridded again and rejected as already present.
-
-    Args:
-        checkpoint_path (Path): Legacy `status.pickle` path.
-        markers (Path): Directory from `marker_dir()`.
-    """
-    if markers.exists() or not checkpoint_path.is_file():
-        return
-    done = [
-        key
-        for key, status in load_checkpoint(checkpoint_path, True).items()
-        if status == 1
-    ]
-    for key in done:
-        mark_done(markers, key)
-    markers.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Migrated {len(done)} checkpoint entries to '{markers}'.")
+    markers = checkpoint_path.with_suffix(".d")
+    if not markers.is_dir():
+        return checkpoint
+    known = {"-".join(str(part) for part in key) for key in checkpoint}
+    for marker in markers.glob("*.done"):
+        if marker.stem not in known:
+            year, month, variable = marker.stem.split("-", 2)
+            checkpoint[(int(year), month, variable)] = 1
+    return checkpoint
 
 
 def raw_data_dir(base_dir: Path, raw_folder: str, sub_folder: str) -> Path:

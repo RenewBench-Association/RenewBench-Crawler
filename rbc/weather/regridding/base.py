@@ -18,11 +18,10 @@ from rbc.weather.regridding.store import (
     bytes_per_timestep,
 )
 from rbc.weather.utils import (
+    adopt_marker_files,
     exclusive_lock,
-    is_marked_done,
-    mark_done,
-    marker_dir,
-    migrate_checkpoint,
+    load_checkpoint,
+    save_checkpoint,
 )
 
 
@@ -40,7 +39,7 @@ class GridRegridder(ABC):
 
     Attributes:
         block_bytes (int): Memory budget for one time block, from `block_memory_mb`.
-        markers (Path): Directory of one marker file per finished key.
+        checkpoint (dict): Regrid status per (task, variable) key (1=done).
         time_freq (str): This source's temporal resolution, as a pandas
             offset alias; sets what `expected_times()` reserves.
     """
@@ -124,10 +123,9 @@ class GridRegridder(ABC):
 
         self.checkpoint_path = Path(checkpoint_path)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        # One marker file per finished key, so several processes can regrid
-        # different variables of one store without overwriting each other.
-        self.markers = marker_dir(self.checkpoint_path)
-        migrate_checkpoint(self.checkpoint_path, self.markers)
+        self.checkpoint: dict = adopt_marker_files(
+            self.checkpoint_path, load_checkpoint(self.checkpoint_path, self.resume)
+        )
         # Filled by subclasses' _load_source_chunk(); see quantization_step().
         self._quantization_steps: dict[str, float | None] = {}
 
@@ -144,7 +142,7 @@ class GridRegridder(ABC):
         for task in self.tasks():
             for variable in self._variables_for_task(task):
                 key = (*task, variable)
-                if self.resume and is_marked_done(self.markers, key):
+                if self.resume and self.checkpoint.get(key, 0) == 1:
                     logger.info(f"Task {key}: previously regridded. Skipping.")
                     continue
                 keys.append(key)
@@ -227,7 +225,8 @@ class GridRegridder(ABC):
         Args:
             key (tuple): The `(*task, variable)` key that was successfully written.
         """
-        mark_done(self.markers, key)
+        self.checkpoint[key] = 1
+        save_checkpoint(self.checkpoint_path, self.checkpoint)
 
     def tasks(self) -> list[tuple]:
         """Return (year, month) tasks for every configured year/month.

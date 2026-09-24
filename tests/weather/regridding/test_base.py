@@ -11,7 +11,6 @@ import pytest
 import xarray as xr
 
 from rbc.weather.regridding.base import GridRegridder
-from rbc.weather.utils import is_marked_done
 
 
 # ----------------------------------
@@ -224,21 +223,38 @@ class TestInit:
         with pytest.raises(ValueError, match="must be lower than"):
             _ConcreteRegridder(**base_args)
 
-    def test_legacy_pickle_checkpoint_is_migrated(self, base_args: dict) -> None:
-        """Keys from an older run's pickled checkpoint become markers.
+    @pytest.mark.parametrize("resume", [True, False])
+    def test_checkpoint_loaded_only_when_resuming(
+        self, base_args: dict, resume: bool
+    ) -> None:
+        """An existing checkpoint is loaded when resuming and ignored otherwise.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+            resume (bool): Whether to resume from the checkpoint.
+        """
+        saved = {(2025, "01", "var_a"): 1}
+        with open(base_args["checkpoint_path"], "wb") as f:
+            pickle.dump(saved, f)
+
+        base_args["resume"] = resume
+        rg = _ConcreteRegridder(**base_args)
+
+        assert rg.checkpoint == (saved if resume else {})
+
+    def test_marker_files_from_an_older_run_are_adopted(self, base_args: dict) -> None:
+        """Keys an interim version recorded as marker files still count as done.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        saved = {(2025, "01", "var_a"): 1, (2025, "02", "var_a"): 0}
-        with open(base_args["checkpoint_path"], "wb") as f:
-            pickle.dump(saved, f)
+        markers = base_args["checkpoint_path"].with_suffix(".d")
+        markers.mkdir()
+        (markers / "2025-01-var_a.done").touch()
 
         rg = _ConcreteRegridder(**base_args)
 
-        assert is_marked_done(rg.markers, (2025, "01", "var_a"))
-        # Only finished keys migrate; 0 means the task failed.
-        assert not is_marked_done(rg.markers, (2025, "02", "var_a"))
+        assert rg.checkpoint[(2025, "01", "var_a")] == 1
 
     def test_corrupted_checkpoint_starts_fresh(self, base_args: dict) -> None:
         """A corrupted legacy checkpoint is discarded rather than raising.
@@ -249,7 +265,7 @@ class TestInit:
         base_args["checkpoint_path"].write_bytes(b"not-valid-pickle-data")
 
         rg = _ConcreteRegridder(**base_args)
-        assert not is_marked_done(rg.markers, (2025, "01", "var_a"))
+        assert rg.checkpoint == {}
 
 
 # ----------------------------------
@@ -444,7 +460,7 @@ class TestRegrid:
         ):
             list(rg.regrid())
 
-        assert not is_marked_done(rg.markers, (2025, "01", "var_a"))
+        assert rg.checkpoint == {}
 
     def test_source_is_chunked_along_time(self, base_args: dict) -> None:
         """The source is split into time chunks before it is regridded.
@@ -486,8 +502,8 @@ class TestMarkDone:
         rg.mark_done(key)
 
         fresh = _ConcreteRegridder(tasks=[(2025, "01")], **base_args)
-        assert is_marked_done(fresh.markers, key)
-        assert not is_marked_done(fresh.markers, (2025, "01", "var_b"))
+        assert fresh.checkpoint[key] == 1
+        assert not rg.checkpoint_path.with_suffix(".tmp").exists()
 
 
 # ----------------------------------

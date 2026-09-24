@@ -18,8 +18,6 @@ from loguru import logger
 from tqdm import tqdm
 from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 
-from rbc.weather.utils import exclusive_lock
-
 # Vertical dimensions the contract uses, in the order they appear between
 # "time" and "cell". A store holds one coordinate array per dimension name, so
 # variables whose level sets differ get numbered siblings ("level",
@@ -226,22 +224,19 @@ class HealpixZarrWriter:
 
         task_start = time.time()
         chunk, block = self._block_timesteps(pyramid)
-        # Reserving touches state every variable of this store shares -- its
-        # creation and its time axis -- so only one process may do it at a
-        # time. Filling afterwards writes disjoint regions and needs no lock.
-        with exclusive_lock(Path(self.base_dir, model_name, time_res, ".reserve")):
-            plans = [
-                self._reserve_level(
-                    self._store_path(model_name, time_res, level),
-                    self._snap_to_lattice(
-                        self._normalize_dim_order(ds), quantization_step
-                    ),
-                    task,
-                    encoding,
-                    chunk,
-                )
-                for level, ds in pyramid.items()
-            ]
+        # Unlocked: each variable owns its own arrays and its own region of
+        # them. The state variables share -- the store and its time axis --
+        # is reserved by `reserve_time_axis()` before any of this runs.
+        plans = [
+            self._reserve_level(
+                self._store_path(model_name, time_res, level),
+                self._snap_to_lattice(self._normalize_dim_order(ds), quantization_step),
+                task,
+                encoding,
+                chunk,
+            )
+            for level, ds in pyramid.items()
+        ]
         self._fill_blocks(plans, block, task)
         logger.info(
             f"'{model_name}/{time_res}' task {task}: all {len(pyramid)} levels "
@@ -386,6 +381,11 @@ class HealpixZarrWriter:
         (variable,) = ds.data_vars
         var_encoding: dict = {**(encoding or {}), "compressors": self.compressors}
         var_encoding["chunks"] = self._chunk_shape(ds[variable], var_encoding, chunk)
+        # Reserved chunks are never written, so a packed variable's gaps read
+        # back as Zarr's own fill (0, a real measurement) unless it is told
+        # which value stands for "missing". Floats already default to NaN.
+        if "_FillValue" in var_encoding:
+            var_encoding.setdefault("fill_value", var_encoding["_FillValue"])
         zarr_encoding = {variable: var_encoding}
 
         if not self._store_exists(store_path):
@@ -554,7 +554,17 @@ class HealpixZarrWriter:
             },
             attrs=ds.attrs,
         )
-        template.to_zarr(store_path, mode=mode, encoding=encoding, consolidated=False)
+        # compute=False writes the schema and coordinates but no data chunks.
+        # Chunks nothing has filled yet are absent from the store and read
+        # back as the fill value, so materializing NaN over the reserved span
+        # would cost minutes per variable and change nothing.
+        template.to_zarr(
+            store_path,
+            mode=mode,
+            encoding=encoding,
+            consolidated=False,
+            compute=False,
+        )
 
     def _extend_time_axis(
         self, store_path: Path, existing: xr.Dataset, ds: xr.Dataset, task: tuple
