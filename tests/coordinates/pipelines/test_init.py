@@ -2,16 +2,18 @@
 """Tests for the pipelines package's __init__ helpers."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
+from rbc.coordinates import pipelines
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.pipelines import build_shared_locators, make_pipeline
+from rbc.coordinates.pipelines import build_shared_resources, make_pipeline
 from rbc.coordinates.pipelines.default import DefaultPipeline
 from rbc.coordinates.pipelines.entsoe import EntsoePipeline
 
@@ -98,12 +100,12 @@ class TestMakePipeline:
         assert pipeline.osm_loc is osm_loc
 
 
-class TestBuildSharedLocators:
-    """Test the 'build_shared_locators' function."""
+class TestBuildSharedResources:
+    """Test the 'build_shared_resources' function."""
 
     def test_default_pipeline(self) -> None:
         """Happy path: default pipeline builds a OSMPP ppdb, a GEM loc but no EIC registry."""
-        shared = build_shared_locators(source="eia", gem_dir=None, output_dir=None)
+        shared = build_shared_resources(source="eia", resources_dir=None)
         assert isinstance(shared.ppdb_loc, OSMPPLocator)
         assert isinstance(shared.gem_loc, GEMLocator)
         assert isinstance(shared.osm_loc, OverpassLocator)
@@ -111,27 +113,35 @@ class TestBuildSharedLocators:
 
     def test_entsoe_pipeline(self) -> None:
         """Happy path: entsoe pipeline builds a PPM ppdb, a GEM loc and an EIC registry."""
-        shared = build_shared_locators(source="entsoe", gem_dir=None, output_dir=None)
+        shared = build_shared_resources(source="entsoe", resources_dir=None)
         assert isinstance(shared.ppdb_loc, PPMLocator)
         assert isinstance(shared.gem_loc, GEMLocator)
         assert isinstance(shared.osm_loc, OverpassLocator)
         assert shared.eic_reg is not None
         assert isinstance(shared.eic_reg, EICCodeRegistry)
 
-    def test_osm_flags_reach_overpass_locator(self, tmp_path: Path) -> None:
-        """Happy path: the CLI's update/live flags and the output dir reach the locator.
+    def test_resources_get_own_subfolders(self, tmp_path: Path) -> None:
+        """Happy path: each resource gets its own subfolder of `resources_dir`.
 
         Args:
-            tmp_path (Path): Pytest-provided temporary directory, used as `output_dir`.
+            tmp_path (Path): Pytest-provided temporary directory (`resources_dir`).
         """
-        shared = build_shared_locators(
-            source="eia",
-            gem_dir=None,
-            output_dir=tmp_path,
-            osm_update=True,
-            osm_live=True,
+        shared = build_shared_resources(source="entsoe", resources_dir=tmp_path)
+
+        cast(MagicMock, pipelines.GEMLocator).assert_called_once_with(
+            gem_dir=Path(tmp_path, "gem")
+        )
+        cast(MagicMock, pipelines.EICCodeRegistry).assert_called_once_with(
+            cache_dir=Path(tmp_path, "eic")
         )
         assert shared.osm_loc is not None
-        assert shared.osm_loc.cache_dir == tmp_path
+        assert shared.osm_loc.cache_dir == Path(tmp_path, "overpass")
+
+    def test_osm_flags_reach_overpass_locator(self) -> None:
+        """Happy path: the CLI's update/live flags reach the Overpass locator."""
+        shared = build_shared_resources(
+            source="eia", resources_dir=None, osm_update=True, osm_live=True
+        )
+        assert shared.osm_loc is not None
         assert shared.osm_loc.update is True
         assert shared.osm_loc.live is True

@@ -312,6 +312,32 @@ class Barra2Config(PathValidation, BaseModel):
 
 
 # ----------------------------------
+# Coordinate finding schemas
+# ----------------------------------
+class CoordinatesPaths(BaseModel):
+    """Filesystem paths used by coordinate finding (shared by all energy sources).
+
+    Attributes:
+        resources_dir (Path): Directory of the resources coordinate finding downloads or
+            reads (e.g. GEM trackers in `gem/`, the EIC directory, OSM files).
+    """
+
+    resources_dir: Path
+
+
+class CoordinatesConfig(PathValidation, BaseModel):
+    """Configuration schema for coordinate finding.
+
+    Attributes:
+        source (Literal): Name of the config.
+        paths (CoordinatesPaths): Paths pydantic model for paths.
+    """
+
+    source: Literal["coordinates"] = "coordinates"
+    paths: CoordinatesPaths
+
+
+# ----------------------------------
 # Schema registry
 # ----------------------------------
 SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
@@ -330,4 +356,5 @@ SCHEMA_REGISTRY: dict[str, Type[BaseModel]] = {
     "era5": Era5Config,
     "icon_dream_eu": IconDreamEuConfig,
     "icon_dream_global": IconDreamGlobalConfig,
+    "coordinates": CoordinatesConfig,
 }

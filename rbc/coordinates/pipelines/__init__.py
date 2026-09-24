@@ -1,10 +1,10 @@
 """Public surface of the coordinate-finding pipelines subpackage.
 
 Exposes the pipeline classes (BasePipeline and its concrete subclasses),
-`make_locator` to build the right pipeline instance for a given directory,
-and `build_shared_locators` to build the expensive, run-scoped locators
-that get reused across every directory in one `perform_coordinate_finding`
-run.
+`make_pipeline` to build the right pipeline instance for a given directory,
+and `build_shared_resources` to build the expensive, run-scoped resources
+(locators and registries) that get reused across every directory in one
+`perform_coordinate_finding` run.
 """
 
 from dataclasses import dataclass
@@ -24,8 +24,8 @@ __all__ = [
     "BasePipeline",
     "DefaultPipeline",
     "EntsoePipeline",
-    "SharedLocators",
-    "build_shared_locators",
+    "SharedResources",
+    "build_shared_resources",
     "make_pipeline",
 ]
 
@@ -98,8 +98,15 @@ def make_pipeline(
 
 
 @dataclass
-class SharedLocators:
-    """Expensive, run-scoped locators built once and reused across a run's directories."""
+class SharedResources:
+    """Expensive resources built once per run and reused across all its directories.
+
+    Attributes:
+        gem_loc (GEMLocator | None): GEM locator (local or fallback tracker files).
+        ppdb_loc (PPMLocator | OSMPPLocator | None): Power plant database locator.
+        osm_loc (OverpassLocator | None): OSM Overpass API locator.
+        eic_reg (EICCodeRegistry | None): ENTSO-E EIC directory (entsoe pipeline only).
+    """
 
     gem_loc: GEMLocator | None
     ppdb_loc: PPMLocator | OSMPPLocator | None
@@ -107,27 +114,27 @@ class SharedLocators:
     eic_reg: EICCodeRegistry | None
 
 
-def build_shared_locators(
+def build_shared_resources(
     source: str,
-    gem_dir: Path | None,
-    output_dir: Path | None,
+    resources_dir: Path | None,
     osm_update: bool = False,
     osm_live: bool = False,
-) -> SharedLocators:
-    """Build the expensive (network/CSV/parquet-backed) locators shared across one run.
+) -> SharedResources:
+    """Build the expensive (network/CSV/parquet-backed) resources shared by one run.
 
     Callers processing multiple directories for the same source in one run (e.g.
     multiple ENTSO-E bidding zones) should build these once and pass them into
-    `make_locator` for every directory, rather than paying the construction cost
-    (network/CSV/parquet reads) per directory.
+    `make_pipeline` for every directory, rather than paying the construction cost
+    (network/CSV/parquet reads) per directory. Each resource keeps its local files in
+    its own subfolder of `resources_dir` (`gem/`, `eic/`, `overpass/`).
 
     Args:
         source (str): Name of the energy source, e.g. "entsoe". Used to resolve
-            which pipeline's locators are actually needed.
-        gem_dir (Path | None): Path to the manually downloaded GEM data or, if None,
-            to use the fallback GEM files from the PyPSA team's cloud storage.
-        output_dir (Path | None): Output directory, used as the cache dir for
-            locators that persist a local file (e.g. the EIC directory, OSM files).
+            which pipeline's resources are actually needed.
+        resources_dir (Path | None): Directory of the resources shared by all energy
+            sources. Manually downloaded GEM tracker xlsx files are expected in its
+            `gem/` subfolder (trackers missing there fall back to the files in PPM's
+            cloud storage). If None, no local files are read or written.
         osm_update (bool, optional): Re-fetch OSM data from Overpass (once per country)
             and overwrite the local files. Corresponds to the ``--update`` / ``-u`` CLI
             flag. Defaults to False.
@@ -135,11 +142,11 @@ def build_shared_locators(
             file. Corresponds to the ``--live`` CLI flag. Defaults to False.
 
     Returns:
-        SharedLocators: The locators to reuse across every directory processed
+        SharedResources: The resources to reuse across every directory processed
             in this run.
     """
     gem_loc: GEMLocator = GEMLocator(
-        gem_dir=gem_dir, cache_dir=output_dir if gem_dir is None else None
+        gem_dir=Path(resources_dir, "gem") if resources_dir else None
     )
     ppdb_loc: PPMLocator | OSMPPLocator
     eic_reg: EICCodeRegistry | None
@@ -147,14 +154,20 @@ def build_shared_locators(
     pipeline_name = OPERATOR_METADATA[source].get("pipeline", "default")
     if pipeline_name == "entsoe":  # use regional European assets
         ppdb_loc = PPMLocator()
-        eic_reg = EICCodeRegistry(cache_dir=output_dir)
+        eic_reg = EICCodeRegistry(
+            cache_dir=Path(resources_dir, "eic") if resources_dir else None
+        )
     else:  # assume the default
         ppdb_loc = OSMPPLocator()
         eic_reg = None
 
-    osm_loc = OverpassLocator(cache_dir=output_dir, update=osm_update, live=osm_live)
+    osm_loc = OverpassLocator(
+        cache_dir=Path(resources_dir, "overpass") if resources_dir else None,
+        update=osm_update,
+        live=osm_live,
+    )
 
-    return SharedLocators(
+    return SharedResources(
         gem_loc=gem_loc,
         ppdb_loc=ppdb_loc,
         osm_loc=osm_loc,

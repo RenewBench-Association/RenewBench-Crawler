@@ -58,6 +58,9 @@ def source_configs(tmp_path: Path) -> dict:
         "icon_dream_global": {
             "paths": {"dst_dir_raw": str(Path(tmp_path, "icon_dream_global"))},
         },
+        "coordinates": {
+            "paths": {"resources_dir": str(Path(tmp_path, "coordinate_resources"))},
+        },
     }
 
 

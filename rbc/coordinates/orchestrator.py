@@ -14,7 +14,7 @@ from loguru import logger
 
 from rbc.coordinates.map import build_map
 from rbc.coordinates.mappings import OPERATOR_METADATA
-from rbc.coordinates.pipelines import build_shared_locators, make_pipeline
+from rbc.coordinates.pipelines import build_shared_resources, make_pipeline
 from rbc.energy.utils import DownloadTask
 
 DATE_PATTERN = DownloadTask._DATE_PATTERN  # pattern for relevant file names
@@ -25,7 +25,7 @@ def perform_coordinate_finding(
     source: str,
     input_dirs: list[Path | str],
     output_dir: Path | None = None,
-    gem_dir: Path | None = None,
+    resources_dir: Path | None = None,
     update: bool = False,
     live: bool = False,
 ) -> None:
@@ -36,7 +36,9 @@ def perform_coordinate_finding(
         input_dirs (list[Path | str]): Paths of the directories containing input (".csv")
             files (somewhere).
         output_dir (Path | None): Path of the output directory. Defaults to None.
-        gem_dir (Path | None): Path of the directory containing GEM files. Defaults to None.
+        resources_dir (Path | None): Directory of the resources shared by all energy
+            sources (e.g. GEM trackers in `gem/`, OSM files, EIC directory). Defaults to
+            None, in which case no local resource files are read or written.
         update (bool, optional): Whether to re-fetch OSM power plant data from the OSM
             (Overpass Turbo) API. Defaults to False.
         live (bool, optional): Whether to query the OSM (Overpass Turbo) API on every run.
@@ -48,16 +50,15 @@ def perform_coordinate_finding(
     csv_dirs: list[Path] = _collect_dirs(input_dirs)
     csv_dirs = [d for d in csv_dirs if source in d.parts]
 
-    # Build the expensive (network/CSV/parquet-backed) helper-data locators ONCE and share!
-    shared = build_shared_locators(
+    # Build the expensive (network/CSV/parquet-backed) resources ONCE and share!
+    shared = build_shared_resources(
         source=source,
-        gem_dir=gem_dir,
-        output_dir=output_dir,
+        resources_dir=resources_dir,
         osm_update=update,
         osm_live=live,
     )
     logger.info(
-        f"Initialized shared locators. Now analyzing {len(csv_dirs)} directories...\n--"
+        f"Initialized shared resources. Analyzing {len(csv_dirs)} directories...\n--"
         "-------------------------------------------------------------------------------"
     )
 

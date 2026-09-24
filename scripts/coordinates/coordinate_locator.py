@@ -3,8 +3,10 @@
 
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
+from typing import cast
 
 from rbc.config.loader import CONFIGS_DIR, load_config
+from rbc.config.schema import CoordinatesConfig
 from rbc.coordinates.orchestrator import perform_coordinate_finding
 from rbc.utils import setup_logging
 
@@ -18,7 +20,12 @@ def parse_arguments() -> Namespace:
         argparse.Namespace: Namespace with parsed command line arguments.
     """
     parser = ArgumentParser(
-        description="Find coordinates for power plants and render an interactive map."
+        description=(
+            "Find coordinates for power plants and render an interactive map. "
+            "Resources shared by all sources are kept in the resources_dir of the "
+            "'coordinates' YAML config, e.g. OSM files, or manually downloaded GEM "
+            "tracker xlsx files (in its 'gem' subfolder)."
+        )
     )
     parser.add_argument(
         "--source",
@@ -44,20 +51,9 @@ def parse_arguments() -> Namespace:
         "-o",
         type=Path,
         help=(
-            "Directory where the outputs (overpass parquet file and, for entsoe, "
-            "enriched plant details CSV files are written. If None is provided, "
-            "a 'coordinates' folder in the YAML config's dst_dir_raw will be created "
-            "and used."
-        ),
-    )
-    parser.add_argument(
-        "--gem-dir",
-        type=Path,
-        help=(
-            "Directory containing manually downloaded Global Energy Monitor (GEM) "
-            "tracker xlsx files (https://globalenergymonitor.org/download-data). "
-            "When given, they are used additional coordinate source. If None is provided, "
-            "the static fallback files from PPM's cloud storage (from 2025) are used."
+            "Directory where the outputs (coordinates and fuzzy matching CSV files, "
+            "map and logs) are written. If None is provided, a 'coordinates' folder in "
+            "the YAML config's dst_dir_raw will be created and used."
         ),
     )
     parser.add_argument(
@@ -84,6 +80,7 @@ def main() -> None:
     """Coordinating coordinate finding."""
     args = parse_arguments()
     cfg = load_config(source=args.source)
+    coordinates_cfg = cast(CoordinatesConfig, load_config(source="coordinates"))
 
     output_dir = (
         args.output if args.output else Path(cfg.paths.dst_dir_raw, "coordinates")
@@ -98,7 +95,7 @@ def main() -> None:
         source=args.source,
         input_dirs=input_paths,
         output_dir=output_dir,
-        gem_dir=args.gem_dir if args.gem_dir and args.gem_dir.is_dir() else None,
+        resources_dir=coordinates_cfg.paths.resources_dir,
         update=args.update,
         live=args.live,
     )
