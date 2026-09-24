@@ -5,7 +5,10 @@ Shared helper functions and abstract base class for weather data downloaders.
 
 import datetime
 import pickle
+import time
 from abc import ABC, abstractmethod
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 import requests
@@ -159,6 +162,107 @@ def save_checkpoint(checkpoint_path: Path, checkpoint: dict) -> None:
     with open(temp_path, "wb") as f:
         pickle.dump(checkpoint, f)
     temp_path.replace(checkpoint_path)
+
+
+@contextmanager
+def exclusive_lock(path: Path, timeout: float = 3600.0) -> Generator[None]:
+    """Hold an exclusive lock, so parallel workers take turns at shared work.
+
+    A directory is the lock, since creating one is atomic on POSIX and on the
+    network filesystems these runs write to, unlike advisory locks.
+
+    Args:
+        path (Path): Lock location; ".lock" is appended to it.
+        timeout (float): Seconds to wait before giving up.
+
+    Yields:
+        None: With the lock held.
+
+    Raises:
+        TimeoutError: If the lock is not released within `timeout`, which
+            normally means a previous run died holding it.
+    """
+    lock = path.with_name(f"{path.name}.lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    start = time.time()
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.time() - start > timeout:
+                raise TimeoutError(
+                    f"Timed out waiting for '{lock}'. If no other run is "
+                    "active, delete it and retry."
+                ) from None
+            time.sleep(0.5)
+    try:
+        yield
+    finally:
+        lock.rmdir()
+
+
+def marker_dir(checkpoint_path: Path) -> Path:
+    """Return the marker directory belonging to a checkpoint file path.
+
+    Args:
+        checkpoint_path (Path): The `status.pickle` path a caller configured.
+
+    Returns:
+        Path: Sibling directory holding one marker file per finished key.
+    """
+    return checkpoint_path.with_suffix(".d")
+
+
+def is_marked_done(markers: Path, key: tuple) -> bool:
+    """Whether one key has already been finished.
+
+    Args:
+        markers (Path): Directory from `marker_dir()`.
+        key (tuple): The key to test.
+
+    Returns:
+        bool: True if a marker for `key` exists.
+    """
+    return (markers / f"{'-'.join(str(part) for part in key)}.done").exists()
+
+
+def mark_done(markers: Path, key: tuple) -> None:
+    """Record one key as finished.
+
+    One file per key, so processes working on different keys never touch the
+    same file -- a single shared checkpoint would lose whichever keys were
+    written by the process that saved first.
+
+    Args:
+        markers (Path): Directory from `marker_dir()`.
+        key (tuple): The key that was successfully written.
+    """
+    markers.mkdir(parents=True, exist_ok=True)
+    (markers / f"{'-'.join(str(part) for part in key)}.done").touch()
+
+
+def migrate_checkpoint(checkpoint_path: Path, markers: Path) -> None:
+    """Convert a legacy pickled checkpoint into marker files, once.
+
+    Keeps a store written by an earlier run resumable: without this, its
+    finished keys would be regridded again and rejected as already present.
+
+    Args:
+        checkpoint_path (Path): Legacy `status.pickle` path.
+        markers (Path): Directory from `marker_dir()`.
+    """
+    if markers.exists() or not checkpoint_path.is_file():
+        return
+    done = [
+        key
+        for key, status in load_checkpoint(checkpoint_path, True).items()
+        if status == 1
+    ]
+    for key in done:
+        mark_done(markers, key)
+    markers.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Migrated {len(done)} checkpoint entries to '{markers}'.")
 
 
 def raw_data_dir(base_dir: Path, raw_folder: str, sub_folder: str) -> Path:

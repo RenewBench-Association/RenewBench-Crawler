@@ -16,7 +16,13 @@ from rbc.weather.regridding.store import (
     TIME_CHUNK,
     bytes_per_timestep,
 )
-from rbc.weather.utils import load_checkpoint, save_checkpoint
+from rbc.weather.utils import (
+    exclusive_lock,
+    is_marked_done,
+    mark_done,
+    marker_dir,
+    migrate_checkpoint,
+)
 
 
 class GridRegridder(ABC):
@@ -50,6 +56,8 @@ class GridRegridder(ABC):
         dry_run: bool = False,
         resume: bool = True,
         block_memory_mb: int = DEFAULT_BLOCK_MB,
+        shard: int = 0,
+        shards: int = 1,
     ) -> None:
         """Initializes the instance.
 
@@ -79,10 +87,14 @@ class GridRegridder(ABC):
             resume (bool): If True, load an existing checkpoint on init.
             block_memory_mb (int): Memory budget for one time block; matches
                 the writer's own (see `_chunk_along_time()`).
+            shard (int): Index of this worker among `shards`, which takes
+                every `shards`-th variable of each task.
+            shards (int): How many workers are splitting the variables.
 
         Raises:
             FileNotFoundError: If raw_dir does not exist.
-            ValueError: If min_level is not lower than max_level.
+            ValueError: If min_level is not lower than max_level, or if
+                `shard` is not within `shards`.
         """
         self.raw_dir = Path(raw_dir)
         if not self.raw_dir.is_dir():
@@ -95,6 +107,11 @@ class GridRegridder(ABC):
             raise ValueError(
                 f"min_level ({min_level}) must be lower than max_level ({max_level})."
             )
+
+        if not 0 <= shard < shards:
+            raise ValueError(f"shard ({shard}) must be in range(shards) ({shards}).")
+        self.shard = shard
+        self.shards = shards
 
         self.source_name = source_name
         self.weights_cache_dir = Path(weights_cache_dir)
@@ -113,7 +130,10 @@ class GridRegridder(ABC):
 
         self.checkpoint_path = Path(checkpoint_path)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        self.checkpoint: dict = load_checkpoint(self.checkpoint_path, self.resume)
+        # One marker file per finished key, so several processes can regrid
+        # different variables of one store without overwriting each other.
+        self.markers = marker_dir(self.checkpoint_path)
+        migrate_checkpoint(self.checkpoint_path, self.markers)
         # Filled by subclasses' _load_source_chunk(); see quantization_step().
         self._quantization_steps: dict[str, float | None] = {}
 
@@ -136,7 +156,7 @@ class GridRegridder(ABC):
             weights: Path | None = None
             for variable in self._variables_for_task(task):
                 key = (*task, variable)
-                if self.resume and self.checkpoint.get(key, 0) == 1:
+                if self.resume and is_marked_done(self.markers, key):
                     logger.info(f"Task {key}: previously regridded. Skipping.")
                     continue
 
@@ -173,8 +193,7 @@ class GridRegridder(ABC):
         Args:
             key (tuple): The `(*task, variable)` key that was successfully written.
         """
-        self.checkpoint[key] = 1
-        save_checkpoint(self.checkpoint_path, self.checkpoint)
+        mark_done(self.markers, key)
 
     def _get_tasks(self) -> list[tuple]:
         """Return (year, month) tasks for every configured year/month.
@@ -189,11 +208,12 @@ class GridRegridder(ABC):
         return [(year, month) for year in self.years for month in self.months]
 
     def _variables_for_task(self, task: tuple) -> list[str]:
-        """Return canonical variable names to process for one task.
+        """Return canonical variable names this worker processes for one task.
 
         Returns `self.variables` if the user requested specific ones;
         otherwise discovers what's actually available via
-        `_discover_variables()`.
+        `_discover_variables()`. Either way only this worker's share is
+        returned, so sibling workers cover the rest without coordinating.
 
         Args:
             task (tuple): Task identifier returned by `_get_tasks()`.
@@ -201,7 +221,8 @@ class GridRegridder(ABC):
         Returns:
             list[str]: Canonical variable names to process for this task.
         """
-        return self.variables or self._discover_variables(task)
+        variables = self.variables or self._discover_variables(task)
+        return variables[self.shard :: self.shards]
 
     @abstractmethod
     def _discover_variables(self, task: tuple) -> list[str]:
@@ -209,7 +230,9 @@ class GridRegridder(ABC):
 
         Filename-only where possible, cheaply enough to leave the real load
         to `_load_source_chunk()`. Only used when the user didn't request
-        specific variables via `self.variables`.
+        specific variables via `self.variables`. The order must be stable
+        across processes, since parallel workers split this list by position
+        (see `_variables_for_task()`).
 
         Args:
             task (tuple): Task identifier returned by `_get_tasks()`.
@@ -319,7 +342,9 @@ class GridRegridder(ABC):
         """Compute or load cached HEALPix weights for this source.
 
         For unstructured sources, computes from the grid file alone
-        (grid-doctor's ICON recipe), not from `ds`.
+        (grid-doctor's ICON recipe), not from `ds`. Locked, so that parallel
+        workers starting cold generate the cached file once instead of
+        writing over each other's.
 
         Args:
             ds (xr.Dataset): Renamed source dataset (used directly for lat-lon
@@ -340,9 +365,10 @@ class GridRegridder(ABC):
                 "first."
             )
         source = ds if grid_path is None else xr.open_dataset(grid_path)
-        return gd.cached_weights(
-            source, level=self.max_level, cache_path=self.weights_cache_dir
-        )
+        with exclusive_lock(Path(self.weights_cache_dir, f"level_{self.max_level}")):
+            return gd.cached_weights(
+                source, level=self.max_level, cache_path=self.weights_cache_dir
+            )
 
     def _chunk_along_time(self, ds: xr.Dataset) -> xr.Dataset:
         """Group the source's single-timestep chunks into ones that fit the budget.

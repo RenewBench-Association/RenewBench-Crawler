@@ -11,6 +11,7 @@ import pytest
 import xarray as xr
 
 from rbc.weather.regridding.base import GridRegridder
+from rbc.weather.utils import is_marked_done
 
 
 # ----------------------------------
@@ -223,36 +224,32 @@ class TestInit:
         with pytest.raises(ValueError, match="must be lower than"):
             _ConcreteRegridder(**base_args)
 
-    @pytest.mark.parametrize("resume", [True, False])
-    def test_checkpoint_loaded_only_when_resuming(
-        self, base_args: dict, resume: bool
-    ) -> None:
-        """An existing checkpoint is loaded when resuming and ignored otherwise.
+    def test_legacy_pickle_checkpoint_is_migrated(self, base_args: dict) -> None:
+        """Keys from an older run's pickled checkpoint become markers.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
-            resume (bool): Whether to resume from the checkpoint.
         """
-        saved = {(2025, "01", "var_a"): 1}
+        saved = {(2025, "01", "var_a"): 1, (2025, "02", "var_a"): 0}
         with open(base_args["checkpoint_path"], "wb") as f:
             pickle.dump(saved, f)
 
-        base_args["resume"] = resume
         rg = _ConcreteRegridder(**base_args)
 
-        assert rg.checkpoint == (saved if resume else {})
+        assert is_marked_done(rg.markers, (2025, "01", "var_a"))
+        # Only finished keys migrate; 0 means the task failed.
+        assert not is_marked_done(rg.markers, (2025, "02", "var_a"))
 
     def test_corrupted_checkpoint_starts_fresh(self, base_args: dict) -> None:
-        """Corrupted checkpoint file is discarded and a fresh checkpoint is returned.
+        """A corrupted legacy checkpoint is discarded rather than raising.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
         """
-        checkpoint_path = base_args["checkpoint_path"]
-        checkpoint_path.write_bytes(b"not-valid-pickle-data")
+        base_args["checkpoint_path"].write_bytes(b"not-valid-pickle-data")
 
         rg = _ConcreteRegridder(**base_args)
-        assert rg.checkpoint == {}
+        assert not is_marked_done(rg.markers, (2025, "01", "var_a"))
 
 
 # ----------------------------------
@@ -335,6 +332,41 @@ class TestVariablesForTask:
 
         assert rg._variables_for_task((2025, "01")) == ["temperature", "humidity"]
 
+    def test_workers_split_discovered_variables_exactly_once(
+        self, base_args: dict
+    ) -> None:
+        """Every discovered variable goes to exactly one of three workers.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+        """
+        base_args["variables"] = []
+        discovered = [f"var_{i}" for i in range(8)]
+
+        shares = [
+            _ConcreteRegridder(
+                discovered=discovered, shard=shard, shards=3, **base_args
+            )._variables_for_task((2025, "01"))
+            for shard in range(3)
+        ]
+
+        assert sorted(v for share in shares for v in share) == sorted(discovered)
+        assert [len(share) for share in shares] == [3, 3, 2]
+
+    @pytest.mark.parametrize("shard, shards", [(3, 3), (-1, 2), (0, 0)])
+    def test_shard_outside_shards_raises(
+        self, base_args: dict, shard: int, shards: int
+    ) -> None:
+        """A worker index outside range(shards) is rejected at construction.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
+            shard (int): Worker index to test.
+            shards (int): Worker count to test.
+        """
+        with pytest.raises(ValueError, match="must be in range"):
+            _ConcreteRegridder(shard=shard, shards=shards, **base_args)
+
 
 # ----------------------------------
 # GridRegridder.regrid
@@ -380,7 +412,7 @@ class TestRegrid:
         base_args["variables"] = ["temperature", "humidity"]
         task = (2025, "01")
         rg = _ConcreteRegridder(tasks=[task], **base_args)
-        rg.checkpoint[(*task, "temperature")] = 1
+        rg.mark_done((*task, "temperature"))
 
         with (
             patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
@@ -402,7 +434,7 @@ class TestRegrid:
         task = (2025, "01")
         base_args["resume"] = False
         rg = _ConcreteRegridder(tasks=[task], **base_args)
-        rg.checkpoint[(*task, "var_a")] = 1  # would be "done" under resume=True
+        rg.mark_done((*task, "var_a"))  # would be "done" under resume=True
 
         with (
             patch.object(rg, "_get_weights", return_value=Path("weights.nc")),
@@ -448,7 +480,7 @@ class TestRegrid:
         ):
             list(rg.regrid())
 
-        assert rg.checkpoint == {}
+        assert not is_marked_done(rg.markers, (2025, "01", "var_a"))
 
     def test_source_is_chunked_along_time(self, base_args: dict) -> None:
         """The source is split into time chunks before it is regridded.
@@ -479,8 +511,8 @@ class TestRegrid:
 class TestMarkDone:
     """Tests for GridRegridder.mark_done()."""
 
-    def test_mark_done_sets_checkpoint_and_persists(self, base_args: dict) -> None:
-        """mark_done persists the key, leaving no temporary file behind.
+    def test_mark_done_persists_across_instances(self, base_args: dict) -> None:
+        """A key marked done is still done for a regridder built afterwards.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for _ConcreteRegridder.
@@ -490,8 +522,8 @@ class TestMarkDone:
         rg.mark_done(key)
 
         fresh = _ConcreteRegridder(tasks=[(2025, "01")], **base_args)
-        assert fresh.checkpoint[key] == 1
-        assert not rg.checkpoint_path.with_suffix(".tmp").exists()
+        assert is_marked_done(fresh.markers, key)
+        assert not is_marked_done(fresh.markers, (2025, "01", "var_b"))
 
 
 # ----------------------------------

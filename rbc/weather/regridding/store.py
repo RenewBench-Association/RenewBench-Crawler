@@ -18,6 +18,8 @@ from loguru import logger
 from tqdm import tqdm
 from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 
+from rbc.weather.utils import exclusive_lock
+
 # Vertical dimensions the contract uses, in the order they appear between
 # "time" and "cell". A store holds one coordinate array per dimension name, so
 # variables whose level sets differ get numbered siblings ("level",
@@ -219,16 +221,22 @@ class HealpixZarrWriter:
 
         task_start = time.time()
         chunk, block = self._block_timesteps(pyramid)
-        plans = [
-            self._reserve_level(
-                self._store_path(model_name, time_res, level),
-                self._snap_to_lattice(self._normalize_dim_order(ds), quantization_step),
-                task,
-                encoding,
-                chunk,
-            )
-            for level, ds in pyramid.items()
-        ]
+        # Reserving touches state every variable of this store shares -- its
+        # creation and its time axis -- so only one process may do it at a
+        # time. Filling afterwards writes disjoint regions and needs no lock.
+        with exclusive_lock(Path(self.base_dir, model_name, time_res, ".reserve")):
+            plans = [
+                self._reserve_level(
+                    self._store_path(model_name, time_res, level),
+                    self._snap_to_lattice(
+                        self._normalize_dim_order(ds), quantization_step
+                    ),
+                    task,
+                    encoding,
+                    chunk,
+                )
+                for level, ds in pyramid.items()
+            ]
         self._fill_blocks(plans, block, task)
         logger.info(
             f"'{model_name}/{time_res}' task {task}: all {len(pyramid)} levels "

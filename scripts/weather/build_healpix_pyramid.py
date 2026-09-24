@@ -7,6 +7,8 @@ each (model_name, time_res, healpix_level) into its own Zarr store.
 
 import argparse
 from argparse import ArgumentParser
+from concurrent.futures import ProcessPoolExecutor
+from typing import Any
 
 from loguru import logger
 
@@ -122,6 +124,15 @@ def parse_arguments() -> argparse.Namespace:
         "Example: --healpix-max-level era5=7. Repeatable.",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Regrid a source's variables in N parallel processes. Each needs "
+        "its own memory budget, so size N against block_memory_mb rather than "
+        "against core count. Default: 1.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Resolve tasks/weights without writing to the store.",
@@ -167,6 +178,67 @@ def _parse_max_level_overrides(pairs: list[str] | None) -> dict[str, int]:
     return overrides
 
 
+def _regrid_source(
+    name: str, shard: int, shards: int, args: argparse.Namespace, cfg: Any
+) -> None:
+    """Regrid one source's share of the variables.
+
+    Args:
+        name (str): Source key, e.g. "icon_dream_global".
+        shard (int): Index of this worker among `shards`.
+        shards (int): How many workers are splitting this source's variables.
+        args (argparse.Namespace): Parsed command-line flags.
+        cfg (Any): Loaded regrid_healpix configuration.
+    """
+    min_level = args.healpix_min_level or cfg.healpix_min_level
+    max_level_overrides = _parse_max_level_overrides(args.healpix_max_level)
+    model_name = _MODEL_NAME[name]
+    time_res = _TIME_RES[name]
+
+    writer = HealpixZarrWriter(
+        base_dir=cfg.dst_data_base_dir,
+        min_level=min_level,
+        compressor=cfg.compressor,
+        compression_level=cfg.compression_level,
+        shuffle=cfg.shuffle,
+        block_memory_mb=cfg.block_memory_mb,
+    )
+    regridder = REGRIDDER_CLASSES[name](
+        raw_dir=cfg.raw_data_base_dir,
+        source_name=name,
+        weights_cache_dir=writer.weights_cache_dir(model_name),
+        checkpoint_path=writer.checkpoint_path(model_name, time_res),
+        min_level=min_level,
+        max_level=max_level_overrides.get(name, cfg.healpix_max_level[name]),
+        variables=args.variables or [],
+        years=args.years,
+        months=args.months,
+        dry_run=args.dry_run,
+        resume=args.resume,
+        block_memory_mb=cfg.block_memory_mb,
+        shard=shard,
+        shards=shards,
+        **_EXTRA_KWARGS.get(name, {}),
+    )
+
+    # regrid() yields one (year, month, variable) key + single-variable
+    # pyramid at a time.
+    for key, pyramid in regridder.regrid():
+        writer.append(
+            model_name=model_name,
+            time_res=time_res,
+            task=key,
+            pyramid=pyramid,
+            encoding=regridder.encoding_for(key[-1]),
+            quantization_step=regridder.quantization_step(key[-1]),
+        )
+        # Only mark done once the write above actually succeeds.
+        regridder.mark_done(key)
+        writer.emit_stac_item(
+            model_name=model_name, time_res=time_res, task=key, pyramid=pyramid
+        )
+
+
 def main() -> None:
     """Coordinate HEALPix regridding across configured sources."""
     args = parse_arguments()
@@ -177,53 +249,21 @@ def main() -> None:
     logger.info(f"Flags for the '{SOURCE}' regrid:\n{args}")
     logger.info(f"Config for the '{SOURCE}' regrid:\n{cfg}")
 
-    min_level = args.healpix_min_level or cfg.healpix_min_level
-    max_level_overrides = _parse_max_level_overrides(args.healpix_max_level)
-
-    writer = HealpixZarrWriter(
-        base_dir=cfg.dst_data_base_dir,
-        min_level=min_level,
-        compressor=cfg.compressor,
-        compression_level=cfg.compression_level,
-        shuffle=cfg.shuffle,
-        block_memory_mb=cfg.block_memory_mb,
-    )
-
     for name in args.sources:
-        model_name = _MODEL_NAME[name]
-        time_res = _TIME_RES[name]
-        regridder = REGRIDDER_CLASSES[name](
-            raw_dir=cfg.raw_data_base_dir,
-            source_name=name,
-            weights_cache_dir=writer.weights_cache_dir(model_name),
-            checkpoint_path=writer.checkpoint_path(model_name, time_res),
-            min_level=min_level,
-            max_level=max_level_overrides.get(name, cfg.healpix_max_level[name]),
-            variables=args.variables or [],
-            years=args.years,
-            months=args.months,
-            dry_run=args.dry_run,
-            resume=args.resume,
-            block_memory_mb=cfg.block_memory_mb,
-            **_EXTRA_KWARGS.get(name, {}),
-        )
+        if args.workers == 1:
+            _regrid_source(name, 0, 1, args, cfg)
+            continue
 
-        # regrid() yields one (year, month, variable) key + single-variable
-        # pyramid at a time.
-        for key, pyramid in regridder.regrid():
-            writer.append(
-                model_name=model_name,
-                time_res=time_res,
-                task=key,
-                pyramid=pyramid,
-                encoding=regridder.encoding_for(key[-1]),
-                quantization_step=regridder.quantization_step(key[-1]),
-            )
-            # Only mark done once the write above actually succeeds.
-            regridder.mark_done(key)
-            writer.emit_stac_item(
-                model_name=model_name, time_res=time_res, task=key, pyramid=pyramid
-            )
+        logger.info(f"'{name}': splitting its variables across {args.workers} workers.")
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            futures = [
+                pool.submit(_regrid_source, name, shard, args.workers, args, cfg)
+                for shard in range(args.workers)
+            ]
+            # result() re-raises in the parent, so one worker's failure is not
+            # mistaken for a completed run.
+            for future in futures:
+                future.result()
 
 
 if __name__ == "__main__":
