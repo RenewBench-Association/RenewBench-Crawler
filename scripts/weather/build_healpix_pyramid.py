@@ -222,7 +222,9 @@ def _build(name: str, args: argparse.Namespace, cfg: Any) -> tuple:
     return writer, regridder, model_name, time_res
 
 
-def _regrid_key(name: str, key: tuple, args: argparse.Namespace, cfg: Any) -> tuple:
+def _regrid_key(
+    name: str, key: tuple, args: argparse.Namespace, cfg: Any
+) -> tuple | None:
     """Regrid and write one `(year, month, variable)` key.
 
     The unit of work handed to a worker. It does not touch the checkpoint:
@@ -236,23 +238,36 @@ def _regrid_key(name: str, key: tuple, args: argparse.Namespace, cfg: Any) -> tu
         cfg (Any): Loaded regrid_healpix configuration.
 
     Returns:
-        tuple: The key that was written, for the manager to record.
+        tuple | None: The key that was written, for the manager to record,
+            or None on a dry run, which writes nothing.
     """
     writer, regridder, model_name, time_res = _build(name, args, cfg)
     pyramid = regridder.regrid_key(key)
-    if pyramid:
-        writer.append(
-            model_name=model_name,
-            time_res=time_res,
-            task=key,
-            pyramid=pyramid,
-            encoding=regridder.encoding_for(key[-1]),
-            quantization_step=regridder.quantization_step(key[-1]),
-        )
-        writer.emit_stac_item(
-            model_name=model_name, time_res=time_res, task=key, pyramid=pyramid
-        )
+    if not pyramid:
+        return None
+    writer.append(
+        model_name=model_name,
+        time_res=time_res,
+        task=key,
+        pyramid=pyramid,
+        encoding=regridder.encoding_for(key[-1]),
+        quantization_step=regridder.quantization_step(key[-1]),
+    )
+    writer.emit_stac_item(
+        model_name=model_name, time_res=time_res, task=key, pyramid=pyramid
+    )
     return key
+
+
+def _mark(regridder: Any, key: tuple | None) -> None:
+    """Record a finished key, ignoring the dry runs that wrote nothing.
+
+    Args:
+        regridder (Any): The manager's regridder, which owns the checkpoint.
+        key (tuple | None): Return value of `_regrid_key()`.
+    """
+    if key is not None:
+        regridder.mark_done(key)
 
 
 def main() -> None:
@@ -274,21 +289,22 @@ def main() -> None:
 
         # Reserved before any worker starts: the axis can only grow forwards,
         # so a worker reaching a later month first would lock the earlier
-        # ones out.
-        times = pd.DatetimeIndex([]).append(
-            [regridder.expected_times(task) for task in regridder.tasks()]
-        )
-        writer.reserve_time_axis(
-            model_name,
-            time_res,
-            times.sort_values(),
-            range(regridder.min_level, regridder.max_level + 1),
-        )
+        # ones out. A dry run creates no store to reserve in.
+        if not args.dry_run:
+            times = pd.DatetimeIndex([]).append(
+                [regridder.expected_times(task) for task in regridder.tasks()]
+            )
+            writer.reserve_time_axis(
+                model_name,
+                time_res,
+                times.sort_values(),
+                range(regridder.min_level, regridder.max_level + 1),
+            )
 
         logger.info(f"'{name}': {len(keys)} task(s) over {args.workers} worker(s).")
         if args.workers == 1:
             for key in keys:
-                regridder.mark_done(_regrid_key(name, key, args, cfg))
+                _mark(regridder, _regrid_key(name, key, args, cfg))
             continue
 
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
@@ -298,7 +314,7 @@ def main() -> None:
             for done in as_completed(futures):
                 # result() re-raises here, so a worker's failure stops the run
                 # instead of being recorded as finished.
-                regridder.mark_done(done.result())
+                _mark(regridder, done.result())
 
 
 if __name__ == "__main__":
