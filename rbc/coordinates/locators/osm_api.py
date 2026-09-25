@@ -62,13 +62,9 @@ class OverpassLocator:
             If None, no local files are read or written.
         update (bool): Ignore existing local files, re-fetch from Overpass and overwrite
             them. Corresponds to the ``--update`` / ``-u`` CLI flag.
-        live (bool): Query Overpass without reading or writing any local file.
-            Corresponds to the ``--live`` CLI flag.
     """
 
-    def __init__(
-        self, cache_dir: Path | None = None, update: bool = False, live: bool = False
-    ) -> None:
+    def __init__(self, cache_dir: Path | None = None, update: bool = False) -> None:
         """Initialize the Overpass locator (no data is loaded until it's requested).
 
         Args:
@@ -76,12 +72,9 @@ class OverpassLocator:
                 Defaults to None, in which case no local files are read or written.
             update (bool, optional): Ignore existing local files, re-fetch from Overpass
                 and overwrite them. Defaults to False.
-            live (bool, optional): Query Overpass without reading or writing any local
-                file. Defaults to False.
         """
         self.cache_dir = cache_dir
         self.update = update
-        self.live = live
         self._country_dfs: dict[str, pd.DataFrame] = {}  # loaded EGEs per country code
 
     # ------------------------------------------------------------------
@@ -90,12 +83,11 @@ class OverpassLocator:
     def _load(self, country_code: str) -> pd.DataFrame:
         """Load a country's EGEs from local files or the Overpass API.
 
-        Unless in update or live mode, uses the local parquet / json file.
+        Unless in update mode, uses the local parquet / json file.
         Otherwise, query Overpass by the ISO 3166-1 alpha-2 tag first (``country_code``) and
         retry using the OSM relation ID if the initial search failed or returned nothing.
         If both fail, a stale JSON file from an earlier run is the last resort.
-        Successful queries are saved to the cache_dir as ``overpass_<CC>.parquet`` & ``.json``
-        (except in live mode).
+        Successful queries are saved to the cache_dir as `overpass_<CC>.parquet` & `.json`.
 
         Args:
             country_code (str): ISO 3166-1 alpha-2 country code (uppercase).
@@ -107,7 +99,7 @@ class OverpassLocator:
         cache_path: Path | None = None
         parquet_path: Path | None = None
 
-        if not self.live and self.cache_dir is not None:
+        if self.cache_dir is not None:
             parquet_path = Path(self.cache_dir, f"overpass_{country_code}.parquet")
             cache_path = Path(self.cache_dir, f"overpass_{country_code}.json")
 
@@ -129,7 +121,7 @@ class OverpassLocator:
                             return df_cached
 
         logger.info(
-            f"No cached OSM data found for '{country_code}' or running in update/live mode: "
+            f"No cached OSM data found for '{country_code}' or running in update mode: "
             "Querying the Overpass API now (this may take a while)..."
         )
 
@@ -157,7 +149,7 @@ class OverpassLocator:
         if data is not None:
             df = _elements_to_df(data)
 
-            if len(df) > 0 and not self.live:
+            if len(df) > 0:
                 if parquet_path is not None:
                     _save_parquet(parquet_path, df)
                 if cache_path is not None:
@@ -167,7 +159,7 @@ class OverpassLocator:
             return df
 
         # --- Stale cache as last resort -------------------------------------------
-        if not self.live and cache_path is not None and cache_path.exists():
+        if cache_path is not None and cache_path.exists():
             cached = _load_cached_overpass(cache_path)
             if isinstance(cached, dict):
                 df_cached = _elements_to_df(cached)

@@ -88,7 +88,7 @@ class TestMakePipeline:
         """Happy path: both pipelines use the given (shared) Overpass locator.
 
         If a pipeline built its own locator instead, every directory would load its
-        country again, and `--update` / `--live` would be ignored.
+        country again, and `--update` would be ignored.
 
         Args:
             input_dir_fix (str): Name of the directory fixture (default or entsoe).
@@ -182,9 +182,3 @@ class TestBuildSharedResources:
         cast(MagicMock, pipelines.OSMPPLocator).assert_called_once_with(
             cache_dir=Path(tmp_path, "osmpp"), update=False
         )
-
-    def test_osm_live_reaches_overpass_locator(self) -> None:
-        """Happy path: the CLI's live flag reaches the Overpass locator."""
-        shared = build_shared_resources(source="eia", resources_dir=None, osm_live=True)
-        assert shared.osm_loc is not None
-        assert shared.osm_loc.live is True

@@ -194,22 +194,6 @@ class TestOverpassLocator:
         json_path = Path(tmp_path, "overpass_BR.json")
         assert json.loads(json_path.read_text(encoding="utf-8")) == response
 
-    def test_live_reads_and_writes_no_files(self, tmp_path: Path) -> None:
-        """Happy path: live mode ignores the cache and leaves `cache_dir` untouched.
-
-        Args:
-            tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
-        """
-        parquet_path = _cached_parquet(tmp_path, name="Old Plant")
-
-        with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
-            mock_post.return_value = {"elements": [EGE]}
-            df = OverpassLocator(cache_dir=tmp_path, live=True).get_country_df("BR")
-
-        assert list(df["Name"]) == ["Usina A"]
-        assert list(tmp_path.iterdir()) == [parquet_path]
-        assert list(pd.read_parquet(parquet_path)["Name"]) == ["Old Plant"]
-
     def test_failed_iso_lookup_retries_by_relation_id(self) -> None:
         """Failure path: a failed ISO lookup is retried via the country's OSM relation.
 

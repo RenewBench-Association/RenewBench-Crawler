@@ -126,7 +126,6 @@ def build_shared_resources(
     source: str,
     resources_dir: Path | None,
     update: bool = False,
-    osm_live: bool = False,
 ) -> SharedResources:
     """Build the expensive (network/CSV/parquet-backed) resources shared by one run.
 
@@ -147,8 +146,6 @@ def build_shared_resources(
         update (bool, optional): Download fresh copies of every resource (and re-query
             Overpass once per country), overwriting the local files. Corresponds to the
             ``--update`` / ``-u`` CLI flag. Defaults to False.
-        osm_live (bool, optional): Query Overpass without reading or writing any local
-            file. Corresponds to the ``--live`` CLI flag. Defaults to False.
 
     Returns:
         SharedResources: The resources to reuse across every directory processed
@@ -179,9 +176,7 @@ def build_shared_resources(
         ppdb_loc = OSMPPLocator(cache_dir=subdir("osmpp"), update=update)
         eic_reg = None
 
-    osm_loc = OverpassLocator(
-        cache_dir=subdir("overpass"), update=update, live=osm_live
-    )
+    osm_loc = OverpassLocator(cache_dir=subdir("overpass"), update=update)
     region_reg = RegionRegistry(cache_dir=subdir("natural_earth"), update=update)
 
     return SharedResources(

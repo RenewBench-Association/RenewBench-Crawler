@@ -188,11 +188,9 @@ Optional arguments are:
   YAML config will be used
 - `-o`: The output directory for storing extra extracted information (for further metadata
   processing). Per default, a subfolder `coordinates` in the `dst_dir_raw` will be used.
-- `--live`: Query the overpass API On every run (without writing / reading the local
-  parquet file).
 - `--update`: Download fresh copies of every resource in the `resources_dir` (PPM's and
-  osm-powerplants' CSVs, the EIC directory, Natural Earth, GEM's fallback trackers) and
-  re-query the overpass API once per country.
+  osm-powerplants' CSVs, GEM's fallback trackers, the EIC registry, Natural Earth registry)
+  and re-query the overpass API once per country.
 
 A successful run returns several new files:
 - a `coordinates_....csv` with the matched coordinates

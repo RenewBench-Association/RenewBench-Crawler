@@ -27,7 +27,6 @@ def perform_coordinate_finding(
     output_dir: Path | None = None,
     resources_dir: Path | None = None,
     update: bool = False,
-    live: bool = False,
 ) -> None:
     """Main entry point for coordinating location finding.
 
@@ -41,8 +40,6 @@ def perform_coordinate_finding(
             None, in which case no local resource files are read or written.
         update (bool, optional): Whether to re-fetch OSM power plant data from the OSM
             (Overpass Turbo) API. Defaults to False.
-        live (bool, optional): Whether to query the OSM (Overpass Turbo) API on every run.
-            Defaults to False.
     """
     if source not in OPERATOR_METADATA:
         raise ValueError(f"Unknown energy source: '{source}'")
@@ -55,7 +52,6 @@ def perform_coordinate_finding(
         source=source,
         resources_dir=resources_dir,
         update=update,
-        osm_live=live,
     )
     logger.info(
         f"Initialized shared resources. Analyzing {len(csv_dirs)} directories...\n--"

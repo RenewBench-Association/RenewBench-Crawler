@@ -67,14 +67,6 @@ def parse_arguments() -> Namespace:
             "local files."
         ),
     )
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help=(
-            "Query the Overpass API on every run. The local OSM parquet file is neither "
-            "read nor written."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -99,7 +91,6 @@ def main() -> None:
         output_dir=output_dir,
         resources_dir=coordinates_cfg.paths.resources_dir,
         update=args.update,
-        live=args.live,
     )
 
 
