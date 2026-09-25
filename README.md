@@ -91,6 +91,9 @@ started, the following are available:
 - [**Usage guide**](docs/guide_usage.md):
   How to run the provided scripts of this repository (command-line interface,
   config files, output locations).
+- [**HEALPix regridding**](docs/healpix_regridding.md):
+  How the weather sources are resampled onto the shared HEALPix pyramid,
+  including the separate conda/micromamba environment that step requires.
 
 ## How to contribute
 Check out our [contribution guidelines](CONTRIBUTING.md) if you are interested in contributing to the RenewBench project :fire:.

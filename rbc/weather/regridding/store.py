@@ -633,11 +633,51 @@ class HealpixZarrWriter:
             f"{store_path}: extending shared time axis by {len(new_times)} step(s) "
             f"for task {task}..."
         )
-        template = existing.isel(time=slice(0, 0))
-        template.reindex(time=new_times).to_zarr(
-            store_path, mode="a", append_dim="time", consolidated=False
+        self._blank_extension(existing, new_times).to_zarr(
+            store_path,
+            mode="a",
+            append_dim="time",
+            consolidated=False,
+            compute=False,
         )
         return self._open(store_path)
+
+    @staticmethod
+    def _blank_extension(existing: xr.Dataset, times: pd.Index) -> xr.Dataset:
+        """Return every time-bearing variable of `existing` as NaN over `times`.
+
+        Built lazily and chunked, like `_reserve()`: `reindex()` would hand
+        back NumPy instead, one full array per variable, which for a store
+        holding several variables at a fine level is tens of GB before a
+        single byte is written.
+
+        Args:
+            existing (xr.Dataset): The store's current contents.
+            times (pd.Index): Timestamps to extend the store by.
+
+        Returns:
+            xr.Dataset: One lazy all-NaN variable per time-bearing variable
+                of `existing`, spanning `times`.
+        """
+        blanks: dict[Hashable, tuple] = {}
+        for name, da in existing.data_vars.items():
+            if "time" not in da.dims:
+                continue
+            rest = {dim: size for dim, size in da.sizes.items() if dim != "time"}
+            shape = (times.size, *rest.values())
+            blanks[name] = (
+                ("time", *rest),
+                dask.array.full(
+                    shape,
+                    np.nan,
+                    dtype=da.dtype,
+                    chunks=da.encoding.get("chunks") or shape,
+                ),
+                da.attrs,
+            )
+        # attrs carried over: writing this template is a group-level write,
+        # and an empty set would clear the store's healpix_level/order.
+        return xr.Dataset(blanks, coords={"time": times}, attrs=existing.attrs)
 
     def _region_start(
         self,

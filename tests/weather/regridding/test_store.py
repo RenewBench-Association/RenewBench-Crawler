@@ -740,6 +740,26 @@ class TestSharedTimeAxis:
 
         assert not xr.open_zarr(store, consolidated=False)["clt"].isnull().any()
 
+    def test_extension_is_built_lazily(self, writer: HealpixZarrWriter) -> None:
+        """Growing the axis stays lazy, and keeps the store's attrs.
+
+        An eager template holds one full NaN array per variable in the store
+        -- gigabytes at a fine level, for chunks Zarr drops as empty anyway.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        writer.append("era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas"))
+        existing = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+
+        template = HealpixZarrWriter._blank_extension(existing, pd.Index([3, 4, 5]))
+
+        assert set(template.data_vars) == {"tas"}
+        assert isinstance(template["tas"].data, dsa.Array)
+        assert template.attrs == existing.attrs
+
     def test_out_of_order_month_raises(self, writer: HealpixZarrWriter) -> None:
         """Timestamps before the store's range need inserting, so they're refused.
 

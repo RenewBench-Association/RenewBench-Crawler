@@ -56,8 +56,9 @@ dev = [
 regrid = [
     "grid-doctor @ git+https://github.com/freva-org/grid-doctor.git@d5a7db2e3baf429585dcda4d41087143586d134d",
     "xarray",
-    "zarr",
+    "zarr>=3",  # the writer uses the zarr.codecs API and writes v3 stores
     "dask[array]",
+    "scipy",
     "cfgrib",
     "eccodes",
     "netcdf4",

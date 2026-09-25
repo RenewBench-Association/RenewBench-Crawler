@@ -1,0 +1,49 @@
+# Conda/micromamba environment for the HEALPix regridding pipeline.
+#
+# Only the regridding needs this; every other crawler in this repository runs
+# in a plain pip virtualenv. The reason is ESMF, which generates the remapping
+# weights: it is a compiled Fortran library with no PyPI distribution, so it
+# (and its `esmpy` bindings) can only come from conda-forge.
+#
+# Create with:
+#   micromamba create -f environment_healpix.yml
+#   micromamba activate healpix
+#   pip install -e ".[regrid]"
+#
+# See docs/healpix_regridding.md section 2 for the full setup.
+name: healpix
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+
+  # Remapping. The esmpy build variant must match the esmf one; pinning the
+  # openmpi build is what grid-doctor recommends for large grids. On a machine
+  # without MPI, use `esmf=*=nompi_*` instead.
+  - esmf=*=mpi_openmpi_*
+  - esmpy
+
+  # GRIB and NetCDF readers. These wrap C libraries (ecCodes, HDF5,
+  # netcdf-c); conda-forge keeps the bindings and the libraries in step.
+  - eccodes
+  - python-eccodes
+  - cfgrib
+  - netcdf4
+
+  # Array stack. zarr must be v3 -- the writer uses the `zarr.codecs` API and
+  # writes v3 stores (`zarr.json`).
+  - xarray
+  - zarr>=3
+  - dask
+  - numpy
+  - scipy
+  - numba
+  - pandas
+
+  # Geometry, used by the rbc package outside the regridding.
+  - geopandas
+  - shapely
+
+  # Everything else -- rbc itself and grid-doctor -- is installed from PyPI
+  # afterwards with `pip install -e ".[regrid]"`.
+  - pip
