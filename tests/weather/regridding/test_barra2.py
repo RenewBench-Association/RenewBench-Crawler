@@ -346,6 +346,40 @@ class TestLoadSourceChunk:
             pd.to_datetime(["2025-01-01T00:00", "2025-01-01T01:00"])
         )
 
+    def test_absorbs_float_decoded_timestamp_drift(self, base_args: dict) -> None:
+        """Stamps stored as float days still land on the step they belong to.
+
+        BARRA2 stores time as days since 1949-12-01, which holds no 20-minute
+        step exactly; a stamp decoded a nanosecond short would otherwise floor
+        a whole step down onto its predecessor.
+
+        Args:
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+        """
+        config = MODEL_CONFIG["C2_20min"]
+        source_dir = raw_data_dir(
+            base_args["raw_dir"], config["raw_folder"], config["temporal_res_folder"]
+        )
+        source_dir.mkdir(parents=True, exist_ok=True)
+        exact = pd.date_range("2010-01-01", periods=24, freq="20min")
+        # Written as the raw numbers a real file holds rather than as
+        # datetimes: xarray's own encoder picks floats that decode back exactly.
+        days = (exact - pd.Timestamp("1949-12-01")).total_seconds().values / 86400.0
+        ds = xr.Dataset(
+            {"tas": (("time", "lat", "lon"), np.full((exact.size, 1, 1), 5.0))},
+            coords={"time": days},
+        )
+        ds["time"].attrs = {
+            "units": "days since 1949-12-01",
+            "calendar": "proleptic_gregorian",
+        }
+        ds.to_netcdf(Path(source_dir, "barra2_C2_20min_20min_201001_tas.nc"))
+
+        rg = Barra2Regridder(model="C2_20min", **base_args)
+        result = rg._load_source_chunk((2010, "01"), "1.5m_temperature")
+
+        assert list(result["time"].values) == list(exact)
+
     def test_aligns_onto_the_models_own_step(self, base_args: dict) -> None:
         """The 20-minute product's statistics land on its 20-minute clock.
 

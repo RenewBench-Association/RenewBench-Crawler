@@ -219,6 +219,11 @@ class Barra2Regridder(GridRegridder):
         however a file words its interval -- 2010 files say "interval: 1H"
         where 2025 files say "interval: 1 hour".
 
+        The stamps are snapped to the second first: BARRA2 stores time as
+        float days since 1949-12-01, which holds neither a 20-minute nor an
+        hourly step exactly, and a stamp decoded a nanosecond short would
+        floor a whole step down onto its predecessor.
+
         Args:
             ds (xr.Dataset): One raw file's single variable.
 
@@ -229,7 +234,8 @@ class Barra2Regridder(GridRegridder):
         ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
         if "time" not in ds.coords:
             return ds
-        return ds.assign_coords(time=ds["time"].dt.floor(self.time_freq))
+        exact = ds["time"].dt.round("1s")
+        return ds.assign_coords(time=exact.dt.floor(self.time_freq))
 
     def _discover_variables(self, task: tuple) -> list[str]:
         """Return every canonical BARRA2 variable actually downloaded for one task.
