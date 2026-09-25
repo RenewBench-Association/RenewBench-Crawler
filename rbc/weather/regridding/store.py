@@ -18,6 +18,8 @@ from loguru import logger
 from tqdm import tqdm
 from zarr.codecs import BloscCodec, GzipCodec, ZstdCodec
 
+from rbc.weather.utils import exclusive_lock
+
 # Vertical dimensions the contract uses, in the order they appear between
 # "time" and "cell". A store holds one coordinate array per dimension name, so
 # variables whose level sets differ get numbered siblings ("level",
@@ -212,9 +214,8 @@ class HealpixZarrWriter:
         Raises:
             ValueError: If the pyramid is missing the shared `min_level`; if
                 an existing store's `healpix_level`/`healpix_order` don't
-                match the incoming data; if the new timestamps start before
-                the store's existing range; or if the slice being written
-                already holds data.
+                match the incoming data; or if the new timestamps start before
+                the store's existing range.
         """
         if self.min_level not in pyramid:
             raise ValueError(
@@ -224,9 +225,9 @@ class HealpixZarrWriter:
 
         task_start = time.time()
         chunk, block = self._block_timesteps(pyramid)
-        # Unlocked: each variable owns its own arrays and its own region of
-        # them. The state variables share -- the store and its time axis --
-        # is reserved by `reserve_time_axis()` before any of this runs.
+        # Only reserving a level takes a lock (see `_reserve_level()`); the
+        # fill afterwards writes this variable's own region and runs free of
+        # the other workers.
         plans = [
             self._reserve_level(
                 self._store_path(model_name, time_res, level),
@@ -388,23 +389,36 @@ class HealpixZarrWriter:
             var_encoding.setdefault("fill_value", var_encoding["_FillValue"])
         zarr_encoding = {variable: var_encoding}
 
-        if not self._store_exists(store_path):
-            logger.info(f"{store_path}: creating store for task {task}...")
-            self._reserve(store_path, ds, ds["time"], zarr_encoding, chunk, "w")
-            return _LevelPlan(store_path, ds, variable, 0)
+        # Locked: a variable's own array is its own, but everything around it
+        # here is shared -- the "cell"/"latitude"/"longitude"/"crs" coordinates
+        # that come with every pyramid, the vertical coordinate
+        # _align_vertical_dims() picks by reading the store, and the time axis.
+        # Whichever variable arrives first creates them, so two workers adding
+        # their first variable at once would otherwise both try to.
+        with exclusive_lock(store_path):
+            if not self._store_exists(store_path):
+                logger.info(f"{store_path}: creating store for task {task}...")
+                self._reserve(store_path, ds, ds["time"], zarr_encoding, chunk, "w")
+                return _LevelPlan(store_path, ds, variable, 0)
 
-        existing = self._open(store_path)
-        self._validate_consistency(store_path, ds, existing=existing)
-        ds = self._align_vertical_dims(ds, existing, store_path)
-        existing = self._extend_time_axis(store_path, existing, ds, task)
-
-        if variable not in existing.data_vars:
-            logger.info(f"{store_path}: adding new variable '{variable}' for {task}...")
-            # Spans the store's full axis so every variable shares one "time",
-            # NaN for the months this one has no data for.
-            self._reserve(store_path, ds, existing["time"], zarr_encoding, chunk, "a")
             existing = self._open(store_path)
+            self._validate_consistency(store_path, ds, existing=existing)
+            ds = self._align_vertical_dims(ds, existing, store_path)
+            existing = self._extend_time_axis(store_path, existing, ds, task)
 
+            if variable not in existing.data_vars:
+                logger.info(
+                    f"{store_path}: adding new variable '{variable}' for {task}..."
+                )
+                # Spans the store's full axis so every variable shares one
+                # "time", NaN for the months this one has no data for.
+                self._reserve(
+                    store_path, ds, existing["time"], zarr_encoding, chunk, "a"
+                )
+                existing = self._open(store_path)
+
+        # Outside the lock: this reads only the variable's own region, and the
+        # store's timestamps keep their positions however it grows.
         start = self._region_start(store_path, ds, variable, existing, task)
         return _LevelPlan(store_path, ds, variable, start)
 
@@ -635,7 +649,7 @@ class HealpixZarrWriter:
 
         Raises:
             ValueError: If the incoming timestamps aren't a contiguous run in
-                the store, or if that slice already holds data.
+                the store.
         """
         store_times = pd.Index(existing["time"].values)
         positions = store_times.get_indexer(pd.Index(ds["time"].values))
@@ -648,10 +662,13 @@ class HealpixZarrWriter:
 
         written = existing[variable].isel(time=slice(start, stop))
         if bool(written.notnull().any()):
-            raise ValueError(
-                f"'{store_path}', task {task}: '{variable}' is already present for "
-                f"{store_times[start]}..{store_times[stop - 1]}. Refusing to "
-                "overwrite it."
+            # Overwritten rather than refused: a key only reaches here when the
+            # checkpoint doesn't hold it, which means the run that wrote this
+            # died before finishing it. Rewriting the month is what fixes it.
+            logger.warning(
+                f"'{store_path}', task {task}: '{variable}' already holds data for "
+                f"{store_times[start]}..{store_times[stop - 1]}, left by a run that "
+                "never recorded the task. Overwriting it."
             )
         return start
 

@@ -258,15 +258,55 @@ class TestAppend:
         with pytest.raises(ValueError, match="min_level"):
             writer.append("era5", "1h", (2025, 1), pyramid)
 
-    def test_duplicate_timestamp_raises(self, writer: HealpixZarrWriter) -> None:
-        """Re-appending overlapping timestamps raises ValueError.
+    def test_re_appending_overwrites_in_place(self, writer: HealpixZarrWriter) -> None:
+        """Re-appending the same timestamps rewrites them instead of failing.
+
+        How a task that died mid-write is retried: the checkpoint doesn't hold
+        it, so the next run hands it out again and it overwrites what's there.
 
         Args:
             writer (HealpixZarrWriter): Writer under test.
         """
         writer.append("era5", "1h", (2025, 1), _make_pyramid([4, 7], start=0, n=3))
-        with pytest.raises(ValueError, match="already present"):
-            writer.append("era5", "1h", (2025, 1), _make_pyramid([4, 7], start=0, n=3))
+        writer.append("era5", "1h", (2025, 1), _make_pyramid([4, 7], start=0, n=3))
+
+        opened = xr.open_zarr(
+            Path(writer.base_dir, "era5", "1h", "level_4.zarr"), consolidated=False
+        )
+        assert list(opened["time"].values) == [0, 1, 2]
+        assert bool(opened["T"].notnull().all())
+
+    def test_reserve_runs_under_the_store_lock(
+        self, writer: HealpixZarrWriter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Creating a store's arrays holds that store's lock.
+
+        Unlocked, two workers adding their first variable at once both try to
+        create the coordinates they share.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+            monkeypatch (pytest.MonkeyPatch): Fixture to spy on `_reserve()`.
+        """
+        held: list[bool] = []
+        original = HealpixZarrWriter._reserve
+
+        def spy(
+            writer: HealpixZarrWriter,
+            store_path: Path,
+            ds: xr.Dataset,
+            times: xr.DataArray,
+            encoding: dict,
+            chunk: int,
+            mode: str,
+        ) -> None:
+            held.append(store_path.with_name(f"{store_path.name}.lock").is_dir())
+            original(writer, store_path, ds, times, encoding, chunk, mode)
+
+        monkeypatch.setattr(HealpixZarrWriter, "_reserve", spy)
+        writer.append("era5", "1h", (2025, 1), _make_pyramid([4, 7], start=0, n=3))
+
+        assert held and all(held)
 
     def test_mismatched_healpix_attrs_raises(self, writer: HealpixZarrWriter) -> None:
         """Appending data with a different healpix_order raises ValueError.

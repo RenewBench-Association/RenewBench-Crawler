@@ -270,6 +270,40 @@ def _mark(regridder: Any, key: tuple | None) -> None:
         regridder.mark_done(key)
 
 
+def _run_pool(
+    name: str, keys: list[tuple], regridder: Any, args: argparse.Namespace, cfg: Any
+) -> list[tuple]:
+    """Regrid every key over a worker pool, recording each one as it lands.
+
+    Args:
+        name (str): Source key, e.g. "icon_dream_global".
+        keys (list[tuple]): The keys to hand out.
+        regridder (Any): The manager's regridder, which owns the checkpoint.
+        args (argparse.Namespace): Parsed command-line flags.
+        cfg (Any): Loaded regrid_healpix configuration.
+
+    Returns:
+        list[tuple]: The keys whose worker raised.
+    """
+    failed: list[tuple] = []
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(_regrid_key, name, key, args, cfg): key for key in keys}
+        # as_completed hands the next free task to the next free worker, so a
+        # short 2D variable never waits behind a long 3D one.
+        for done in as_completed(futures):
+            try:
+                # Raises what the worker raised, so a failed key is reported
+                # rather than recorded as finished.
+                _mark(regridder, done.result())
+            except Exception:
+                # Caught, because letting it out of the `with` would leave the
+                # pool's shutdown waiting for every task still queued -- hours
+                # in which the manager records none of the keys that succeed.
+                failed.append(futures[done])
+                logger.exception(f"'{name}': task {futures[done]} failed.")
+    return failed
+
+
 def main() -> None:
     """Hand out every (year, month, variable) task and record what finishes."""
     args = parse_arguments()
@@ -280,6 +314,7 @@ def main() -> None:
     logger.info(f"Flags for the '{SOURCE}' regrid:\n{args}")
     logger.info(f"Config for the '{SOURCE}' regrid:\n{cfg}")
 
+    failed: list[tuple] = []
     for name in args.sources:
         writer, regridder, model_name, time_res = _build(name, args, cfg)
         keys = regridder.pending_keys()
@@ -307,14 +342,14 @@ def main() -> None:
                 _mark(regridder, _regrid_key(name, key, args, cfg))
             continue
 
-        with ProcessPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(_regrid_key, name, key, args, cfg) for key in keys}
-            # as_completed hands the next free task to the next free worker,
-            # so a short 2D variable never waits behind a long 3D one.
-            for done in as_completed(futures):
-                # result() re-raises here, so a worker's failure stops the run
-                # instead of being recorded as finished.
-                _mark(regridder, done.result())
+        failed += _run_pool(name, keys, regridder, args, cfg)
+
+    if failed:
+        raise RuntimeError(
+            f"{len(failed)} task(s) failed and stayed unfinished in the "
+            f"checkpoint: {failed}. Everything else was written and recorded; "
+            "rerun to pick these up."
+        )
 
 
 if __name__ == "__main__":
