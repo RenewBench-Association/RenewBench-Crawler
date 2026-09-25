@@ -10,6 +10,7 @@ import pytest
 from rbc.coordinates import pipelines
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
@@ -99,6 +100,25 @@ class TestMakePipeline:
         )
         assert pipeline.osm_loc is osm_loc
 
+    @pytest.mark.parametrize("input_dir_fix", ["eia_dir", "entsoe_zone_dir"])
+    def test_use_region_reg(
+        self, input_dir_fix: str, request: pytest.FixtureRequest
+    ) -> None:
+        """Happy path: both pipelines use the given (shared) region index.
+
+        If a pipeline built its own index instead, every directory would read the
+        admin-1 data again, and `resources_dir` / `--update` would be ignored.
+
+        Args:
+            input_dir_fix (str): Name of the directory fixture (default or entsoe).
+            request (pytest.FixtureRequest): Pytest-provided request to get the fixture.
+        """
+        region_reg = RegionRegistry()
+        pipeline = make_pipeline(
+            input_dir=request.getfixturevalue(input_dir_fix), region_reg=region_reg
+        )
+        assert pipeline.region_reg is region_reg
+
 
 class TestBuildSharedResources:
     """Test the 'build_shared_resources' function."""
@@ -120,28 +140,51 @@ class TestBuildSharedResources:
         assert shared.eic_reg is not None
         assert isinstance(shared.eic_reg, EICCodeRegistry)
 
-    def test_resources_get_own_subfolders(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("update", [False, True])
+    def test_resources_get_own_subfolders(self, tmp_path: Path, update: bool) -> None:
         """Happy path: each resource gets its own subfolder of `resources_dir`.
+
+        The update flag has to reach every one of them, since `-u` refreshes all
+        downloaded resources.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory (`resources_dir`).
+            update (bool): Whether fresh copies were requested.
+        """
+        shared = build_shared_resources(
+            source="entsoe", resources_dir=tmp_path, update=update
+        )
+
+        cast(MagicMock, pipelines.GEMLocator).assert_called_once_with(
+            gem_dir=Path(tmp_path, "gem"), update=update
+        )
+        cast(MagicMock, pipelines.PPMLocator).assert_called_once_with(
+            cache_dir=Path(tmp_path, "ppm"), update=update
+        )
+        cast(MagicMock, pipelines.EICCodeRegistry).assert_called_once_with(
+            cache_dir=Path(tmp_path, "eic"), update=update
+        )
+        assert shared.osm_loc is not None
+        assert shared.osm_loc.cache_dir == Path(tmp_path, "overpass")
+        assert shared.osm_loc.update is update
+        assert shared.region_reg is not None
+        assert shared.region_reg.cache_dir == Path(tmp_path, "natural_earth")
+        assert shared.region_reg.update is update
+
+    def test_default_pipeline_caches_osmpp(self, tmp_path: Path) -> None:
+        """Happy path: the default pipeline's OSMPP locator gets the `osmpp/` subfolder.
 
         Args:
             tmp_path (Path): Pytest-provided temporary directory (`resources_dir`).
         """
-        shared = build_shared_resources(source="entsoe", resources_dir=tmp_path)
+        build_shared_resources(source="eia", resources_dir=tmp_path)
 
-        cast(MagicMock, pipelines.GEMLocator).assert_called_once_with(
-            gem_dir=Path(tmp_path, "gem")
+        cast(MagicMock, pipelines.OSMPPLocator).assert_called_once_with(
+            cache_dir=Path(tmp_path, "osmpp"), update=False
         )
-        cast(MagicMock, pipelines.EICCodeRegistry).assert_called_once_with(
-            cache_dir=Path(tmp_path, "eic")
-        )
-        assert shared.osm_loc is not None
-        assert shared.osm_loc.cache_dir == Path(tmp_path, "overpass")
 
-    def test_osm_flags_reach_overpass_locator(self) -> None:
-        """Happy path: the CLI's update/live flags reach the Overpass locator."""
-        shared = build_shared_resources(
-            source="eia", resources_dir=None, osm_update=True, osm_live=True
-        )
+    def test_osm_live_reaches_overpass_locator(self) -> None:
+        """Happy path: the CLI's live flag reaches the Overpass locator."""
+        shared = build_shared_resources(source="eia", resources_dir=None, osm_live=True)
         assert shared.osm_loc is not None
-        assert shared.osm_loc.update is True
         assert shared.osm_loc.live is True

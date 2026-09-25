@@ -7,16 +7,22 @@ Data foundation: https://github.com/PyPSA/powerplantmatching/blob/master/powerpl
 
 import ast
 from functools import cached_property
+from pathlib import Path
 
 import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.match_schema import PPDB_ADAPTER, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
+from rbc.coordinates.utils.resources import fetch_resource
 from rbc.coordinates.utils.values import strip_str
 from rbc.energy.utils import load_df_from_file
 
-PPM_CSV_URL = "https://raw.githubusercontent.com/PyPSA/powerplantmatching/refs/heads/master/powerplants.csv"
+PPM_URL = (
+    "https://raw.githubusercontent.com/PyPSA/powerplantmatching/refs/heads/master/"
+)
+PPM_CSV_FILE = "powerplants.csv"
+PPM_CSV_URL = PPM_URL + PPM_CSV_FILE
 
 
 class PPMLocator:
@@ -33,10 +39,23 @@ class PPMLocator:
             ]
     """
 
-    def __init__(self):
-        """Initializes PPMLocator."""
+    def __init__(self, cache_dir: Path | None = None, update: bool = False) -> None:
+        """Initializes PPMLocator.
+
+        Args:
+            cache_dir (Path | None, optional): Directory of the local copy of PPM's CSV.
+                Defaults to None, in which case the CSV is read from its URL every time.
+            update (bool, optional): Download a fresh copy of the CSV, even if one
+                exists locally. Defaults to False.
+        """
+        source: Path | str = PPM_CSV_URL
+        if cache_dir is not None:
+            cache_path = Path(cache_dir, PPM_CSV_FILE)
+            local = fetch_resource(PPM_CSV_URL, cache_path, update)
+            source = local if local is not None else PPM_CSV_URL
+
         # All energy entities in Europe that "make the cut" according to ppm
-        self.df: pd.DataFrame = load_df_from_file(PPM_CSV_URL)
+        self.df: pd.DataFrame = load_df_from_file(source)
         self.df = normalize_locator_countries(self.df)  # normalize the country values
 
         logger.info(f"PPMLocator initialized: {len(self.df)} entries")

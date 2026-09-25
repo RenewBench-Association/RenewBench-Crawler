@@ -2,10 +2,12 @@
 """Structural tests for BasePipeline's shared scaffolding (not pipeline-specific steps)."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.mappings import (
     OPERATOR_COLUMNS,
     OPERATOR_METADATA,
@@ -17,6 +19,8 @@ from rbc.coordinates.mappings import (
     OperatorInfo,
 )
 from rbc.coordinates.pipelines._base import BasePipeline
+
+BASE_MODULE = "rbc.coordinates.pipelines._base"
 
 
 # ----------------------------------
@@ -105,6 +109,33 @@ class TestBasePipelineInit:
             BasePipeline(
                 input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
             )
+
+
+class TestBasePipelineFuzzyMatch:
+    """Tests for BasePipeline's shared fuzzy matching step."""
+
+    def test_matcher_gets_the_pipelines_region_index(self, eia_csv_dir: Path) -> None:
+        """Happy path: the name matcher checks regions with the pipeline's own index.
+
+        If it built its own instead, every zone would read the admin-1 data again and
+        ignore the run's `resources_dir` and `--update`.
+
+        Args:
+            eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
+        """
+        region_reg = RegionRegistry()
+        pipeline = _DummyPipeline(
+            input_dir=eia_csv_dir,
+            output_dir=None,
+            gem_loc=None,
+            ppdb_loc=None,
+            region_reg=region_reg,
+        )
+
+        with patch(f"{BASE_MODULE}.NameMatcher") as mock_matcher:
+            pipeline._step_fuzzy_match(pd.DataFrame())
+
+        assert mock_matcher.call_args.kwargs["region_reg"] is region_reg
 
 
 class TestBasePipelineRunPipeline:

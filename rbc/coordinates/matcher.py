@@ -18,6 +18,7 @@ import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.match_schema import (
@@ -29,7 +30,6 @@ from rbc.coordinates.match_schema import (
 )
 from rbc.coordinates.utils.country import normalize_operator_country_name
 from rbc.coordinates.utils.fuel import classify_fueltype_match
-from rbc.coordinates.utils.region import classify_region_match
 from rbc.coordinates.utils.tokenizer import (
     NameTokenizer,
     get_weighted_token_score,
@@ -90,6 +90,7 @@ class NameMatcher:
         gem_locator: GEMLocator | None = None,
         ppdb_locator: PPMLocator | OSMPPLocator | None = None,
         osm_df: pd.DataFrame | None = None,
+        region_reg: RegionRegistry | None = None,
         tok: NameTokenizer | None = None,
         style_policy: str = "real",
     ) -> None:
@@ -103,6 +104,9 @@ class NameMatcher:
             ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
                 locator for power plant database candidates. Defaults to None.
             osm_df (df | None): DataFrame with OSM power plant data.
+            region_reg (RegionRegistry | None): Region registry to check a candidate's
+                coordinate against the target's region with. Defaults to None, in which
+                case a new registry is created (which reads its data from the web).
             tok (NameTokenizer | None): NameTokenizer instance for tokenization. Defaults
                 to None, in which case a vocabulary-less tokenizer is created (generic
                 tokens only, no operator/country name translations).
@@ -116,6 +120,11 @@ class NameMatcher:
         self.gem_locator: GEMLocator | None = gem_locator
         self.ppdb_locator: PPMLocator | OSMPPLocator | None = ppdb_locator
         self.osm_df: pd.DataFrame | None = osm_df
+
+        # Region lookup (reads its data lazily, on the first target that names a region)
+        self.region_reg: RegionRegistry = (
+            region_reg if region_reg is not None else RegionRegistry()
+        )
 
         # Tokenizer
         self.tok: NameTokenizer = tok if tok is not None else NameTokenizer()
@@ -199,6 +208,7 @@ class NameMatcher:
                     debug_score += f_bonus
 
                     is_r_match, r_bonus = _compare_region(
+                        self.region_reg,
                         self.target_country,
                         target_region,
                         (candidate.lat, candidate.lon),
@@ -244,6 +254,7 @@ class NameMatcher:
                     debug_score += f_bonus
 
                     is_r_match, r_bonus = _compare_region(
+                        self.region_reg,
                         self.target_country,
                         target_region,
                         (candidate.lat, candidate.lon),
@@ -484,11 +495,15 @@ def _compare_fuel(target_fuel: str | None, cand_fuel: str | None) -> tuple[bool,
 
 
 def _compare_region(
-    country: str, target_region: str | None, cand_coord: tuple[float, float]
+    region_reg: RegionRegistry,
+    country: str,
+    target_region: str | None,
+    cand_coord: tuple[float, float],
 ) -> tuple[bool, float]:
     """Whether the candidate coordinate lies within the target region or not.
 
     Args:
+        region_reg (RegionRegistry): Region lookup to classify the coordinate with.
         country (str): The target / candidate country name.
         target_region (str | None): The target region.
         cand_coord (tuple[float, float]): The candidate coordinate (lat, lon).
@@ -496,7 +511,7 @@ def _compare_region(
     Returns:
         tuple[bool, float]: Whether it's in the region, and the score bonus to add.
     """
-    level = classify_region_match(country, target_region, cand_coord)
+    level = region_reg.classify_match(country, target_region, cand_coord)
     if level == "unknown":  # the most common case! Most have no region info...
         return True, 0.0
 

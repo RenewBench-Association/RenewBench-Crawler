@@ -22,6 +22,7 @@ import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
@@ -36,7 +37,6 @@ from rbc.coordinates.mappings import (
 from rbc.coordinates.match_schema import LOCATOR_RELIABILITY, MatchCandidate
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.utils.fuel import classify_fueltype_match
-from rbc.coordinates.utils.region import classify_region_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
@@ -78,6 +78,7 @@ class BasePipeline:
         gem_loc: GEMLocator | None,
         ppdb_loc: PPMLocator | OSMPPLocator | None,
         osm_loc: OverpassLocator | None = None,
+        region_reg: RegionRegistry | None = None,
     ) -> None:
         """Initialize BasePipeline class.
 
@@ -92,6 +93,9 @@ class BasePipeline:
             osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse
                 (loads each country only once per run). If None, a new locator is built
                 that caches its files in ``output_dir``.
+            region_reg (RegionRegistry, optional): Pre-built region registry to reuse
+                (reads the admin-1 data only once per run). If None, a new registry is
+                built that reads its data from the web.
 
         Raises:
             TypeError: If this class is instantiated instead of using a subclass.
@@ -197,6 +201,9 @@ class BasePipeline:
             osm_loc
             if osm_loc is not None
             else OverpassLocator(cache_dir=self.output_dir)
+        )
+        self.region_reg: RegionRegistry = (
+            region_reg if region_reg is not None else RegionRegistry()
         )
 
         logger.info(
@@ -433,6 +440,7 @@ class BasePipeline:
             gem_locator=self.gem_loc,
             ppdb_locator=self.ppdb_loc,
             osm_df=osm_df if len(osm_df) > 0 else None,
+            region_reg=self.region_reg,
             tok=self.tok,
             style_policy=self.name_str_style,
         )
@@ -487,7 +495,7 @@ class BasePipeline:
         df["region_match"] = None
         df["region_match_level"] = None
         for idx in df.index[lats.notna()]:
-            level = classify_region_match(
+            level = self.region_reg.classify_match(
                 self.country,
                 target_region=df.at[idx, SYSOP_REGION_COL],
                 cand_coord=(lats[idx], lons[idx]),

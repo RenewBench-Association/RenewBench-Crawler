@@ -8,7 +8,8 @@ as possible.
 
 Using various [locator sources](#locator-sources) that provide such coordinate information
 for EGEs, different [strategies](#strategies) have been implemented to find matches for
-the operator's EGEs.
+the operator's EGEs. Two [auxiliary sources](#auxiliary-sources) contribute no coordinates
+of their own, but enrich the operator's metadata and validate the matches that were found.
 
 ## Locator sources
 
@@ -99,6 +100,22 @@ Overview of options:
 - [Global Energy Observatory](https://globalenergyobservatory.org/) - Website not functioning, account creation not possible,
   last updated 2018
 
+## Auxiliary sources
+
+Two further datasets are used that hold no EGE coordinates at all. Instead, they enrich the
+operator's metadata before matching and validate the matches afterwards (s. `Used for`).
+
+| Abbr | Name                                     | Used for                                                     | Coverage               | Data type                | Access                                                                                                                                                                                                | License                                                                          |
+|------|------------------------------------------|--------------------------------------------------------------|------------------------|--------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| EIC  | ENTSO-E EIC directory (W-type codes)     | Code enrichment & parent-unit resolution (`entsoe` only)     | Europe                 | `.csv` file (`;`-delim.) | [`W_eicCodes.csv`](https://eepublicdownloads.blob.core.windows.net/cio-lio/csv/W_eicCodes.csv), listed on ENTSO-E's [EIC page](https://www.entsoe.eu/data/energy-identification-codes-eic/)            | ENTSO-E publication (s. their [EIC page](https://www.entsoe.eu/data/energy-identification-codes-eic/)) |
+| NE   | Natural Earth admin-1 (states/provinces) | Region validation of matched coordinates (20 km tolerance)   | Global (~4600 regions) | zipped shapefile         | [`ne_10m_admin_1_states_provinces.zip`](https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_1_states_provinces.zip) from [naturalearthdata.com](https://www.naturalearthdata.com/downloads/10m-cultural-vectors/) | [Public domain](https://www.naturalearthdata.com/about/terms-of-use/)            |
+
+Both are downloaded into their own subfolder of the `resources_dir` (`eic/`,
+`natural_earth/`) on first use and read from there on every run afterwards (s. [running
+coordinate finding](#running-coordinate-finding)). Natural Earth is only ever fetched for
+operators that report a region at all (e.g. ONS' `nom_estado`), so a `natural_earth/`
+folder may well be missing after a run.
+
 ## Strategies
 
 1. _ONLY FOR EUROPE (`entsoe`)_: Data enrichment
@@ -128,6 +145,27 @@ Overview of options:
    weighted with one, while other tokens, such as "Block," "10," and "KW," are weighted with
    0.1.
 
+4. Validation of every match, by fuel type and by region.
+
+   Each candidate is checked against what the operator itself reports. During fuzzy
+   matching, a candidate whose fuel type or region contradicts that data is rejected
+   outright, while one that agrees earns a small score bonus (s.
+   [`matcher.py`](../../rbc/coordinates/matcher.py)). After all matching steps, every
+   matched EGE — including those matched by EIC code — is checked again, and the outcome
+   kept in the `fueltype_match_level` / `region_match_level` columns.
+
+   Fuel types are compared by family (e.g. "hard coal" vs "coal", s.
+   [`fuel.py`](../../rbc/coordinates/utils/fuel.py)), regions by point-in-polygon
+   containment against Natural Earth's admin-1 polygons, buffered by 20 km to absorb
+   border imprecision (offshore wind, hydro plants on border rivers, s.
+   [`natural_earth.py`](../../rbc/coordinates/locators/natural_earth.py)). Missing
+   information never rejects a match: an operator that reports no region, or a region
+   name with no polygon of that name, simply leaves the check unknown.
+
+   A rejected match is excluded from the final `lat`, `lon` and `match_method` columns,
+   but its `<loc>.*` columns are kept, so the candidate stays visible for review next to
+   the level that rejected it.
+
 For more details, see the modules in the [`rbc/coordinates` folder](../../rbc/coordinates),
 in particular the [`orchestrator.py`](../../rbc/coordinates/orchestrator.py).
 
@@ -152,8 +190,9 @@ Optional arguments are:
   processing). Per default, a subfolder `coordinates` in the `dst_dir_raw` will be used.
 - `--live`: Query the overpass API On every run (without writing / reading the local
   parquet file).
-- `--update`: Re-fetch OSM data from the overpass API (even if it was done for the same data
-  before).
+- `--update`: Download fresh copies of every resource in the `resources_dir` (PPM's and
+  osm-powerplants' CSVs, the EIC directory, Natural Earth, GEM's fallback trackers) and
+  re-query the overpass API once per country.
 
 A successful run returns several new files:
 - a `coordinates_....csv` with the matched coordinates

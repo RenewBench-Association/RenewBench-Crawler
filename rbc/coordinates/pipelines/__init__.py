@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
@@ -36,6 +37,7 @@ def make_pipeline(
     gem_loc: GEMLocator | None = None,
     ppdb_loc: PPMLocator | OSMPPLocator | None = None,
     osm_loc: OverpassLocator | None = None,
+    region_reg: RegionRegistry | None = None,
     eic_reg: EICCodeRegistry | None = None,
 ) -> BasePipeline:
     """Build the right pipeline instance (BasePipeline subclass) for `input_dir`.
@@ -53,10 +55,12 @@ def make_pipeline(
             None, in which case GEM is disabled.
         ppdb_loc (PPMLocator, optional): Pre-built PPM locator to reuse. Defaults to
             None, in which case the resolved pipeline builds its own default.
-        eic_reg (EICCodeRegistry, optional): Pre-built EIC directory locator
-            to reuse. Only relevant for the entsoe pipeline; ignored otherwise.
         osm_loc (OverpassLocator, optional): Pre-built OSM Overpass locator to reuse.
             Defaults to None, in which case the resolved pipeline builds its own default.
+        region_reg (RegionRegistry, optional): Pre-built region registry to reuse.
+            Defaults to None, in which case the resolved pipeline builds its own.
+        eic_reg (EICCodeRegistry, optional): Pre-built EIC directory locator
+            to reuse. Only relevant for the entsoe pipeline; ignored otherwise.
 
     Returns:
         BasePipeline: The concrete pipeline instance for `input_dir`.
@@ -80,6 +84,7 @@ def make_pipeline(
             gem_loc=gem_loc,
             ppm_loc=ppdb_loc,
             osm_loc=osm_loc,
+            region_reg=region_reg,
             eic_reg=eic_reg,
         )
 
@@ -94,6 +99,7 @@ def make_pipeline(
         gem_loc=gem_loc,
         osmpp_loc=ppdb_loc,
         osm_loc=osm_loc,
+        region_reg=region_reg,
     )
 
 
@@ -105,19 +111,21 @@ class SharedResources:
         gem_loc (GEMLocator | None): GEM locator (local or fallback tracker files).
         ppdb_loc (PPMLocator | OSMPPLocator | None): Power plant database locator.
         osm_loc (OverpassLocator | None): OSM Overpass API locator.
+        region_reg (RegionRegistry | None): Natural Earth admin-1 region lookup.
         eic_reg (EICCodeRegistry | None): ENTSO-E EIC directory (entsoe pipeline only).
     """
 
     gem_loc: GEMLocator | None
     ppdb_loc: PPMLocator | OSMPPLocator | None
     osm_loc: OverpassLocator | None
+    region_reg: RegionRegistry | None
     eic_reg: EICCodeRegistry | None
 
 
 def build_shared_resources(
     source: str,
     resources_dir: Path | None,
-    osm_update: bool = False,
+    update: bool = False,
     osm_live: bool = False,
 ) -> SharedResources:
     """Build the expensive (network/CSV/parquet-backed) resources shared by one run.
@@ -126,7 +134,8 @@ def build_shared_resources(
     multiple ENTSO-E bidding zones) should build these once and pass them into
     `make_pipeline` for every directory, rather than paying the construction cost
     (network/CSV/parquet reads) per directory. Each resource keeps its local files in
-    its own subfolder of `resources_dir` (`gem/`, `eic/`, `overpass/`).
+    its own subfolder of `resources_dir` (`gem/`, `ppm/`, `osmpp/`, `eic/`, `overpass/`,
+    `natural_earth/`) so they are reused across runs.
 
     Args:
         source (str): Name of the energy source, e.g. "entsoe". Used to resolve
@@ -135,9 +144,9 @@ def build_shared_resources(
             sources. Manually downloaded GEM tracker xlsx files are expected in its
             `gem/` subfolder (trackers missing there fall back to the files in PPM's
             cloud storage). If None, no local files are read or written.
-        osm_update (bool, optional): Re-fetch OSM data from Overpass (once per country)
-            and overwrite the local files. Corresponds to the ``--update`` / ``-u`` CLI
-            flag. Defaults to False.
+        update (bool, optional): Download fresh copies of every resource (and re-query
+            Overpass once per country), overwriting the local files. Corresponds to the
+            ``--update`` / ``-u`` CLI flag. Defaults to False.
         osm_live (bool, optional): Query Overpass without reading or writing any local
             file. Corresponds to the ``--live`` CLI flag. Defaults to False.
 
@@ -145,31 +154,40 @@ def build_shared_resources(
         SharedResources: The resources to reuse across every directory processed
             in this run.
     """
-    gem_loc: GEMLocator = GEMLocator(
-        gem_dir=Path(resources_dir, "gem") if resources_dir else None
-    )
+
+    def subdir(name: str) -> Path | None:
+        """Resolve one resource's subfolder of `resources_dir`, if there is one.
+
+        Args:
+            name (str): Name of the resource's subfolder, e.g. "gem".
+
+        Returns:
+            Path | None: The subfolder, or None if no `resources_dir` was given.
+        """
+        return Path(resources_dir, name) if resources_dir else None
+
+    gem_loc: GEMLocator = GEMLocator(gem_dir=subdir("gem"), update=update)
     ppdb_loc: PPMLocator | OSMPPLocator
     eic_reg: EICCodeRegistry | None
 
+    # locators defined by the pipeline
     pipeline_name = OPERATOR_METADATA[source].get("pipeline", "default")
-    if pipeline_name == "entsoe":  # use regional European assets
-        ppdb_loc = PPMLocator()
-        eic_reg = EICCodeRegistry(
-            cache_dir=Path(resources_dir, "eic") if resources_dir else None
-        )
-    else:  # assume the default
-        ppdb_loc = OSMPPLocator()
+    if pipeline_name == "entsoe":
+        ppdb_loc = PPMLocator(cache_dir=subdir("ppm"), update=update)
+        eic_reg = EICCodeRegistry(cache_dir=subdir("eic"), update=update)
+    else:
+        ppdb_loc = OSMPPLocator(cache_dir=subdir("osmpp"), update=update)
         eic_reg = None
 
     osm_loc = OverpassLocator(
-        cache_dir=Path(resources_dir, "overpass") if resources_dir else None,
-        update=osm_update,
-        live=osm_live,
+        cache_dir=subdir("overpass"), update=update, live=osm_live
     )
+    region_reg = RegionRegistry(cache_dir=subdir("natural_earth"), update=update)
 
     return SharedResources(
         gem_loc=gem_loc,
         ppdb_loc=ppdb_loc,
         osm_loc=osm_loc,
+        region_reg=region_reg,
         eic_reg=eic_reg,
     )

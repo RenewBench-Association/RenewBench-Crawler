@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.mappings import SYSOP_NAME_COL
@@ -27,6 +28,7 @@ class DefaultPipeline(BasePipeline):
         gem_loc: GEMLocator | None = None,
         osmpp_loc: OSMPPLocator | None = None,
         osm_loc: OverpassLocator | None = None,
+        region_reg: RegionRegistry | None = None,
     ) -> None:
         """Initializes the child class for the default pipeline.
 
@@ -41,6 +43,8 @@ class DefaultPipeline(BasePipeline):
                 is built.
             osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse.
                 Defaults to None, in which case a new locator is built.
+            region_reg (RegionRegistry, optional): Pre-built region registry to reuse.
+                Defaults to None, in which case a new registry is built.
         """
         super().__init__(
             input_dir=input_dir,
@@ -48,6 +52,7 @@ class DefaultPipeline(BasePipeline):
             gem_loc=gem_loc,
             ppdb_loc=osmpp_loc,
             osm_loc=osm_loc,
+            region_reg=region_reg,
         )
 
         self.ppdb_loc: OSMPPLocator = (  # type: ignore[assignment]

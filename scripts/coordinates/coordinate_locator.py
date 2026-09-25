@@ -61,8 +61,10 @@ def parse_arguments() -> Namespace:
         "-u",
         action="store_true",
         help=(
-            "Re-fetch OSM power plant data from Overpass API and overwrite the local "
-            "overpass_<CC>.parquet and .json files, even if they already exist."
+            "Download fresh copies of every resource in the resources_dir (PPM's and "
+            "osm-powerplants' CSVs, the EIC directory, Natural Earth, GEM's fallback "
+            "trackers) and re-query the Overpass API once per country, overwriting the "
+            "local files."
         ),
     )
     parser.add_argument(

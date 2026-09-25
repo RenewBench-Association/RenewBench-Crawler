@@ -26,6 +26,7 @@ from loguru import logger
 
 from rbc.coordinates.match_schema import GEM_ADAPTER, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
+from rbc.coordinates.utils.resources import fetch_resource
 from rbc.coordinates.utils.values import strip_str
 
 # ------------------------------------------------------------------------
@@ -219,6 +220,9 @@ class GEMLocator:
     Attributes:
         gem_dir (Path): Directory containing the downloaded GEM xlsx tracker files.
         cache_dir (Path | None): Directory used for the combined parquet cache.
+        fallback_dir (Path | None): Subfolder of `gem_dir` holding the tracker files
+            downloaded from PPM's cloud storage, so later runs find them locally.
+        update (bool): Whether to re-download fallback trackers and rebuild the cache.
         df (pd.DataFrame): Dataframe of combined, normalized GEM data from available trackers.
             Has the columns:
             [
@@ -230,7 +234,10 @@ class GEMLocator:
     """
 
     def __init__(
-        self, gem_dir: Path | None = None, cache_dir: Path | None = None
+        self,
+        gem_dir: Path | None = None,
+        cache_dir: Path | None = None,
+        update: bool = False,
     ) -> None:
         """Initialize GEMLocator.
 
@@ -239,12 +246,16 @@ class GEMLocator:
                 Defaults to None, in which case PPM's cloud-stored GEM files are the fallback.
             cache_dir (Path, optional): Directory for the combined parquet cache.
                 Defaults to None, in which case `gem_dir` is used to store the parquet.
+            update (bool, optional): Re-download the fallback trackers and rebuild the
+                combined cache. Defaults to False.
         """
         self.gem_dir = Path(gem_dir) if gem_dir else None
         self.cache_dir = Path(cache_dir) if cache_dir else self.gem_dir
         self.cache_path = (
             Path(self.cache_dir, "gem_combined.parquet") if self.cache_dir else None
         )
+        self.fallback_dir = Path(self.gem_dir, "fallback") if self.gem_dir else None
+        self.update = update
 
         self.df: pd.DataFrame = pd.DataFrame()
         self._load()
@@ -255,81 +266,165 @@ class GEMLocator:
     # ------------------------------------------------------------------
     def _load(self) -> None:
         """Load the combined GEM dataset, using the parquet cache when still fresh."""
-        gem_xlsx_files = self._resolve_gem_xlsx_files()
-        if not gem_xlsx_files:
-            logger.warning(
-                f"GEMLocator: No GEM tracker xlsx files found in '{self.gem_dir}' or "
-                "the fallback (PPM's cloud storage). GEM matching will be unavailable."
-            )
-            return
+        local_trackers = self._find_local_trackers()
 
+        # Prep: check file dates
         newest_xlsx_mtime = max(
-            (p.stat().st_mtime for p in gem_xlsx_files.values() if isinstance(p, Path)),
-            default=0,  # URL files (str) have no mtime -> existing cache always newer
+            (p.stat().st_mtime for p in local_trackers.values()), default=0
         )
+        cache_file = (
+            self.cache_path if self.cache_path and self.cache_path.is_file() else None
+        )
+
+        # 1. use cached parquet file (if it exists and tracker xlsx files aren't newer)
         if (
-            self.cache_path
-            and self.cache_path.is_file()
-            and self.cache_path.stat().st_mtime >= newest_xlsx_mtime
+            cache_file
+            and not self.update
+            and cache_file.stat().st_mtime >= newest_xlsx_mtime
         ):
             logger.info(
-                f"GEMLocator: Loading combined data of {len(gem_xlsx_files)} GEM tracker "
-                f"xlsx file(s) from cache '{self.cache_path}'"
+                f"GEMLocator: Loading combined GEM data from cache '{cache_file}' "
+                f"({len(local_trackers)} local tracker xlsx file(s) found, none newer)."
             )
-            self.df = pd.read_parquet(self.cache_path)
-        else:
+            self.df = pd.read_parquet(cache_file)
+            return
+
+        if cache_file:  # log why the existing cache is not being used
+            reason = (
+                "'-u' was given" if self.update else "a newer tracker xlsx file exists"
+            )
+            logger.info(f"GEMLocator: Rebuilding cache '{cache_file}' ({reason}).")
+
+        # 2. use tracker xlsx files to build the df (parquet)
+        tracker_files = self._download_missing_trackers(local_trackers)
+        if tracker_files:
             logger.info(
-                f"GEMLocator: Parsing {len(gem_xlsx_files)} GEM tracker xlsx file(s) "
-                f"from '{self.gem_dir if self.gem_dir else _FALLBACK_CONFIG_URL}'..."
+                f"GEMLocator: Parsing {len(tracker_files)} of "
+                f"{len(_TRACKER_SPECS)} GEM tracker xlsx file(s)..."
             )
-            self.df = self._normalize_xlsx_into_df(gem_xlsx_files)
+            self.df = self._normalize_xlsx_into_df(tracker_files)
 
-            if self.df.empty:
-                logger.warning(
-                    "GEMLocator: Nothing extracted from tracker xlsx file(s)!"
-                )
-                return
-
-            if self.cache_dir and self.cache_path:
-                self.cache_dir.mkdir(parents=True, exist_ok=True)
-                self.df.to_parquet(self.cache_path, index=False)
-                self.df.to_csv(self.cache_path.with_suffix(".csv"), index=False)
-                logger.info(f"GEMLocator: Combined data stored to '{self.cache_path}'")
+        # 3. handle what happens if no tracker files exist or none could be parsed
+        if self.df.empty:
+            logger.warning(
+                f"GEMLocator: No GEM data could be built from '{self.gem_dir}' or the "
+                "fallback (PPM's cloud storage)."
+            )
+            if cache_file:  # unusable trackers must not disable GEM entirely
+                logger.warning(f"GEMLocator: Falling back to cache '{cache_file}'.")
+                self.df = pd.read_parquet(cache_file)
             else:
-                logger.info(
-                    "GEMLocator: Data not stored since no cache_dir was provided!"
-                )
+                logger.warning("GEMLocator: GEM matching will be unavailable.")
+            return
 
-    def _resolve_gem_xlsx_files(self) -> dict[str, Path | str]:
-        """Resolve one xlsx file per tracker key, either from `gem_dir` or the fallback.
+        # 4. store the built df to a parquet for future use
+        if self.cache_dir and self.cache_path:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.df.to_parquet(self.cache_path, index=False)
+            self.df.to_csv(self.cache_path.with_suffix(".csv"), index=False)
+            logger.info(f"GEMLocator: Combined data stored to '{self.cache_path}'")
+        else:
+            logger.info("GEMLocator: Data not stored since no cache_dir was provided!")
 
-        If a `gem_dir` was provided, the folder is searched for a fitting XLSX.
-        On ties (multiple versions of the same tracker), the newest match is selected.
-        If no XLSX is found that way, the fallback PPM config is used, from which a fitting
-        URL to the cloud-stored tracker file is extracted.
+    def _find_local_trackers(self) -> dict[str, Path]:
+        """Find each tracker's xlsx file that is already on disk, without any network.
+
+        Resolved per tracker, so a manually downloaded Coal tracker and a fallback Wind
+        tracker can be used in the same run. Manually downloaded files in `gem_dir` win
+        over the fallback files stored in its `fallback/` subfolder, and on ties
+        (several versions of one tracker) the newest file wins.
+
+        On an `-u` run the `fallback/` folder is skipped, so every tracker without a
+        manually downloaded file is fetched fresh (s. `_download_missing_trackers`).
 
         Returns:
-            dict[str, Path | str]: Mapping from each GEM tracker xlsx key to its path / URL.
+            dict[str, Path]: Local xlsx path per tracker key that has one.
         """
-        resolved: dict[str, Path | str] = {}
+        folders = (self.gem_dir,) if self.update else (self.gem_dir, self.fallback_dir)
+
+        local: dict[str, Path] = {}
+        from_fallback: list[str] = []
         for tracker, spec in _TRACKER_SPECS.items():
-            file_name = str(spec.get("file_name"))
-            matches: list = []
+            file = str(spec.get("file_name"))
 
-            if self.gem_dir:
+            for folder in folders:
+                if folder is None:
+                    continue
+
                 matches = sorted(
-                    self.gem_dir.glob(file_name),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
+                    folder.glob(file), key=lambda p: p.stat().st_mtime, reverse=True
                 )
+                if matches:
+                    local[tracker] = matches[0]
+                    if folder == self.fallback_dir:
+                        from_fallback.append(tracker)
+                    break
 
-            if matches:
-                resolved[tracker] = matches[0]
-            else:
-                for url in self._fallback_xlsx_urls:
-                    if fnmatch.fnmatch(url, f"*{file_name}"):
-                        resolved[tracker] = url
-                        break
+        if from_fallback:
+            logger.info(
+                f"GEMLocator: Using an earlier run's fallback copy for "
+                f"{len(from_fallback)} tracker(s): {', '.join(from_fallback)}."
+            )
+        return local
+
+    def _download_missing_trackers(
+        self, local_trackers: dict[str, Path]
+    ) -> dict[str, Path | str]:
+        """Get any missing trackers from PPM's cloud storage.
+
+        With a `gem_dir`, a missing tracker is downloaded into its `fallback/` folder, so
+        later runs find it locally; without one, the URL is handed on to be read directly.
+
+        Args:
+            local_trackers (dict[str, Path]): Tracker files already stored, as returned
+                by `_find_local_trackers`.
+
+        Returns:
+            dict[str, Path | str]: Every resolved tracker key → local path or URL.
+        """
+        resolved: dict[str, Path | str] = dict(local_trackers)
+        fetched: list[str] = []
+
+        for tracker, spec in _TRACKER_SPECS.items():
+            if tracker in resolved:
+                continue
+
+            file = str(spec.get("file_name"))
+            url = next(
+                (u for u in self._fallback_xlsx_urls if fnmatch.fnmatch(u, f"*{file}")),
+                None,
+            )
+            if url is None:
+                continue
+
+            # if no gem_dir -> read the URL directly
+            if self.fallback_dir is None:
+                resolved[tracker] = url
+                fetched.append(tracker)
+                continue
+
+            cache_path = Path(self.fallback_dir, url.rsplit("/", 1)[-1])
+            local = fetch_resource(url, cache_path, self.update)
+            if local is not None:
+                resolved[tracker] = local
+                fetched.append(tracker)
+
+        # GEM's own website always have all 8 trackers, PPM's cloud copies are outdated
+        if fetched:
+            logger.warning(
+                f"GEMLocator: No manually downloaded file for {len(fetched)} "
+                f"tracker(s) ({', '.join(fetched)}) — taking PPM's cloud copies, which "
+                f"are outdated compared to GEM's current release. If you want the "
+                f"newest versions, download all {len(_TRACKER_SPECS)} trackers from "
+                f"https://globalenergymonitor.org/download-data into '{self.gem_dir}'."
+            )
+
+        missing = [t for t in _TRACKER_SPECS if t not in resolved]
+        if missing:
+            logger.warning(
+                f"GEMLocator: No file at all for {len(missing)} tracker(s) "
+                f"({', '.join(missing)}) — their EGEs cannot be matched."
+            )
 
         return resolved
 

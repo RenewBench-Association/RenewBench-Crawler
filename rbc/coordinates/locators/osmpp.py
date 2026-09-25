@@ -4,16 +4,20 @@ Source: GitHub package (https://github.com/open-energy-transition/osm-powerplant
 Data foundation: OSM data
 """
 
+from pathlib import Path
+
 import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.utils.country import normalize_locator_countries
+from rbc.coordinates.utils.resources import fetch_resource
 from rbc.energy.utils import load_df_from_file
 
 OSMPP_URL = (
     "https://raw.githubusercontent.com/open-energy-transition/osm-powerplants/main/"
 )
-OSMPP_CSV_URL = OSMPP_URL + "osm_global.csv.gz"
+OSMPP_CSV_FILE = "osm_global.csv.gz"
+OSMPP_CSV_URL = OSMPP_URL + OSMPP_CSV_FILE
 OSMPP_REJECTED_CSV_URL = OSMPP_URL + "osm_global_rejected_plants.csv.gz"
 
 
@@ -30,10 +34,23 @@ class OSMPPLocator:
             ]
     """
 
-    def __init__(self) -> None:
-        """Initializes OSMPPLocator."""
+    def __init__(self, cache_dir: Path | None = None, update: bool = False) -> None:
+        """Initializes OSMPPLocator.
+
+        Args:
+            cache_dir (Path | None, optional): Directory for the local copy of OSMPP's
+                CSV. Defaults to None, in which case the CSV is read from its URL.
+            update (bool, optional): Download a fresh copy of the CSV, even if one
+                exists locally. Defaults to False.
+        """
+        source: Path | str = OSMPP_CSV_URL
+        if cache_dir is not None:
+            cache_path = Path(cache_dir, OSMPP_CSV_FILE)
+            local = fetch_resource(OSMPP_CSV_URL, cache_path, update)
+            source = local if local is not None else OSMPP_CSV_URL
+
         # All energy entities in the world that "make the cut" according to osm-pp.
-        self.df: pd.DataFrame = load_df_from_file(OSMPP_CSV_URL)
+        self.df: pd.DataFrame = load_df_from_file(source)
         self.df = normalize_locator_countries(self.df)  # normalize the country values
 
         # # Energy entities that are filtered out by osm-pp due to missing data

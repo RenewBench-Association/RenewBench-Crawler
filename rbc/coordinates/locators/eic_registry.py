@@ -16,12 +16,13 @@ import pandas as pd
 from loguru import logger
 from rapidfuzz import fuzz, process
 
+from rbc.coordinates.utils.resources import fetch_resource
 from rbc.coordinates.utils.values import strip_str
 from rbc.energy.utils import RETRY_ERRORS, InvalidError, load_df_from_file
 
-EIC_DIRECTORY_URL = (
-    "https://eepublicdownloads.blob.core.windows.net/cio-lio/csv/W_eicCodes.csv"
-)
+EIC_URL = "https://eepublicdownloads.blob.core.windows.net/cio-lio/csv/"
+EIC_CSV_FILE = "W_eicCodes.csv"
+EIC_CSV_URL = EIC_URL + EIC_CSV_FILE
 
 # Column names in the W-type EIC CSV (semicolon-delimited, stable as of 2026)
 CODE_COL = "EicCode"
@@ -70,13 +71,15 @@ def extract_prefix(name: str | None) -> str:
 class EICCodeRegistry:
     """Name-enrichment locator backed by ENTSO-E's public EIC code registry.
 
-    Downloads the official EIC code publication on first use and optionally caches
-    it locally.  Provides EIC code → official display name lookups so that generic
-    ENTSO-E unit names (e.g. "Unit 10") can be replaced with their registered plant
-    name before fuzzy-matching against OSM.
+    Reads the official EIC code publication from the local copy in `cache_dir`
+    (downloaded on first use), or from its URL if no `cache_dir` was given. Provides
+    EIC code → official display name lookups so that generic ENTSO-E unit names
+    (e.g. "Unit 10") can be replaced with their registered plant name before
+    fuzzy-matching against OSM.
 
     Attributes:
-        cache_dir (Path | None): Directory used for caching the downloaded registry.
+        cache_dir (Path | None): Directory of the local copy of ENTSO-E's EIC CSV.
+        update (bool): Whether to download a fresh copy of the EIC CSV.
         df (pd.DataFrame): Parsed EIC code registry. Has the columns:
             [
                 'EicCode', 'EicDisplayName', 'EicLongName', 'EicParent',
@@ -104,14 +107,17 @@ class EICCodeRegistry:
         "match_method",
     )
 
-    def __init__(self, cache_dir: Path | None = None) -> None:
+    def __init__(self, cache_dir: Path | None = None, update: bool = False) -> None:
         """Initialize EICCodeRegistry.
 
         Args:
-            cache_dir (Path, optional): Directory for caching the downloaded registry.
-                Defaults to None, in which case no caching occurs.
+            cache_dir (Path, optional): Directory of the local copy of ENTSO-E's EIC
+                CSV. Defaults to None, in which case the CSV is read from its URL.
+            update (bool, optional): Download a fresh copy of the CSV, even if one
+                exists locally. Defaults to False.
         """
         self.cache_dir = cache_dir
+        self.update = update
         self.df: pd.DataFrame = pd.DataFrame()
         self._eic_index: dict[str, int] = {}
 
@@ -178,30 +184,20 @@ class EICCodeRegistry:
     # Setup helpers
     # ------------------------------------------------------------------
     def _load(self) -> None:
-        """Download and parse the ENTSO-E W-type EIC code CSV."""
-        cache_path = (
-            Path(self.cache_dir, "eic_directory.csv") if self.cache_dir else None
-        )
-
-        if cache_path and cache_path.exists():
-            logger.info(f"EICCodeRegistry: loading from cache '{cache_path}'")
-            self.df = load_df_from_file(cache_path, sep=";", dtype=str)
-            self._check_columns()
-            return
+        """Load the ENTSO-E W-type EIC code CSV (local copy, else from its URL)."""
+        source: Path | str = EIC_CSV_URL
+        if self.cache_dir is not None:
+            cache_path = Path(self.cache_dir, EIC_CSV_FILE)
+            local = fetch_resource(EIC_CSV_URL, cache_path, self.update)
+            source = local if local is not None else EIC_CSV_URL
 
         try:
-            logger.info("EICCodeRegistry: downloading ENTSO-E W-type EIC codes...")
-            self.df = load_df_from_file(EIC_DIRECTORY_URL, sep=";", dtype=str)
+            self.df = load_df_from_file(source, sep=";", dtype=str)
             self._check_columns()
-
-            if cache_path and not self.df.empty:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self.df.to_csv(cache_path, sep=";", index=False)
-                logger.info(f"EICCodeRegistry: cached to '{cache_path}'")
 
         except (*RETRY_ERRORS, InvalidError) as e:
             logger.warning(
-                f"EICCodeRegistry: download failed ({e}). "
+                f"EICCodeRegistry: loading '{source}' failed ({e}). "
                 "Name enrichment via EIC directory will be unavailable."
             )
 

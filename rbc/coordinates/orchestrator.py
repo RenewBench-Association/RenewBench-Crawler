@@ -54,7 +54,7 @@ def perform_coordinate_finding(
     shared = build_shared_resources(
         source=source,
         resources_dir=resources_dir,
-        osm_update=update,
+        update=update,
         osm_live=live,
     )
     logger.info(
@@ -73,6 +73,7 @@ def perform_coordinate_finding(
                 gem_loc=shared.gem_loc,
                 ppdb_loc=shared.ppdb_loc,
                 osm_loc=shared.osm_loc,
+                region_reg=shared.region_reg,
                 eic_reg=shared.eic_reg,
             )
             df = cl.run_pipeline()

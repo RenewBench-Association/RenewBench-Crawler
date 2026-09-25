@@ -12,6 +12,8 @@ import pytest
 from rbc.coordinates.locators.eic_registry import (
     CODE_COL,
     DISPLAYNAME_COL,
+    EIC_CSV_FILE,
+    EIC_CSV_URL,
     LONGNAME_COL,
     PARENT_COL,
     PARTY_COL,
@@ -21,6 +23,8 @@ from rbc.coordinates.locators.eic_registry import (
     extract_prefix,
 )
 from rbc.energy.utils import InvalidError
+
+EIC_MODULE = "rbc.coordinates.locators.eic_registry"
 
 MOCK_ROWS = [
     {
@@ -59,7 +63,7 @@ MOCK_ROWS = [
 # ----------------------------------
 @pytest.fixture
 def get_mock_registry(tmp_path: Path) -> Callable[..., EICCodeRegistry]:
-    """Factory building a real registry from a synthetic cached CSV (no network).
+    """Factory building a real registry from a synthetic local CSV (no network).
 
     Args:
         tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
@@ -71,7 +75,7 @@ def get_mock_registry(tmp_path: Path) -> Callable[..., EICCodeRegistry]:
     def _factory(
         rows: list[dict] | None = None, rename: dict | None = None
     ) -> EICCodeRegistry:
-        """Factory building a real registry from a synthetic cached CSV.
+        """Factory building a real registry from a synthetic local CSV.
 
         Args:
             rows (list[dict] | None): A list of dictionaries containing rows of data.
@@ -83,7 +87,7 @@ def get_mock_registry(tmp_path: Path) -> Callable[..., EICCodeRegistry]:
         df = pd.DataFrame(rows if rows is not None else MOCK_ROWS)
         if rename:
             df = df.rename(columns=rename)
-        df.to_csv(Path(tmp_path, "eic_directory.csv"), sep=";", index=False)
+        df.to_csv(Path(tmp_path, EIC_CSV_FILE), sep=";", index=False)
         return EICCodeRegistry(cache_dir=tmp_path)
 
     return _factory
@@ -137,20 +141,57 @@ class TestEICCodeRegistrySetup:
         assert reg.df.empty
         assert reg.lookup_full_row("11W-PU") == {}
 
-    def test_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Happy path: a downloaded registry is written to the cache for reuse.
+    def test_cache_dir_is_used_as_local_copy(self, tmp_path: Path) -> None:
+        """Happy path: the registry CSV is read from the given cache dir.
 
         Args:
             tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
-            monkeypatch (pytest.MonkeyPatch): Pytest-provided monkeypatch fixture.
         """
-        with patch(
-            "rbc.coordinates.locators.eic_registry.load_df_from_file",
-            return_value=pd.DataFrame(MOCK_ROWS),
+        local = Path(tmp_path, EIC_CSV_FILE)
+
+        with (
+            patch(f"{EIC_MODULE}.fetch_resource", return_value=local) as mock_fetch,
+            patch(
+                f"{EIC_MODULE}.load_df_from_file",
+                return_value=pd.DataFrame(MOCK_ROWS),
+            ) as mock_load,
         ):
-            reg = EICCodeRegistry(cache_dir=tmp_path)
-            assert len(reg.df) == len(MOCK_ROWS)
-            assert Path(tmp_path, "eic_directory.csv").exists()
+            reg = EICCodeRegistry(cache_dir=tmp_path, update=True)
+
+        assert len(reg.df) == len(MOCK_ROWS)
+        mock_fetch.assert_called_once_with(EIC_CSV_URL, local, True)
+        assert mock_load.call_args.args[0] == local
+
+    def test_without_cache_dir_the_url_is_read(self) -> None:
+        """Happy path: with no cache dir, the CSV is read straight from its URL."""
+        with (
+            patch(f"{EIC_MODULE}.fetch_resource") as mock_fetch,
+            patch(
+                f"{EIC_MODULE}.load_df_from_file",
+                return_value=pd.DataFrame(MOCK_ROWS),
+            ) as mock_load,
+        ):
+            EICCodeRegistry()
+
+        mock_fetch.assert_not_called()
+        assert mock_load.call_args.args[0] == EIC_CSV_URL
+
+    def test_failed_download_falls_back_to_url(self, tmp_path: Path) -> None:
+        """Failure path: if no local copy can be had, the CSV is read from its URL.
+
+        Args:
+            tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
+        """
+        with (
+            patch(f"{EIC_MODULE}.fetch_resource", return_value=None),
+            patch(
+                f"{EIC_MODULE}.load_df_from_file",
+                return_value=pd.DataFrame(MOCK_ROWS),
+            ) as mock_load,
+        ):
+            EICCodeRegistry(cache_dir=tmp_path)
+
+        assert mock_load.call_args.args[0] == EIC_CSV_URL
 
     @pytest.mark.parametrize(
         "error", [URLError("no route"), InvalidError("bad argument")]
@@ -164,8 +205,9 @@ class TestEICCodeRegistrySetup:
             tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
             error (URLError, InvalidError): Errors raised during load that should be caught.
         """
-        with patch(
-            "rbc.coordinates.locators.eic_registry.load_df_from_file", side_effect=error
+        with (
+            patch(f"{EIC_MODULE}.fetch_resource", return_value=None),
+            patch(f"{EIC_MODULE}.load_df_from_file", side_effect=error),
         ):
             reg = EICCodeRegistry(cache_dir=tmp_path)  # must not raise
             assert reg.df.empty

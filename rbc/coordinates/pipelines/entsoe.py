@@ -8,6 +8,7 @@ import pandas as pd
 import rbc.coordinates.locators.eic_registry as eic
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
+from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import SYSOP_CODE_COL, SYSOP_NAME_COL
@@ -46,6 +47,7 @@ class EntsoePipeline(BasePipeline):
         gem_loc: GEMLocator | None = None,
         ppm_loc: PPMLocator | None = None,
         osm_loc: OverpassLocator | None = None,
+        region_reg: RegionRegistry | None = None,
         eic_reg: EICCodeRegistry | None = None,
     ) -> None:
         """Initializes the child class for the Entsoe pipeline.
@@ -61,6 +63,8 @@ class EntsoePipeline(BasePipeline):
                 is built.
             osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse.
                 Defaults to None, in which case a new locator is built.
+            region_reg (RegionRegistry, optional): Pre-built region registry to reuse.
+                Defaults to None, in which case a new registry is built.
             eic_reg (EICCodeRegistry, optional): Pre-built EIC directory registry to reuse
                 and fetch the W_eicCodes.csv. Defaults to None, in which case a new
                 instance is constructed.
@@ -71,6 +75,7 @@ class EntsoePipeline(BasePipeline):
             gem_loc=gem_loc,
             ppdb_loc=ppm_loc,
             osm_loc=osm_loc,
+            region_reg=region_reg,
         )
 
         self.eic_reg: EICCodeRegistry | None = (
