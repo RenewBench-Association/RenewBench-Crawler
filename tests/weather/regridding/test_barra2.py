@@ -10,11 +10,7 @@ import pytest
 import xarray as xr
 
 from rbc.weather.barra.mappings import MODEL_CONFIG
-from rbc.weather.regridding.barra2 import (
-    Barra2Regridder,
-    _interval_center_shift,
-    _packed_encoding,
-)
+from rbc.weather.regridding.barra2 import Barra2Regridder, _packed_encoding
 from rbc.weather.utils import raw_data_dir
 
 
@@ -310,16 +306,28 @@ class TestLoadSourceChunk:
 
         assert set(result.data_vars) == {"ta_plev"}
 
-    def test_shifts_interval_statistic_onto_the_point_clock(
-        self, base_args: dict
+    @pytest.mark.parametrize(
+        "cell_methods",
+        [
+            "time: maximum (interval: 1 hour)",
+            # How BARRA2's older files (e.g. 2010) word the same thing.
+            "area: interpolation (method: bilinear) time: maximum (interval: 1H)",
+            "time: maximum",
+        ],
+        ids=["hour", "1H", "no_interval"],
+    )
+    def test_puts_interval_statistics_on_the_point_clock(
+        self, base_args: dict, cell_methods: str
     ) -> None:
-        """A "time: mean" variable's half-hour-offset timestamps shift to on-the-hour.
+        """A statistic's half-hour-offset timestamps land on the hour.
 
         BARRA2 labels interval statistics at the interval's center, half an
-        hour ahead of "time: point" variables.
+        hour ahead of "time: point" variables, and words that interval
+        differently across its own file generations.
 
         Args:
             base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
+            cell_methods (str): The variable's cell_methods attribute.
         """
         raw_dir = base_args["raw_dir"]
         _write_var_file(
@@ -328,7 +336,7 @@ class TestLoadSourceChunk:
             "tasmax",
             5.0,
             time=pd.to_datetime(["2025-01-01T00:30", "2025-01-01T01:30"]),
-            cell_methods="time: maximum (interval: 1 hour)",
+            cell_methods=cell_methods,
         )
 
         rg = Barra2Regridder(model="C2", **base_args)
@@ -338,34 +346,29 @@ class TestLoadSourceChunk:
             pd.to_datetime(["2025-01-01T00:00", "2025-01-01T01:00"])
         )
 
-
-# ----------------------------------
-# _interval_center_shift
-# ----------------------------------
-class TestIntervalCenterShift:
-    """Tests for barra2._interval_center_shift()."""
-
-    @pytest.mark.parametrize(
-        "cell_methods, expected",
-        [
-            ("time: point (interval: 1 hour)", None),
-            ("time: mean (interval: 1 hour)", -pd.Timedelta(minutes=30)),
-            # interval is read from the file, not assumed (the 20-minute product)
-            ("time: mean (interval: 20 minute)", -pd.Timedelta(minutes=10)),
-            ("time: mean", None),
-        ],
-        ids=["point", "mean_1h", "mean_20min", "no_interval"],
-    )
-    def test_shift_is_minus_half_the_interval(
-        self, cell_methods: str, expected: pd.Timedelta | None
-    ) -> None:
-        """Interval statistics shift back by half their interval; points don't move.
+    def test_aligns_onto_the_models_own_step(self, base_args: dict) -> None:
+        """The 20-minute product's statistics land on its 20-minute clock.
 
         Args:
-            cell_methods (str): The variable's cell_methods attribute.
-            expected (pd.Timedelta | None): Expected shift.
+            base_args (dict): Minimal valid keyword arguments for Barra2Regridder.
         """
-        assert _interval_center_shift(cell_methods) == expected
+        raw_dir = base_args["raw_dir"]
+        _write_var_file(
+            raw_dir,
+            "barra2_C2_20min_20min_202501_tasmax.nc",
+            "tasmax",
+            5.0,
+            model="C2_20min",
+            time=pd.to_datetime(["2025-01-01T00:10", "2025-01-01T00:30"]),
+            cell_methods="time: maximum (interval: 20 minute)",
+        )
+
+        rg = Barra2Regridder(model="C2_20min", **base_args)
+        result = rg._load_source_chunk((2025, "01"), "1.5m_maximum_temperature")
+
+        assert list(result["time"].values) == list(
+            pd.to_datetime(["2025-01-01T00:00", "2025-01-01T00:20"])
+        )
 
 
 # ----------------------------------

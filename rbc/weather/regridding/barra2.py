@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 
 from rbc.weather.barra.mappings import MODEL_CONFIG, VARIABLE_TO_SHORT_PARAM
@@ -41,36 +40,6 @@ _PRESSURE_LEVEL_BASES = ("ta", "ua", "va", "hus", "wa", "zg")
 # Matches a pressure-level or height-level file's variable name: base
 # letters, then digits, then an optional trailing "m" for height (metres).
 _LEVEL_CODE_RE = re.compile(r"^([a-zA-Z]+)(\d+)(m?)$")
-
-# Extracts the averaging/extremum window from a CF "cell_methods" attribute,
-# e.g. "time: mean (interval: 1 hour)" -> ("1", "hour").
-_CELL_METHODS_INTERVAL_RE = re.compile(r"interval:\s*(\d+)\s*(hour|minute)s?")
-
-
-def _interval_center_shift(cell_methods: str) -> pd.Timedelta | None:
-    """Return the shift that moves an interval statistic's timestamp onto BARRA2's clock.
-
-    Confirmed on real data: BARRA2 labels interval statistics (e.g.
-    "time: mean (interval: 1 hour)") at the interval's center -- half an
-    hour ahead of "time: point" (instantaneous) variables for the same
-    nominal timestamp. The interval length is read from `cell_methods`
-    itself rather than assumed, so this stays correct for any interval
-    length or BARRA2 model variant.
-
-    Args:
-        cell_methods (str): The variable's own `cell_methods` attribute.
-
-    Returns:
-        pd.Timedelta | None: Negative shift to add to `time`, or None if
-            `cell_methods` doesn't mark an interval statistic.
-    """
-    if "time: point" in cell_methods:
-        return None
-    match = _CELL_METHODS_INTERVAL_RE.search(cell_methods)
-    if match is None:
-        return None
-    value, unit = match.groups()
-    return -pd.Timedelta(**{f"{unit}s": int(value)}) / 2
 
 
 def _packed_encoding(encoding: dict) -> dict | None:
@@ -175,10 +144,10 @@ class Barra2Regridder(GridRegridder):
         pressure- and height-level variants of the same base code (e.g. "ta")
         to distinct canonical names.
 
-        Interval-statistic variables (e.g. "tasmax") have their timestamps
-        shifted from the interval's center onto the same on-the-hour clock
-        "time: point" variables use (see `_interval_center_shift()`), so
-        every BARRA2 variable shares one "time" axis in the output store.
+        Interval-statistic variables (e.g. "tasmax") are stamped half an
+        interval ahead of the "time: point" variables; every variable is put
+        back on one clock (see `_align_to_shared_clock()`), so they share the
+        output store's single "time" axis.
 
         Args:
             task (tuple): (year, month) task identifier.
@@ -197,7 +166,7 @@ class Barra2Regridder(GridRegridder):
             f = Path(self.source_dir, f"{prefix}{base}{suffix}")
             ds = xr.open_dataset(f, chunks={})[[base]]
             self._native_encodings[variable] = _packed_encoding(ds[base].encoding)
-            return self._align_to_shared_clock(ds, base)
+            return self._align_to_shared_clock(ds)
 
         # Pressure-/height-level: one file per level, the level set unknown
         # ahead of time. The anchored regex keeps base "ta" from matching
@@ -224,7 +193,7 @@ class Barra2Regridder(GridRegridder):
                 # and add_offset has headroom to spare, so the first file's
                 # packing covers the consolidated variable.
                 self._native_encodings[variable] = _packed_encoding(ds[code].encoding)
-            level_das.append((level, self._align_to_shared_clock(ds, code)[code]))
+            level_das.append((level, self._align_to_shared_clock(ds)[code]))
 
         # float64 matches the dtype sources use for physical coordinates;
         # built from Python numbers these would come out int64.
@@ -240,23 +209,27 @@ class Barra2Regridder(GridRegridder):
         native_name = f"{base}_{'plev' if kind == 'pressure' else 'height'}"
         return xr.Dataset({native_name: stacked})
 
-    @staticmethod
-    def _align_to_shared_clock(ds: xr.Dataset, code: str) -> xr.Dataset:
-        """Drop non-grid coordinates and put interval statistics on the shared clock.
+    def _align_to_shared_clock(self, ds: xr.Dataset) -> xr.Dataset:
+        """Drop non-grid coordinates and put every variable on one clock.
+
+        BARRA2 labels interval statistics at the interval's center (an hourly
+        mean at 00:30) where instantaneous variables sit on the hour, so the
+        two can't share a store's single time axis as they come. Flooring onto
+        this model's own step is what `expected_times()` reserves, and holds
+        however a file words its interval -- 2010 files say "interval: 1H"
+        where 2025 files say "interval: 1 hour".
 
         Args:
             ds (xr.Dataset): One raw file's single variable.
-            code (str): That variable's BARRA2 short code.
 
         Returns:
             xr.Dataset: Same data, keeping only time/lat/lon coordinates, with
-                interval statistics shifted onto the point-variable clock.
+                every timestamp on the shared clock.
         """
-        shift = _interval_center_shift(ds[code].attrs.get("cell_methods", ""))
         ds = ds.drop_vars(set(ds.coords) - {"time", "lat", "lon"})
-        if shift is not None:
-            ds = ds.assign_coords(time=ds["time"] + shift)
-        return ds
+        if "time" not in ds.coords:
+            return ds
+        return ds.assign_coords(time=ds["time"].dt.floor(self.time_freq))
 
     def _discover_variables(self, task: tuple) -> list[str]:
         """Return every canonical BARRA2 variable actually downloaded for one task.

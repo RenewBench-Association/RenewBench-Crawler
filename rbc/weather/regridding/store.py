@@ -599,8 +599,9 @@ class HealpixZarrWriter:
             xr.Dataset: The store's contents, re-opened if it was extended.
 
         Raises:
-            ValueError: If the new timestamps start before the store's last
-                one, which would need inserting rather than extending.
+            ValueError: If the new timestamps aren't on the store's axis, or
+                start before its last one -- either would need inserting
+                rather than extending.
         """
         existing_times = pd.Index(existing["time"].values)
         incoming_times = pd.Index(ds["time"].values)
@@ -609,6 +610,18 @@ class HealpixZarrWriter:
             return existing
 
         if len(existing_times) and new_times.min() < existing_times.max():
+            # Starting after the store's first stamp means these sit between
+            # the store's, not before them -- a source whose clock isn't the
+            # one `expected_times()` reserved reads as "out of order" otherwise.
+            if new_times.min() > existing_times.min():
+                raise ValueError(
+                    f"'{store_path}', task {task}: timestamps {new_times.min()}.."
+                    f"{new_times.max()} fall within the store's range "
+                    f"({existing_times.min()}..{existing_times.max()}) but aren't on "
+                    "its axis. Either this source doesn't stamp on the clock "
+                    "`expected_times()` reserved for it, or this month was never "
+                    "reserved."
+                )
             raise ValueError(
                 f"'{store_path}', task {task}: new timestamps start at "
                 f"{new_times.min()}, before the store's last ({existing_times.max()}). "

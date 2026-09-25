@@ -6,6 +6,7 @@ from pathlib import Path
 
 import dask.array as dsa
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -751,6 +752,27 @@ class TestSharedTimeAxis:
             writer.append(
                 "era5", "1h", (2025, 1), _named(_make_pyramid([4], 0, 3), "tas")
             )
+
+    def test_off_axis_timestamps_raise(self, writer: HealpixZarrWriter) -> None:
+        """Stamps that interleave with the store's are named as off its axis.
+
+        What a source stamping on a clock other than the reserved one looks
+        like -- not an out-of-order month, though it lands before the store's
+        last stamp just the same.
+
+        Args:
+            writer (HealpixZarrWriter): Writer under test.
+        """
+        hours = pd.date_range("2025-01-01", periods=3, freq="1h")
+        on_axis = _named(_make_pyramid([4], 0, 3), "tas")
+        on_axis[4] = on_axis[4].assign_coords(time=hours)
+        writer.append("era5", "1h", (2025, 1), on_axis)
+
+        off_axis = _named(_make_pyramid([4], 0, 2), "uas")
+        off_axis[4] = off_axis[4].assign_coords(time=hours[:2] + pd.Timedelta("30min"))
+
+        with pytest.raises(ValueError, match="aren't on"):
+            writer.append("era5", "1h", (2025, 1), off_axis)
 
 
 # ----------------------------------
