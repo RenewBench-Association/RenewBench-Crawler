@@ -43,23 +43,23 @@ By participating, you can help improve the project and make it even better :rais
 
      ```python
      def defined_function(param1: type, param2: type = default) -> type:
-        """Short Description.
+         """Short Description.
 
-        Long Description (if needed).
+         Long Description (if needed).
 
-        Args:
-           param1 (type): Description of param1.
-           param2 (type, optional): Description of param2. Defaults to default.
+         Args:
+            param1 (type): Description of param1.
+            param2 (type, optional): Description of param2. Defaults to default.
 
-        Returns:
-           type: Description of return value.
+         Returns:
+            type: Description of return value.
 
-        Raises:
-           ExceptionType: Description of when and why this exception might be raised.
+         Raises:
+            ExceptionType: Description of when and why this exception might be raised.
 
-        Example:
-           You can include examples in this section if required.
-        """
+         Example:
+            You can include examples in this section if required.
+         """
      ```
 
       When defining classes, make sure to include the attributes as shown below:
