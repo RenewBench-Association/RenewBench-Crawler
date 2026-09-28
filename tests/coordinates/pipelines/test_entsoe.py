@@ -211,7 +211,7 @@ class TestEntsoePipelineSteps:
             primary_name="Riverside Plant",
             norm_name="riverside plant",
             wt_string="riverside:1.0",
-            source="gem" if locator == "gem_loc" else "ppdb",
+            locator="gem" if locator == "gem_loc" else "ppdb",
             id="loc-1",
             fueltype="Nuclear",
             capacity=None,
@@ -229,7 +229,7 @@ class TestEntsoePipelineSteps:
 
         out = entsoe_pipeline._step_entsoe_match_by_id(df)
 
-        assert out.loc[0, f"{candidate.source}.match_method"] == expected
+        assert out.loc[0, f"{candidate.locator}.match_method"] == expected
 
     def test_load_and_dedupe_uses_code_col(
         self, entsoe_pipeline: EntsoePipeline

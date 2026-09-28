@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.match_schema import PPDB_ADAPTER, MatchCandidate
+from rbc.coordinates.match_schema import PPDB_SCHEMA, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.resources import fetch_resource
 from rbc.coordinates.utils.values import strip_str
@@ -159,4 +159,4 @@ class PPMLocator:
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
-        return MatchCandidate.primary_from_row(row, loc=PPDB_ADAPTER)
+        return MatchCandidate.primary_from_row(row, schema=PPDB_SCHEMA)

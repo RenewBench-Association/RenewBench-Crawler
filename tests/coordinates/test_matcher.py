@@ -1,5 +1,5 @@
 # tests/coordinates/test_matcher.py
-"""Tests for the matcher's NameMatcher and coordinate finding source Adapter classes."""
+"""Tests for the matcher's NameMatcher and the locators' column-mapping schemas."""
 
 from types import SimpleNamespace
 from typing import cast
@@ -12,9 +12,11 @@ from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.map import MATCH_METHOD_COLORS
 from rbc.coordinates.match_schema import (
-    GEM_ADAPTER,
-    OSM_ADAPTER,
-    PPDB_ADAPTER,
+    GEM_SCHEMA,
+    LOCATOR_RELIABILITY,
+    LOCATOR_SCHEMAS,
+    OSM_SCHEMA,
+    PPDB_SCHEMA,
     MatchCandidate,
 )
 from rbc.coordinates.matcher import NameMatcher
@@ -29,7 +31,7 @@ def gem_df() -> pd.DataFrame:
 
     Returns:
         pd.DataFrame: A single Estonian row with a comma-joined other_names
-            value, to verify GEM_ADAPTER's other_names_col handling.
+            value, to verify GEM_SCHEMA's other_names_col handling.
     """
     return pd.DataFrame(
         [
@@ -112,7 +114,7 @@ def osm_df() -> pd.DataFrame:
     """Synthetic OSM candidate row with no Country column.
 
     Returns:
-        pd.DataFrame: A single row, to verify OSM_ADAPTER's country_col=None
+        pd.DataFrame: A single row, to verify OSM_SCHEMA's country_col=None
             handling (relies on the matrix-level country filter instead).
     """
     return pd.DataFrame(
@@ -157,16 +159,16 @@ def matcher(
 # ----------------------------------
 # Tests
 # ----------------------------------
-class TestAdapters:
-    """Tests for the coordinate / location finding source Adapter classes."""
+class TestLocatorSchemas:
+    """Tests for building candidates through each locator's column mapping."""
 
-    def test_gem_adapter(self, matcher: NameMatcher) -> None:
-        """Happy path for GEM_ADAPTER, where other_names are made their own candidates.
+    def test_gem_schema(self, matcher: NameMatcher) -> None:
+        """Happy path for GEM_SCHEMA, where other_names are made their own candidates.
 
         Args:
             matcher (NameMatcher): Matcher scoped to Estonia from the `matcher` fixture.
         """
-        candidates = matcher._build_candidates(GEM_ADAPTER)
+        candidates = matcher._build_candidates(GEM_SCHEMA)
         assert len(candidates) == 3
         assert all(c.ege_key == ("gem", "gem-1") for c in candidates)
         assert all(c.primary_name == "Auvere" for c in candidates)
@@ -181,23 +183,23 @@ class TestAdapters:
             "auvere ej",
         ]
 
-    def test_ppdb_adapter(self, matcher: NameMatcher) -> None:
-        """Happy path for PPDB_ADAPTER with country and coordinate filters.
+    def test_ppdb_schema(self, matcher: NameMatcher) -> None:
+        """Happy path for PPDB_SCHEMA with country and coordinate filters.
 
         Args:
             matcher (NameMatcher): Matcher scoped to Estonia, from the `matcher` fixture.
         """
-        candidates = matcher._build_candidates(PPDB_ADAPTER)
+        candidates = matcher._build_candidates(PPDB_SCHEMA)
 
         assert len(candidates) == 1  # only matching country = Estonia
         c = candidates[0]
         assert c.name == "Auvere Power Plant"
-        assert c.source == "ppdb"
+        assert c.locator == "ppdb"
         assert c.id == "ppdb-ppm-1"
         assert c.country == "Estonia"
 
-    def test_ppdb_adapter_filter_target_country(self, ppdb_df: pd.DataFrame) -> None:
-        """Happy path: PPDB_ADAPTER keeps the row matching the matcher's own country.
+    def test_ppdb_schema_filter_target_country(self, ppdb_df: pd.DataFrame) -> None:
+        """Happy path: PPDB_SCHEMA keeps the row matching the matcher's own country.
 
         The same fixture yields the Estonian row for an Estonian matcher (above) and the
         German one here, so the filter is shown to follow the target rather than the data.
@@ -209,31 +211,79 @@ class TestAdapters:
             country="Germany",
             ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
         )
-        candidates = m._build_candidates(PPDB_ADAPTER)
+        candidates = m._build_candidates(PPDB_SCHEMA)
 
         assert len(candidates) == 1
         assert candidates[0].id == "ppdb-ppm-2"
         assert candidates[0].country == "Germany"
 
-    def test_osm_adapter(self, matcher: NameMatcher) -> None:
-        """Happy path for OSM_ADAPTER with no country column.
+    def test_osm_schema(self, matcher: NameMatcher) -> None:
+        """Happy path for OSM_SCHEMA with no country column.
 
         Args:
             matcher (NameMatcher): Matcher scoped to Estonia from the `matcher` fixture.
         """
-        candidates = matcher._build_candidates(OSM_ADAPTER)
+        candidates = matcher._build_candidates(OSM_SCHEMA)
         assert len(candidates) == 1
         c = candidates[0]
-        assert c.source == "osm"
+        assert c.locator == "osm"
         assert c.id == "osm-1"
         assert c.country is None
+
+
+class TestLocatorReliability:
+    """Tests for the reliability order that breaks ties between equal scores."""
+
+    def test_locators_rank_gem_over_ppdb_over_osm(self) -> None:
+        """Happy path: GEM outranks the power plant databases, which outrank raw OSM.
+
+        The order decides which candidate wins when two locators score the same (s.
+        NameMatcher.match), and it is what LOCATOR_SCHEMAS is sorted by.
+        """
+        assert (
+            LOCATOR_RELIABILITY["gem"]
+            > LOCATOR_RELIABILITY["ppdb"]
+            > LOCATOR_RELIABILITY["osm"]
+        )
+        assert [s.locator for s in LOCATOR_SCHEMAS] == ["gem", "ppdb", "osm"]
 
 
 class TestMatchCandidateConstruction:
     """Tests for MatchCandidate's factory methods (`from_row`, `primary_from_row`).
 
-    Happy path for `from_row` is already indirectly covered by TestAdapters.
+    Happy path for `from_row` is already indirectly covered by TestLocatorSchemas.
     """
+
+    @pytest.mark.parametrize(
+        "schema, frame, expected",
+        [("gem", "gem_df", "gem"), ("ppdb", "ppdb_df", "ppdb")],
+    )
+    def test_to_dict_prefixes_columns_with_its_own_locator(
+        self,
+        request: pytest.FixtureRequest,
+        schema: str,
+        frame: str,
+        expected: str,
+    ) -> None:
+        """Happy path: a candidate publishes its columns under its own locator's name.
+
+        The locator field never becomes a column of its own: it names the others,
+        which is what keeps the pipelines' `<loc>.*` columns apart.
+
+        Args:
+            request (pytest.FixtureRequest): Pytest-provided request to get the fixture.
+            schema (str): Which locator's schema builds the candidate ("gem"/"ppdb").
+            frame (str): Name of the locator's dataframe fixture.
+            expected (str): The locator name every column must be prefixed with.
+        """
+        schemas = {"gem": GEM_SCHEMA, "ppdb": PPDB_SCHEMA}
+        row = request.getfixturevalue(frame).iloc[0]
+        candidate = MatchCandidate.from_row(row, schemas[schema])[0]
+
+        cols = candidate.to_dict()
+        assert cols
+        assert all(col.startswith(f"{expected}.") for col in cols)
+        assert f"{expected}.locator" not in cols  # internal, never published
 
     def test_from_row_no_name_returns_empty(self, gem_df: pd.DataFrame) -> None:
         """Failure path: from_row returns [] when the row has no primary name.
@@ -243,7 +293,7 @@ class TestMatchCandidateConstruction:
         """
         row = gem_df.iloc[0].copy()
         row["plant_name"] = None
-        assert MatchCandidate.from_row(row, loc=GEM_ADAPTER) == []
+        assert MatchCandidate.from_row(row, schema=GEM_SCHEMA) == []
 
     def test_from_row_missing_id_skipped(self, gem_df: pd.DataFrame) -> None:
         """Failure path: from_row skips and warns for a row whose locator id is missing.
@@ -258,7 +308,7 @@ class TestMatchCandidateConstruction:
         try:
             row = gem_df.iloc[0].copy()
             row["gem_unit_id"] = None
-            assert MatchCandidate.from_row(row, loc=GEM_ADAPTER) == []
+            assert MatchCandidate.from_row(row, schema=GEM_SCHEMA) == []
             assert len(captured_logs) == 1
             assert "missing gem_unit_id" in captured_logs[0]["message"]
             assert "Auvere" in captured_logs[0]["message"]
@@ -271,7 +321,7 @@ class TestMatchCandidateConstruction:
         Args:
             gem_df (pd.DataFrame): Synthetic GEM rows (here using first row = Estonia).
         """
-        candidate = MatchCandidate.primary_from_row(gem_df.iloc[0], loc=GEM_ADAPTER)
+        candidate = MatchCandidate.primary_from_row(gem_df.iloc[0], schema=GEM_SCHEMA)
         assert candidate is not None
         assert candidate.name == "Auvere"
         assert candidate.primary_name == "Auvere"
@@ -285,28 +335,28 @@ class TestMatchCandidateConstruction:
         """
         row = gem_df.iloc[0].copy()
         row["plant_name"] = None
-        assert MatchCandidate.primary_from_row(row, loc=GEM_ADAPTER) is None
+        assert MatchCandidate.primary_from_row(row, schema=GEM_SCHEMA) is None
 
 
 class TestNameMatcherCachedProperties:
     """Tests for NameMatcher cached properties."""
 
     def test_candidate_index(self, matcher: NameMatcher) -> None:
-        """Happy path: candidates based on all sources and cached property builds only once.
+        """Happy path: candidates from every locator, and the property builds only once.
 
         Args:
             matcher (NameMatcher): Matcher scoped to Estonia from the `matcher` fixture.
         """
         index = matcher._candidate_index
         all_candidates = [c for candidates in index.values() for c in candidates]
-        sources = {c.source for c in all_candidates}
+        locators = {c.locator for c in all_candidates}
 
-        assert sources == {"ppdb", "gem", "osm"}
+        assert locators == {"ppdb", "gem", "osm"}
         assert index is matcher._candidate_index
         assert "_candidate_index" in matcher.__dict__  # cached on the instance
 
     def test_candidate_index_empty_is_still_cached(self) -> None:
-        """Failure path: If sources yield nothing, an empty index is cached (no rebuild)."""
+        """Failure path: If locators yield nothing, an empty index is cached."""
         m = NameMatcher(country="Estonia")
         assert m._candidate_index == {}
         assert "_candidate_index" in m.__dict__
@@ -426,5 +476,5 @@ class TestNameMatcherHelpers:
     def test_build_candidates_missing_locator_returns_empty(self) -> None:
         """Failure path: A matcher with no locator wired up returns no candidates."""
         m = NameMatcher(country="Estonia")
-        assert m._build_candidates(PPDB_ADAPTER) == []
-        assert m._build_candidates(GEM_ADAPTER) == []
+        assert m._build_candidates(PPDB_SCHEMA) == []
+        assert m._build_candidates(GEM_SCHEMA) == []

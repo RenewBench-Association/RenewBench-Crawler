@@ -663,7 +663,7 @@ class BasePipeline:
 
             if result.matched and result.candidate:
                 candidate = result.candidate
-                locator = candidate.source
+                locator = candidate.locator
 
                 if locator in LOCATOR_RELIABILITY:
                     self._write_candidate_into_df(
@@ -880,8 +880,8 @@ class BasePipeline:
         for field, value in candidate.to_dict().items():
             df.at[idx, f"{field}"] = value
 
-        df.at[idx, f"{candidate.source}.match_score"] = match_score
-        df.at[idx, f"{candidate.source}.match_method"] = match_method
+        df.at[idx, f"{candidate.locator}.match_score"] = match_score
+        df.at[idx, f"{candidate.locator}.match_method"] = match_method
 
     def _add_alt_names(self, df: pd.DataFrame, matcher: NameMatcher) -> None:
         """Add alternative names to matcher. Overwritable by child pipeline (i.e. entsoe).

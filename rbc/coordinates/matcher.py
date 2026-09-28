@@ -22,9 +22,9 @@ from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.match_schema import (
-    LOCATOR_ADAPTERS,
     LOCATOR_RELIABILITY,
-    LocatorAdapter,
+    LOCATOR_SCHEMAS,
+    LocatorSchema,
     MatchCandidate,
     MatchResult,
 )
@@ -272,13 +272,13 @@ class NameMatcher:
 
         # --- Postprocess: Define all identified matches
         # 1. Sort matches:
-        # winners: first by score (highest first), then by adapter (most reliable first)
+        # winners: first by score (highest first), then by locator (most reliable first)
         winning_matches.sort(
-            key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].source, 0)),
+            key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].locator, 0)),
             reverse=True,
         )
         fallback_matches.sort(
-            key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].source, 0)),
+            key=lambda x: (x[1], LOCATOR_RELIABILITY.get(x[0].locator, 0)),
             reverse=True,
         )
         # all: only by score (highest first)
@@ -336,11 +336,11 @@ class NameMatcher:
         """
         index: dict[str, list[MatchCandidate]] = {}
 
-        # Collect candidates from all available locators via their adapters
+        # Collect candidates from all available locators via their schemas
         candidates: list[MatchCandidate] = []
 
-        for adapter in LOCATOR_ADAPTERS:  # in order of locator reliability!
-            candidates.extend(self._build_candidates(adapter))
+        for schema in LOCATOR_SCHEMAS:  # in order of locator reliability!
+            candidates.extend(self._build_candidates(schema))
 
         # Add candidates to index by normalized name
         for candidate in candidates:
@@ -355,20 +355,20 @@ class NameMatcher:
     # ---------------------------------------------------------------------------
     # Helper methods
     # ---------------------------------------------------------------------------
-    def _build_candidates(self, adapter: LocatorAdapter) -> list[MatchCandidate]:
-        """Build candidates from a locator source depending on its ``SourceAdapter`` config.
+    def _build_candidates(self, schema: LocatorSchema) -> list[MatchCandidate]:
+        """Build candidates from a locator, mapping its columns via its LocatorSchema.
 
         Returns valid candidates by including only those that:
         - pass the country filter (if a country & location source country column are given)
         - have location coordinates (lat/lon)
 
         Args:
-            adapter (LocatorAdapter): The locator source adapter to build candidates from.
+            schema (LocatorSchema): Column mapping of the locator to build from.
 
         Returns:
             list[MatchCandidate]: A list of valid candidates as MatchCandidate objects.
         """
-        df = adapter.get_df(self)
+        df = schema.get_df(self)
         if df is None or len(df) == 0:
             return []
 
@@ -378,21 +378,21 @@ class NameMatcher:
             return []
 
         # Filter by country if specified and the source has a country column (OSM has none)
-        if self.target_country and adapter.country_col:
+        if self.target_country and schema.country_col:
             df = df[
-                df[adapter.country_col].astype(str).str.lower()
+                df[schema.country_col].astype(str).str.lower()
                 == str(self.norm_target_country).lower()
             ]
 
         # Filter to only rows with coordinates
-        df = df.dropna(subset=[adapter.lat_col, adapter.lon_col])
+        df = df.dropna(subset=[schema.lat_col, schema.lon_col])
 
         if len(df) == 0:
             return []
 
         candidates = []
         for _, row in df.iterrows():
-            candidates.extend(MatchCandidate.from_row(row, adapter, self.tok))
+            candidates.extend(MatchCandidate.from_row(row, schema, self.tok))
 
         return candidates
 

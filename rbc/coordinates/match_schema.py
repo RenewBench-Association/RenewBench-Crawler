@@ -14,20 +14,20 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class LocatorAdapter:
-    """Column-mapping config that lets one candidate builder serve any locator source.
+class LocatorSchema:
+    """Column-mapping config that lets one candidate builder serve any locator.
 
-    Replaces hardcoded candidate building per locator source with a single generic builder
+    Replaces hardcoded candidate building per locator with a single generic builder
     (see ``NameMatcher._build_candidates``).
     """
 
-    source: str  # locator name 'ppdb' (= ppm/osmpp), 'gem', 'osm'
+    locator: str  # locator name 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     reliability: int  # reliability score for name matching (the higher, the better!)
     get_df: Callable[["NameMatcher"], pd.DataFrame | None]
     name_col: str
     other_names_col: str | None  # comma-separated alternative names (only GEM)
     id_col: str
-    country_col: str | None  # None if the source has no country column (e.g. OSM)
+    country_col: str | None  # None if the locator has no country column (e.g. OSM)
     status_col: str | None
     url_col: str | None
     extra_cols: tuple[str, ...]  # extra columns of data to propagate (only OSM)
@@ -37,8 +37,8 @@ class LocatorAdapter:
     lon_col: str = "lon"
 
 
-GEM_ADAPTER = LocatorAdapter(
-    source="gem",
+GEM_SCHEMA = LocatorSchema(
+    locator="gem",
     reliability=3,
     get_df=lambda m: getattr(m.gem_locator, "df", None),
     name_col="plant_name",
@@ -50,8 +50,8 @@ GEM_ADAPTER = LocatorAdapter(
     extra_cols=(),
 )
 
-PPDB_ADAPTER = LocatorAdapter(
-    source="ppdb",
+PPDB_SCHEMA = LocatorSchema(
+    locator="ppdb",
     reliability=2,
     get_df=lambda m: getattr(m.ppdb_locator, "df", None),
     name_col="Name",
@@ -63,8 +63,8 @@ PPDB_ADAPTER = LocatorAdapter(
     extra_cols=(),
 )
 
-OSM_ADAPTER = LocatorAdapter(
-    source="osm",
+OSM_SCHEMA = LocatorSchema(
+    locator="osm",
     reliability=1,
     get_df=lambda m: m.osm_df,  # duplicated rows for each alt name (s. osm_api.py)
     name_col="Name",
@@ -76,12 +76,12 @@ OSM_ADAPTER = LocatorAdapter(
     extra_cols=("OSM_Type",),
 )
 
-# locator adapters ordered by their reliability score
-LOCATOR_ADAPTERS = sorted(
-    [GEM_ADAPTER, PPDB_ADAPTER, OSM_ADAPTER], key=lambda a: a.reliability, reverse=True
+# locator schemas ordered by their reliability score
+LOCATOR_SCHEMAS = sorted(
+    [GEM_SCHEMA, PPDB_SCHEMA, OSM_SCHEMA], key=lambda s: s.reliability, reverse=True
 )
 LOCATOR_RELIABILITY: dict[str, int] = {
-    a.source: a.reliability for a in LOCATOR_ADAPTERS
+    s.locator: s.reliability for s in LOCATOR_SCHEMAS
 }
 
 
@@ -100,7 +100,7 @@ class MatchCandidate:
     primary_name: str  # authoritative name of the EGE
     norm_name: str = field(metadata={"internal": True})  # tok str of THIS variant
     wt_string: str = field(metadata={"internal": True})  # WeightedTokens str of THIS
-    source: str = field(metadata={"internal": True})  # 'ppdb' (= ppm/osmpp)/'gem'/'osm'
+    locator: str = field(metadata={"internal": True})  # 'ppdb' (=ppm/osmpp)/'gem'/'osm'
     id: str  # the EGE's id in its own locator (e.g. GEM unit id, OSM id)
     fueltype: str | None
     capacity: str | None
@@ -118,39 +118,41 @@ class MatchCandidate:
         Returns:
             tuple[str, str]: Identity key for the physical EGE.
         """
-        return self.source, self.id
+        return self.locator, self.id
 
     @classmethod
     def from_row(
-        cls, row: pd.Series, loc: LocatorAdapter, tok: NameTokenizer | None = None
+        cls, row: pd.Series, schema: LocatorSchema, tok: NameTokenizer | None = None
     ) -> list["MatchCandidate"]:
         """Builds one MatchCandidate per name variant (primary + other_names).
 
-        Uses the provided locator row and the adapter's column mapping to get the relevant
+        Uses the locator row and its schema's column mapping to get the relevant
         information. Uses the tokenizer for name normalization (req for later processing).
 
         Args:
             row (pd.Series): Row of a dataframe.
-            loc (LocatorAdapter): Adapter of the locator.
+            schema (LocatorSchema): Column mapping of the locator.
             tok (NameTokenizer): NameTokenizer for name normalization, if required.
 
         Returns:
             list[MatchCandidate]: List of MatchCandidates for the row with primary-name
                 candidate first, then one per other_name. Empty list if no primary name.
         """
-        primary_name = strip_str(row[loc.name_col])
+        locator = schema.locator
+
+        primary_name = strip_str(row[schema.name_col])
         if primary_name is None:
             return []
 
-        loc_id = strip_str(row.get(loc.id_col))
+        loc_id = strip_str(row.get(schema.id_col))
         if loc_id is None:
             logger.warning(
-                f"Skipping {loc.source} row with missing {loc.id_col} for "
+                f"Skipping {locator} row with missing {schema.id_col} for "
                 f"{primary_name}"
             )
             return []
 
-        other_names = row.get(loc.other_names_col, "")
+        other_names = row.get(schema.other_names_col, "")
         if not isinstance(other_names, str):  # GEM's other_names can be NAType objects
             other_names = ""
 
@@ -158,20 +160,19 @@ class MatchCandidate:
             n for n in (strip_str(n) for n in other_names.split(",")) if n is not None
         ]
 
-        source = loc.source
-        fueltype = strip_str(row[loc.fueltype_col])
-        capacity = strip_str(row.get(loc.capacity_col))
-        status = strip_str(row.get(loc.status_col))
-        url = strip_str(row.get(loc.url_col))
-        country = strip_str(row.get(loc.country_col))
-        extras = {c: strip_str(row.get(c)) for c in loc.extra_cols}
+        fueltype = strip_str(row[schema.fueltype_col])
+        capacity = strip_str(row.get(schema.capacity_col))
+        status = strip_str(row.get(schema.status_col))
+        url = strip_str(row.get(schema.url_col))
+        country = strip_str(row.get(schema.country_col))
+        extras = {c: strip_str(row.get(c)) for c in schema.extra_cols}
 
         try:
-            lat = float(row[loc.lat_col])
-            lon = float(row[loc.lon_col])
+            lat = float(row[schema.lat_col])
+            lon = float(row[schema.lon_col])
         except (ValueError, TypeError):
             logger.warning(
-                f"Skipping {loc.source}'s '{primary_name}' due to missing lat/lon values!"
+                f"Skipping {locator}'s '{primary_name}' due to missing lat/lon!"
             )
             return []
 
@@ -185,7 +186,7 @@ class MatchCandidate:
                     norm_name=tok_name,
                     wt_string=wt_name,
                     primary_name=primary_name,
-                    source=source,
+                    locator=locator,
                     id=loc_id,
                     fueltype=fueltype,
                     capacity=capacity,
@@ -202,18 +203,18 @@ class MatchCandidate:
 
     @classmethod
     def primary_from_row(
-        cls, row: pd.Series, loc: LocatorAdapter
+        cls, row: pd.Series, schema: LocatorSchema
     ) -> "MatchCandidate | None":
-        """Get the primary match candidate from a locator row with the adapter's col mapping.
+        """Get the primary match candidate from a locator row via its column mapping.
 
         Args:
             row (pd.Series): Row of a dataframe.
-            loc (LocatorAdapter): Adapter of the locator.
+            schema (LocatorSchema): Column mapping of the locator.
 
         Returns:
             MatchCandidate | None: MatchCandidate if the row has a primary name, else None.
         """
-        candidates = cls.from_row(row, loc)
+        candidates = cls.from_row(row, schema)
         return candidates[0] if candidates else None
 
     def to_dict(self) -> dict[str, object]:
@@ -234,14 +235,14 @@ class MatchCandidate:
             if val is None:
                 continue
 
-            cols[f"{self.source}.{f.name}"] = val
+            cols[f"{self.locator}.{f.name}"] = val
             if f.name == "name":
-                cols[f"{self.source}.primary_name"] = (
+                cols[f"{self.locator}.primary_name"] = (
                     self.primary_name if self.primary_name != self.name else None
                 )
 
         extras = {
-            f"{self.source}.{key.removeprefix('OSM_').lower()}": val
+            f"{self.locator}.{key.removeprefix('OSM_').lower()}": val
             for key, val in self.extras.items()
             if val is not None
         }
@@ -286,7 +287,7 @@ class MatchResult:
         list_of_dicts = []
         if self.top_matches:
             for cand, score in self.top_matches:
-                locator = cand.source
+                locator = cand.locator
                 # extras (e.g. OSM element type) and country are noise for review
                 extras = {
                     f"{locator}.{k.removeprefix('OSM_').lower()}" for k in cand.extras

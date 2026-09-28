@@ -24,7 +24,7 @@ import requests
 import yaml
 from loguru import logger
 
-from rbc.coordinates.match_schema import GEM_ADAPTER, MatchCandidate
+from rbc.coordinates.match_schema import GEM_SCHEMA, MatchCandidate
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.resources import fetch_resource
 from rbc.coordinates.utils.values import strip_str
@@ -567,4 +567,4 @@ class GEMLocator:
         if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
             return None  # match found but no coordinates — not useful
 
-        return MatchCandidate.primary_from_row(row, loc=GEM_ADAPTER)
+        return MatchCandidate.primary_from_row(row, schema=GEM_SCHEMA)

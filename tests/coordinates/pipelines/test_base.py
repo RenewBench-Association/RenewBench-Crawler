@@ -54,7 +54,7 @@ def _make_candidate() -> MatchCandidate:
         primary_name="Plant A",
         norm_name="plant a",
         wt_string="plant:1.0",
-        source="gem",
+        locator="gem",
         id="gem-1",
         fueltype="hydro",
         capacity=None,
