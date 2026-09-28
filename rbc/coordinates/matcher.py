@@ -17,10 +17,7 @@ from functools import cached_property
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osmpp import OSMPPLocator
-from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.match_schema import (
     LOCATOR_RELIABILITY,
     LOCATOR_SCHEMAS,
@@ -75,8 +72,8 @@ class NameMatcher:
 
     Example:
         >>> matcher = NameMatcher(
-        ...     country="Germany", gem_locator=gem_loc, ppdb_locator=ppm_loc
-        ...     osm_df=osm_df, tok=tok, style_policy="code"
+        ...     country="Germany", gem_df=gem_loc.df, ppdb_df=ppm_loc.df, osm_df=osm_df,
+        ...     region_reg=region_reg, tok=tok, style_policy="code"
         ... )
         >>> result = matcher.match("Enguri Unit 5",target_fueltype="hydro")
         >>> if result.matched:
@@ -87,8 +84,8 @@ class NameMatcher:
     def __init__(
         self,
         country: str,
-        gem_locator: GEMLocator | None = None,
-        ppdb_locator: PPMLocator | OSMPPLocator | None = None,
+        gem_df: pd.DataFrame | None = None,
+        ppdb_df: pd.DataFrame | None = None,
         osm_df: pd.DataFrame | None = None,
         region_reg: RegionRegistry | None = None,
         tok: NameTokenizer | None = None,
@@ -99,11 +96,12 @@ class NameMatcher:
         Args:
             country (str): Target country name for hard filtering (prevents cross-country
                 matches).
-            gem_locator (GEMLocator | None): GEM locator instance for GEM candidates.
-                Defaults to None.
-            ppdb_locator (PPMLocator | OSMPPLocator | None): PPMLocator or OSMPPLocator
-                locator for power plant database candidates. Defaults to None.
-            osm_df (df | None): DataFrame with OSM power plant data.
+            gem_df (pd.DataFrame | None): GEM's candidate rows. Defaults to None, in
+                which case GEM contributes no candidates.
+            ppdb_df (pd.DataFrame | None): Candidate rows of the power plant database
+                (PPM or OSMPP). Defaults to None.
+            osm_df (pd.DataFrame | None): OSM's candidate rows, already sliced to the
+                country (Overpass is queried per country). Defaults to None.
             region_reg (RegionRegistry | None): Region registry to check a candidate's
                 coordinate against the target's region with. Defaults to None, in which
                 case a new registry is created (which reads its data from the web).
@@ -116,10 +114,12 @@ class NameMatcher:
         self.target_country = country
         self.norm_target_country = normalize_operator_country_name(country)
 
-        # Data sources
-        self.gem_locator: GEMLocator | None = gem_locator
-        self.ppdb_locator: PPMLocator | OSMPPLocator | None = ppdb_locator
-        self.osm_df: pd.DataFrame | None = osm_df
+        # Candidate rows per locator, keyed as that locator's LocatorSchema names it
+        self.candidate_dfs: dict[str, pd.DataFrame | None] = {
+            "gem": gem_df,
+            "ppdb": ppdb_df,
+            "osm": osm_df,
+        }
 
         # Region lookup (reads its data lazily, on the first target that names a region)
         self.region_reg: RegionRegistry = (
@@ -359,7 +359,7 @@ class NameMatcher:
         """Build candidates from a locator, mapping its columns via its LocatorSchema.
 
         Returns valid candidates by including only those that:
-        - pass the country filter (if a country & location source country column are given)
+        - pass the country filter (if a country & the locator's country col are given)
         - have location coordinates (lat/lon)
 
         Args:
@@ -368,16 +368,13 @@ class NameMatcher:
         Returns:
             list[MatchCandidate]: A list of valid candidates as MatchCandidate objects.
         """
-        df = schema.get_df(self)
+        df = self.candidate_dfs.get(schema.locator)
         if df is None or len(df) == 0:
             return []
 
-        try:
-            df = df.copy()
-        except AttributeError:
-            return []
+        df = df.copy()
 
-        # Filter by country if specified and the source has a country column (OSM has none)
+        # Filter by country if given and the locator has a country column (OSM has none)
         if self.target_country and schema.country_col:
             df = df[
                 df[schema.country_col].astype(str).str.lower()

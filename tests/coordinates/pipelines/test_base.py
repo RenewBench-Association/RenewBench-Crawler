@@ -3,12 +3,15 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
+from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.natural_earth import RegionRegistry
+from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.mappings import (
     OPERATOR_COLUMNS,
     OPERATOR_METADATA,
@@ -161,6 +164,34 @@ class TestBasePipelineFuzzyMatch:
             pipeline._step_fuzzy_match(pd.DataFrame())
 
         assert mock_matcher.call_args.kwargs["region_reg"] is region_reg
+
+    def test_matcher_gets_the_locators_candidate_frames(
+        self, eia_csv_dir: Path
+    ) -> None:
+        """Happy path: the pipeline hands each locator's rows to the matcher.
+
+        The matcher takes frames rather than locator objects, so a locator whose frame
+        is not passed on contributes no candidates at all -- and quietly, since None is
+        a valid argument.
+
+        Args:
+            eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
+        """
+        gem_frame = pd.DataFrame([{"plant_name": "Plant A"}])
+        ppdb_frame = pd.DataFrame([{"Name": "Plant B"}])
+        pipeline = _DummyPipeline(
+            input_dir=eia_csv_dir,
+            output_dir=None,
+            gem_loc=cast(GEMLocator, SimpleNamespace(df=gem_frame)),
+            ppdb_loc=cast(OSMPPLocator, SimpleNamespace(df=ppdb_frame)),
+        )
+
+        with patch(f"{BASE_MODULE}.NameMatcher") as mock_matcher:
+            pipeline._step_fuzzy_match(pd.DataFrame())
+
+        kwargs = mock_matcher.call_args.kwargs
+        assert kwargs["gem_df"] is gem_frame
+        assert kwargs["ppdb_df"] is ppdb_frame
 
     @pytest.mark.parametrize("via", ["name_exact", "name_fuzzy"])
     def test_match_method_names_the_approach(self, eia_csv_dir: Path, via: str) -> None:

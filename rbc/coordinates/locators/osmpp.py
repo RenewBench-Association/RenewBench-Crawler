@@ -57,21 +57,3 @@ class OSMPPLocator:
         # self.df_rejected: pd.DataFrame = load_df_from_file(OSMPP_REJECTED_CSV_URL)
         # self.df_rejected = normalize_locator_countries(self.df_rejected)
         logger.info(f"OSMPPLocator initialized: {len(self.df)} entries")
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-    def get_country_df(self, country: str) -> pd.DataFrame:
-        """Gets a df of all EGEs in a given country, sliced from the CSV-based OSMPP df.
-
-        The static CSV is updated on a regular basis (ca. monthly). Does not contain
-        decommissioned plants, but earliest publish is 2025 so not a lot of historical
-        versions that could be used instead of the current one anyway.
-
-        Args:
-            country (str): Country name (i.e. "France")
-
-        Returns:
-            pd.DataFrame: DataFrame containing all OSM energy entities in the country.
-        """
-        return self.df[self.df["Country"] == country]

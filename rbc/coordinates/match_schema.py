@@ -1,16 +1,12 @@
 """Match schema-related functionality."""
 
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
 from loguru import logger
 
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str
-
-if TYPE_CHECKING:
-    from rbc.coordinates.matcher import NameMatcher
 
 
 @dataclass(frozen=True)
@@ -23,7 +19,6 @@ class LocatorSchema:
 
     locator: str  # locator name 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     reliability: int  # reliability score for name matching (the higher, the better!)
-    get_df: Callable[["NameMatcher"], pd.DataFrame | None]
     name_col: str
     other_names_col: str | None  # comma-separated alternative names (only GEM)
     id_col: str
@@ -40,7 +35,6 @@ class LocatorSchema:
 GEM_SCHEMA = LocatorSchema(
     locator="gem",
     reliability=3,
-    get_df=lambda m: getattr(m.gem_locator, "df", None),
     name_col="plant_name",
     other_names_col="other_names",  # todo: these seem to be unused?
     id_col="gem_unit_id",
@@ -53,7 +47,6 @@ GEM_SCHEMA = LocatorSchema(
 PPDB_SCHEMA = LocatorSchema(
     locator="ppdb",
     reliability=2,
-    get_df=lambda m: getattr(m.ppdb_locator, "df", None),
     name_col="Name",
     other_names_col="",
     id_col="id",
@@ -66,7 +59,6 @@ PPDB_SCHEMA = LocatorSchema(
 OSM_SCHEMA = LocatorSchema(
     locator="osm",
     reliability=1,
-    get_df=lambda m: m.osm_df,  # duplicated rows for each alt name (s. osm_api.py)
     name_col="Name",
     other_names_col="",
     id_col="OSM_ID",

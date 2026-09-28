@@ -76,6 +76,7 @@ class OverpassLocator:
         self.cache_dir = cache_dir
         self.update = update
         self._country_dfs: dict[str, pd.DataFrame] = {}  # loaded EGEs per country code
+        logger.info("OverpassLocator initialized (queries Overpass per country).")
 
     # ------------------------------------------------------------------
     # Internal helpers for initialization
@@ -192,7 +193,9 @@ class OverpassLocator:
         country_code = country_code.upper()
         if country_code not in self._country_dfs:
             self._country_dfs[country_code] = self._load(country_code)
-        return self._country_dfs[country_code]
+        country_df = self._country_dfs[country_code]
+        logger.info(f"OverpassLocator for {country_code}: {len(country_df)} entries")
+        return country_df
 
 
 # ---------------------------------------------------------------------------

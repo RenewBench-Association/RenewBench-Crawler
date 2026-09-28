@@ -1,15 +1,10 @@
 # tests/coordinates/test_matcher.py
 """Tests for the matcher's NameMatcher and the locators' column-mapping schemas."""
 
-from types import SimpleNamespace
-from typing import cast
-
 import pandas as pd
 import pytest
 from loguru import logger
 
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.map import MATCH_METHOD_COLORS
 from rbc.coordinates.match_schema import (
     GEM_SCHEMA,
@@ -136,7 +131,7 @@ def matcher(
     gem_df: pd.DataFrame,
     osm_df: pd.DataFrame,
 ) -> NameMatcher:
-    """Returns a NameMatcher wired to fake ppdb (PPM)/GEM locators and an OSM df.
+    """Returns a NameMatcher wired to synthetic candidate rows of all three locators.
 
     Args:
         ppdb_df (pd.DataFrame): Synthetic ppdb (PPM) candidate rows.
@@ -144,14 +139,13 @@ def matcher(
         osm_df (pd.DataFrame): Synthetic OSM candidate rows.
 
     Returns:
-        NameMatcher: Instance scoped to Estonia ("EE"), backed by fake
-            locator objects (types.SimpleNamespace) so no real ppdb (PPM)/GEM
-            downloads are needed.
+        NameMatcher: Instance scoped to Estonia ("EE"), backed by dataframes only, so no
+            real ppdb (PPM)/GEM downloads are needed.
     """
     return NameMatcher(
         country="Estonia",
-        gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
-        ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
+        gem_df=gem_df,
+        ppdb_df=ppdb_df,
         osm_df=osm_df,
     )
 
@@ -209,7 +203,7 @@ class TestLocatorSchemas:
         """
         m = NameMatcher(
             country="Germany",
-            ppdb_locator=cast(PPMLocator, SimpleNamespace(df=ppdb_df)),
+            ppdb_df=ppdb_df,
         )
         candidates = m._build_candidates(PPDB_SCHEMA)
 
@@ -229,6 +223,20 @@ class TestLocatorSchemas:
         assert c.locator == "osm"
         assert c.id == "osm-1"
         assert c.country is None
+
+
+class TestCandidateFrames:
+    """Tests that every locator's schema can be fed a dataframe by the matcher."""
+
+    def test_every_schema_has_a_frame_slot(self) -> None:
+        """Happy path: the matcher holds one candidate-frame slot per locator schema.
+
+        `_build_candidates` looks its frame up by `schema.locator`, so a schema with no
+        slot contributes no candidates at all -- silently, since a missing key is None.
+        """
+        matcher = NameMatcher(country="Estonia")
+
+        assert set(matcher.candidate_dfs) == {s.locator for s in LOCATOR_SCHEMAS}
 
 
 class TestLocatorReliability:
@@ -377,7 +385,7 @@ class TestNameMatcherTargetVariants:
         """
         matcher = NameMatcher(
             country="Brazil",
-            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+            gem_df=gem_df,
         )
         result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
 
@@ -400,7 +408,7 @@ class TestNameMatcherTargetVariants:
         """
         matcher = NameMatcher(
             country="Brazil",
-            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+            gem_df=gem_df,
         )
         result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
         assert len(result.top_matches) == 2
@@ -429,7 +437,7 @@ class TestNameMatcherMatchedVia:
         """
         matcher = NameMatcher(
             country="Estonia",
-            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+            gem_df=gem_df,
         )
         result = matcher.match(target, target_fueltype="oil")
 
@@ -446,7 +454,7 @@ class TestNameMatcherMatchedVia:
         """
         matcher = NameMatcher(
             country="Estonia",
-            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+            gem_df=gem_df,
         )
         exact = matcher.match("Auvere", target_fueltype="oil")
         fuzzy = matcher.match("Auvere EJ 1", target_fueltype="oil")
@@ -462,7 +470,7 @@ class TestNameMatcherMatchedVia:
         """
         matcher = NameMatcher(
             country="Estonia",
-            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+            gem_df=gem_df,
         )
         result = matcher.match("Auvere jaam plant", target_fueltype="oil")
 

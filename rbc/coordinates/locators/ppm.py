@@ -119,20 +119,6 @@ class PPMLocator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def get_country_df(self, country: str) -> pd.DataFrame:
-        """Gets a df of all EGEs in a given country, sliced from the CSV-based PPM df.
-
-        The static CSV is updated on a regular basis (ca. monthly). Combination of all
-        kinds of different sources for Europe, including but not limited to the OSMPP data.
-
-        Args:
-            country (str): Country name.
-
-        Returns:
-            pd.DataFrame: DataFrame containing all OSM energy entities of one country.
-        """
-        return self.df[(self.df["Country"] == country)]
-
     def match_by_entsoe_id(self, entsoe_id: str | None) -> MatchCandidate | None:
         """Find an EGE by its ENTSOE EIC code and return the row as a MatchCandidate.
 

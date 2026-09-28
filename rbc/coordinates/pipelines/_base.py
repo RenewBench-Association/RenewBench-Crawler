@@ -428,7 +428,7 @@ class BasePipeline:
         """
         self._create_match_method_columns(df)
 
-        # build OSM dataframe of this country (the locator loads each country only once)
+        # build the country's OSM dataframe (the locator loads each country only once)
         osm_df = (
             self.osm_loc.get_country_df(self.country_code)
             if self.country_code
@@ -437,8 +437,8 @@ class BasePipeline:
 
         matcher = NameMatcher(
             country=self.country,
-            gem_locator=self.gem_loc,
-            ppdb_locator=self.ppdb_loc,
+            gem_df=self.gem_loc.df if self.gem_loc is not None else None,
+            ppdb_df=self.ppdb_loc.df if self.ppdb_loc is not None else None,
             osm_df=osm_df if len(osm_df) > 0 else None,
             region_reg=self.region_reg,
             tok=self.tok,
