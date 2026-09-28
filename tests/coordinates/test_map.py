@@ -11,12 +11,14 @@ import pytest
 from rbc.coordinates.map import (
     DEFAULT_COLOR,
     DEFAULT_ICON,
+    MATCH_METHOD_COLORS,
     _EgeMap,
     _fueltype_icon,
     _match_method_color,
     build_map,
 )
 from rbc.coordinates.mappings import SYSOP_NAME_COL
+from rbc.coordinates.match_schema import LOCATOR_RELIABILITY
 
 
 # ----------------------------------
@@ -79,7 +81,7 @@ def df_matched() -> pd.DataFrame:
                 "lat": 52.2,
                 "lon": 4.3,
                 "fuel_type": "Solar",
-                "match_method": "gem_direct",
+                "match_method": "gem_id_exact",
             },
             {
                 "name": "Plant C (unmatched)",
@@ -305,9 +307,9 @@ class TestEGEMapMarkers:
 
         # check that the different layers are built depending on match_method_col
         by_layer = _markers_by_layer(m)
-        assert set(by_layer) == {"osm", "gem_direct"}
+        assert set(by_layer) == {"osm", "gem_id_exact"}
         assert len(by_layer["osm"]) == 1
-        assert len(by_layer["gem_direct"]) == 1
+        assert len(by_layer["gem_id_exact"]) == 1
 
         # check that markers color and icon depending on match_method_col and fuel_col
         osm_marker = by_layer["osm"][0]
@@ -436,15 +438,42 @@ class TestEGEMapLegendSidebar:
         assert "rbc-sidebar" not in m.get_root().render()
 
 
+class TestMatchMethodColors:
+    """Tests that the colors cover exactly the match methods the pipelines write."""
+
+    def test_every_method_has_a_color(self) -> None:
+        """Happy path: all match methods have a color defined, none are left over.
+
+        If a method isn't defined as having a color, it silently renders in DEFAULT_COLOR,
+        so this test guards against overlooked methods. The expected set is defined the way
+        the pipelines compose their values, from LOCATOR_RELIABILITY plus the fixed steps.
+        """
+        expected = {"unmatched"}
+        for locator in LOCATOR_RELIABILITY:  # fuzzy step + sibling fallback
+            expected |= {
+                f"{locator}_name_exact",
+                f"{locator}_name_fuzzy",
+                f"{locator}_sibling",
+            }
+        for locator in ("gem", "ppdb"):  # only these hold EIC codes to match against
+            expected |= {
+                f"{locator}_id_exact",
+                f"{locator}_id_parent_exact",
+                f"{locator}_id_parent_fuzzy",
+            }
+
+        assert set(MATCH_METHOD_COLORS) == expected
+
+
 class TestHelpers:
     """Tests for the helper functions."""
 
     @pytest.mark.parametrize(
         "source, expected",
         [
-            ("osm_fuzzy", "purple"),
-            ("OSM_FUZZY", "purple"),  # case-insensitive
-            ("  gem_direct  ", "darkblue"),  # stripped
+            ("osm_name_fuzzy", "purple"),
+            ("OSM_NAME_FUZZY", "purple"),  # case-insensitive
+            ("  gem_id_exact  ", "darkblue"),  # stripped
             ("totally_unknown_algorithm", DEFAULT_COLOR),
             (None, DEFAULT_COLOR),
             (float("nan"), DEFAULT_COLOR),

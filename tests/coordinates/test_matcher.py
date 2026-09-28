@@ -10,6 +10,7 @@ from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.ppm import PPMLocator
+from rbc.coordinates.map import MATCH_METHOD_COLORS
 from rbc.coordinates.match_schema import (
     GEM_ADAPTER,
     OSM_ADAPTER,
@@ -353,6 +354,70 @@ class TestNameMatcherTargetVariants:
         )
         result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
         assert len(result.top_matches) == 2
+
+
+class TestNameMatcherMatchedVia:
+    """Tests for `matched_via`, which names the approach the winning match came from."""
+
+    @pytest.mark.parametrize(
+        "target, expected",
+        [
+            ("Auvere", "name_exact"),  # hits the primary name's index key
+            ("Auvere Elektrijaam", "name_exact"),  # hits an other_names variant's key
+            ("Auvere EJ 1", "name_fuzzy"),  # no key hit, wins on weighted tokens
+        ],
+    )
+    def test_approach_is_published(
+        self, gem_df: pd.DataFrame, target: str, expected: str
+    ) -> None:
+        """Happy path: a match reports whether it came from a key hit or token scoring.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using the Estonian row).
+            target (str): Parametrized target name to match.
+            expected (str): The approach expected to win.
+        """
+        matcher = NameMatcher(
+            country="Estonia",
+            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+        )
+        result = matcher.match(target, target_fueltype="oil")
+
+        assert result.matched
+        assert result.matched_via == expected
+        # the published value has to compose into a known match_method (s. test_map.py)
+        assert f"gem_{result.matched_via}" in MATCH_METHOD_COLORS
+
+    def test_score_cannot_stand_in_for_the_approach(self, gem_df: pd.DataFrame) -> None:
+        """Happy path: both approaches can score alike, hence the separate field.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using the Estonian row).
+        """
+        matcher = NameMatcher(
+            country="Estonia",
+            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+        )
+        exact = matcher.match("Auvere", target_fueltype="oil")
+        fuzzy = matcher.match("Auvere EJ 1", target_fueltype="oil")
+
+        assert exact.score == fuzzy.score
+        assert exact.matched_via != fuzzy.matched_via
+
+    def test_unmatched_has_no_approach(self, gem_df: pd.DataFrame) -> None:
+        """Failure path: a target that wins nothing reports no approach at all.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using the Estonian row).
+        """
+        matcher = NameMatcher(
+            country="Estonia",
+            gem_locator=cast(GEMLocator, SimpleNamespace(df=gem_df)),
+        )
+        result = matcher.match("Auvere jaam plant", target_fueltype="oil")
+
+        assert not result.matched
+        assert result.matched_via is None
 
 
 class TestNameMatcherHelpers:

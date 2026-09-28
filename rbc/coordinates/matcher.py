@@ -190,20 +190,19 @@ class NameMatcher:
         target_wts = [self.tok.weighted_tokenize(v) for v in target_variants]
         target_wts = [wt for wt in target_wts if wt is not None]
 
-        # Match collections consisting of [candidate, score]
+        # Match collections consisting of [candidate, score] and, for the two that can
+        # produce the winner, the approach that found it (published as `matched_via`)
         all_matches: list[tuple[MatchCandidate, float]] = []
-        winning_matches: list[tuple[MatchCandidate, float]] = []  # exact/compatible
-        fallback_matches: list[tuple[MatchCandidate, float]] = []  # unknown/family
+        winning_matches: list[tuple[MatchCandidate, float, str]] = []  # exact/compat
+        fallback_matches: list[tuple[MatchCandidate, float, str]] = []  # unknown/family
 
         # --- Approach 1: Exact matches via candidate_index lookup (fast path)
         for variant in target_variants:
             if variant in candidate_index:
-                for candidate in candidate_index[variant]:
+                for cand in candidate_index[variant]:
                     score, debug_score = 100.0, 100.0
 
-                    is_f_match, f_bonus = _compare_fuel(
-                        target_fueltype, candidate.fueltype
-                    )
+                    is_f_match, f_bonus = _compare_fuel(target_fueltype, cand.fueltype)
                     score = score + f_bonus if is_f_match else 0.0
                     debug_score += f_bonus
 
@@ -211,17 +210,17 @@ class NameMatcher:
                         self.region_reg,
                         self.target_country,
                         target_region,
-                        (candidate.lat, candidate.lon),
+                        (cand.lat, cand.lon),
                     )
                     score = score + r_bonus if is_r_match else 0.0
                     debug_score += r_bonus
 
-                    all_matches.append((candidate, debug_score))
+                    all_matches.append((cand, debug_score))
                     if score >= self.threshold:
                         if f_bonus > 0.0:
-                            winning_matches.append((candidate, score))
+                            winning_matches.append((cand, score, "name_exact"))
                         else:
-                            fallback_matches.append((candidate, score))
+                            fallback_matches.append((cand, score, "name_exact"))
 
             # if a variant has been matched, stop 'descending' down the list
             if winning_matches:
@@ -239,17 +238,15 @@ class NameMatcher:
                 if not target_wt.tokens:
                     continue
 
-                for candidate in all_candidates:
-                    candidate_wt = self.tok.weighted_tokenize(candidate.norm_name)
+                for cand in all_candidates:
+                    candidate_wt = self.tok.weighted_tokenize(cand.norm_name)
 
                     true_score, debug_score = get_weighted_token_score(
                         target_wt,
                         candidate_wt,
                         fuzz_ratio_floor=self.fuzz_ratio_threshold,
                     )
-                    is_f_match, f_bonus = _compare_fuel(
-                        target_fueltype, candidate.fueltype
-                    )
+                    is_f_match, f_bonus = _compare_fuel(target_fueltype, cand.fueltype)
                     true_score = true_score + f_bonus if is_f_match else 0.0
                     debug_score += f_bonus
 
@@ -257,17 +254,17 @@ class NameMatcher:
                         self.region_reg,
                         self.target_country,
                         target_region,
-                        (candidate.lat, candidate.lon),
+                        (cand.lat, cand.lon),
                     )
                     true_score = true_score + r_bonus if is_r_match else 0.0
                     debug_score += r_bonus
 
-                    all_matches.append((candidate, debug_score))
+                    all_matches.append((cand, debug_score))
                     if true_score >= self.weighted_threshold:
                         if f_bonus > 0.0:
-                            winning_matches.append((candidate, true_score))
+                            winning_matches.append((cand, true_score, "name_fuzzy"))
                         else:
-                            fallback_matches.append((candidate, true_score))
+                            fallback_matches.append((cand, true_score, "name_fuzzy"))
 
                 # if a variant has been matched, stop descending
                 if winning_matches:
@@ -303,11 +300,12 @@ class NameMatcher:
         ]
 
         # 4. Get matched candidate with the best score
+        best_via: str | None = None
         if winning_matches:
-            best_candidate, best_score = winning_matches[0]
+            best_candidate, best_score, best_via = winning_matches[0]
         elif fallback_matches:
-            best_candidate, best_score = fallback_matches[0]
-        elif top_matches:
+            best_candidate, best_score, best_via = fallback_matches[0]
+        elif top_matches:  # best effort for review only, so `matched` stays False
             best_candidate, best_score = top_matches[0]
         else:
             best_candidate, best_score = None, 0.0
@@ -319,6 +317,7 @@ class NameMatcher:
             target_variants=target_variants,
             target_wt_strings=[wt.as_str() for wt in target_wts],
             top_matches=top_matches,
+            matched_via=best_via,
         )
 
     # ---------------------------------------------------------------------------

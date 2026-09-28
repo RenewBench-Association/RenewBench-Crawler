@@ -42,19 +42,22 @@ BROWSERS = ["safari", "google-chrome", "chrome"]  # browsers that display withou
 # Define marker color by `match_method` value (created by running a pipeline).
 MATCH_METHOD_COLORS: dict[str, str] = {  # always: from most to least confident
     # GEM matches
-    "gem_direct": "darkblue",  # exact EIC hit in GEM
-    "gem_parent_direct": "darkblue",  # parent EIC → direct GEM hit
-    "gem_parent_entsoe_id": "blue",  # fuzzy-resolved parent EIC → GEM hit
-    "gem_fuzzy": "lightblue",  # fuzzy name match in GEM
-    "gem_sibling": "beige",  # match borrowed from sibling
+    "gem_id_exact": "darkblue",  # exact EIC hit in GEM
+    "gem_id_parent_exact": "darkblue",  # parent EIC → exact GEM hit
+    "gem_id_parent_fuzzy": "blue",  # fuzzy-resolved parent EIC → GEM hit
+    "gem_name_exact": "darkblue",  # exact hit on a name variant in GEM
+    "gem_name_fuzzy": "blue",  # weighted-token name match in GEM
+    "gem_sibling": "lightblue",  # match borrowed from sibling
     # ppdb (PPM/OSMPP) matches
-    "ppdb_direct": "darkgreen",  # exact EIC hit in ppdb
-    "ppdb_parent_direct": "darkgreen",  # parent EIC → direct ppdb hit
-    "ppdb_parent_entsoe_id": "green",  # fuzzy-resolved parent EIC → ppdb hit
-    "ppdb_fuzzy": "lightgreen",  # fuzzy name match in ppdb
-    "ppdb_sibling": "orange",  # match borrowed from sibling
+    "ppdb_id_exact": "darkgreen",  # exact EIC hit in ppdb
+    "ppdb_id_parent_exact": "darkgreen",  # parent EIC → exact ppdb hit
+    "ppdb_id_parent_fuzzy": "green",  # fuzzy-resolved parent EIC → ppdb hit
+    "ppdb_name_exact": "darkgreen",  # exact hit on a name variant in ppdb
+    "ppdb_name_fuzzy": "green",  # weighted-token name match in ppdb
+    "ppdb_sibling": "lightgreen",  # match borrowed from sibling
     # OSM (Overpass) matches
-    "osm_fuzzy": "purple",  # fuzzy name match in osm
+    "osm_name_exact": "darkpurple",  # exact hit on a name variant in osm
+    "osm_name_fuzzy": "purple",  # weighted-token name match in osm
     "osm_sibling": "pink",  # match borrowed from sibling
     # No coordinates found (won't normally be plotted)
     "unmatched": "red",

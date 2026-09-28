@@ -214,7 +214,7 @@ class TestDefaultPipelineHelpers:
                 "sysop.name": ["Matched Unit", "Needs Sibling Unit"],
                 "ppdb.lat": [40.0, None],
                 "ppdb.lon": [-90.0, None],
-                "ppdb.match_method": ["ppdb_fuzzy", None],
+                "ppdb.match_method": ["ppdb_name_fuzzy", None],
                 "ppdb.name": ["Donor Power Station", None],
                 "ppdb.id": ["ppdb-1", None],
                 "ppdb.fueltype": ["hydro", None],
@@ -245,6 +245,6 @@ class TestDefaultPipelineHelpers:
         assert result.loc[1, "sibling_of"] == "Matched Unit"
 
         # donor stays as is
-        assert result.loc[0, "ppdb.match_method"] == "ppdb_fuzzy"
+        assert result.loc[0, "ppdb.match_method"] == "ppdb_name_fuzzy"
         assert result.loc[0, "ppdb.match_score"] == 98.5
         assert pd.isna(result.loc[0, "sibling_of"])

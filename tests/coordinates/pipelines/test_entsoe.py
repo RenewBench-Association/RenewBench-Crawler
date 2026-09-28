@@ -12,8 +12,9 @@ from rbc.coordinates.locators.eic_registry import EICCodeRegistry
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.ppm import PPMLocator
-from rbc.coordinates.mappings import OPERATOR_METADATA
-from rbc.coordinates.pipelines.entsoe import EntsoePipeline
+from rbc.coordinates.mappings import OPERATOR_METADATA, SYSOP_CODE_COL
+from rbc.coordinates.match_schema import MatchCandidate
+from rbc.coordinates.pipelines.entsoe import WCODE_PARENT, EntsoePipeline
 
 NAME_COL = OPERATOR_METADATA["entsoe"].get("name_col")
 CODE_COL = OPERATOR_METADATA["entsoe"].get("code_col")
@@ -177,6 +178,58 @@ class TestEntsoePipelineRunPipeline:
 
 class TestEntsoePipelineSteps:
     """Tests for EntsoePipeline's step methods."""
+
+    @pytest.mark.parametrize(
+        "locator, hit_code, expected",
+        [
+            ("gem_loc", "11W-UNIT", "gem_id_exact"),
+            ("gem_loc", "11W-PARENT", "gem_id_parent_exact"),
+            ("ppdb_loc", "11W-UNIT", "ppdb_id_exact"),
+            ("ppdb_loc", "11W-PARENT", "ppdb_id_parent_exact"),
+        ],
+    )
+    def test_match_by_id_names_the_code_it_matched(
+        self,
+        entsoe_pipeline: EntsoePipeline,
+        locator: str,
+        hit_code: str,
+        expected: str,
+    ) -> None:
+        """Happy path: each EIC branch records which code found the match, and where.
+
+        The four branches are otherwise indistinguishable in the output, while a parent
+        match says something weaker about the EGE than its own code matching does.
+
+        Args:
+            entsoe_pipeline (EntsoePipeline): Entsoe pipeline class instance for "NL".
+            locator (str): Attribute name of the locator whose lookup hits.
+            hit_code (str): The EIC code that the lookup answers to (unit or parent).
+            expected (str): The match_method value expected in the output.
+        """
+        candidate = MatchCandidate(
+            name="Riverside Plant",
+            primary_name="Riverside Plant",
+            norm_name="riverside plant",
+            wt_string="riverside:1.0",
+            source="gem" if locator == "gem_loc" else "ppdb",
+            id="loc-1",
+            fueltype="Nuclear",
+            capacity=None,
+            status=None,
+            url=None,
+            lat=52.0,
+            lon=5.0,
+            country="Netherlands",
+        )
+        getattr(entsoe_pipeline, locator).match_by_entsoe_id = lambda eic: (
+            candidate if eic == hit_code else None
+        )
+        df = pd.DataFrame([{SYSOP_CODE_COL: "11W-UNIT", WCODE_PARENT: "11W-PARENT"}])
+        entsoe_pipeline._create_match_method_columns(df)
+
+        out = entsoe_pipeline._step_entsoe_match_by_id(df)
+
+        assert out.loc[0, f"{candidate.source}.match_method"] == expected
 
     def test_load_and_dedupe_uses_code_col(
         self, entsoe_pipeline: EntsoePipeline

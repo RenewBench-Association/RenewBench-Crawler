@@ -671,7 +671,7 @@ class BasePipeline:
                         idx,
                         candidate,
                         match_score=result.score,
-                        match_method=f"{locator}_fuzzy",
+                        match_method=f"{locator}_{result.matched_via}",
                     )
 
         self._log_step_result("Fuzzy-matched by name", df=df)

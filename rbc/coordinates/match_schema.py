@@ -258,6 +258,7 @@ class MatchResult:
     target_variants: list[str]
     target_wt_strings: list[str]  # WeightedTokens.as_str of all target_variants
     top_matches: list[tuple[MatchCandidate, float]]  # best 10 matches
+    matched_via: str | None = None  # how the winner matched: "name_exact"/"name_fuzzy"
 
     def to_dicts(
         self, target_idx: int | None = None, target_fueltype: str | None = None

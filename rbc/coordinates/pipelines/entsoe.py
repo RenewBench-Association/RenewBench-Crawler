@@ -136,22 +136,22 @@ class EntsoePipeline(BasePipeline):
             # 1. GEM: try the unit (generation) EIC directly
             if self.gem_loc and eic:
                 candidate = self.gem_loc.match_by_entsoe_id(eic)
-                method = "gem_direct"
+                method = "gem_id_exact"
 
             # 2. GEM: try the parent (production) EIC from wcode.EicParent
             if candidate is None and self.gem_loc and parent_eic:
                 candidate = self.gem_loc.match_by_entsoe_id(parent_eic)
-                method = "gem_parent_direct"
+                method = "gem_id_parent_exact"
 
             # 3. ppdb (PPM) fallback: unit EIC directly
             if candidate is None and eic:
                 candidate = self.ppdb_loc.match_by_entsoe_id(eic)
-                method = "ppdb_direct"
+                method = "ppdb_id_exact"
 
             # 4. ppdb (PPM) fallback: parent EIC from wcode.EicParent
             if candidate is None and parent_eic:
                 candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
-                method = "ppdb_parent_direct"
+                method = "ppdb_id_parent_exact"
 
             if candidate is not None and method is not None:
                 self._write_candidate_into_df(df, idx, candidate, match_method=method)
@@ -219,13 +219,13 @@ class EntsoePipeline(BasePipeline):
             )
             if candidate is not None:
                 self._write_candidate_into_df(
-                    df, idx, candidate, match_method="gem_parent_entsoe_id"
+                    df, idx, candidate, match_method="gem_id_parent_fuzzy"
                 )
             else:
                 candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
                 if candidate is not None:
                     self._write_candidate_into_df(
-                        df, idx, candidate, match_method="ppdb_parent_entsoe_id"
+                        df, idx, candidate, match_method="ppdb_id_parent_fuzzy"
                     )
 
         self._log_step_result("Fuzzy-matched by parent EIC IDs", df=df)

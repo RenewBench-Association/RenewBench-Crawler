@@ -23,6 +23,19 @@ from rbc.coordinates.utils.values import strip_str
 
 UNMATCHED = "unmatched"
 
+# legacy match_method values before renaming to "<loc>_<id|name>_<exact|fuzzy>". Name-based
+# approaches were prev all just "<loc>_fuzzy". Defaults to more common "<loc_name_fuzzy" here
+LEGACY_METHODS = {
+    f"{loc}_{old}": f"{loc}_{new}"
+    for loc in ("gem", "ppdb", "osm")
+    for old, new in (
+        ("direct", "id_exact"),
+        ("parent_direct", "id_parent_exact"),
+        ("parent_entsoe_id", "id_parent_fuzzy"),
+        ("fuzzy", "name_fuzzy"),
+    )
+}
+
 
 # ------------------------------------------------------------------
 # Entry-points
@@ -357,7 +370,11 @@ def _methods(df: pd.DataFrame) -> pd.Series:
     col = "match_method" if "match_method" in df else "match_source"  # pre-rename runs
     if col not in df:
         return pd.Series(UNMATCHED, index=df.index)
-    return df[col].fillna(UNMATCHED).replace("", UNMATCHED)
+
+    methods = df[col].fillna(UNMATCHED).replace("", UNMATCHED)
+    return methods.replace(
+        LEGACY_METHODS
+    )  # upgrade pre-rename values (s. LEGACY_METHODS)
 
 
 def _matched_candidate(row: pd.Series, match_method: str) -> dict[str, object]:
@@ -365,13 +382,14 @@ def _matched_candidate(row: pd.Series, match_method: str) -> dict[str, object]:
 
     Args:
         row (pd.Series): One EGE's row from a coordinates dataframe.
-        match_method (str): That row's match method (e.g. "gem_fuzzy", "osm_sibling").
+        match_method (str): That row's match method (e.g. "gem_name_fuzzy",
+            "osm_sibling").
 
     Returns:
         dict[str, object]: name, id, score, fueltype, fuel level, lat and lon of
             the winning candidate.
     """
-    locator = match_method.split("_")[0]  # gem_fuzzy -> gem, gem_sibling -> gem
+    locator = match_method.split("_")[0]  # gem_name_fuzzy -> gem, gem_sibling -> gem
     get = lambda field: row.get(f"{locator}.{field}")  # noqa: E731
 
     # runs made before the rename published "<loc>.source_id" (and a dead, empty "osm.id")

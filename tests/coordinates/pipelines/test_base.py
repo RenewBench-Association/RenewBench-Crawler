@@ -2,6 +2,7 @@
 """Structural tests for BasePipeline's shared scaffolding (not pipeline-specific steps)."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -18,6 +19,7 @@ from rbc.coordinates.mappings import (
     SYSOP_REGION_COL,
     OperatorInfo,
 )
+from rbc.coordinates.match_schema import MatchCandidate
 from rbc.coordinates.pipelines._base import BasePipeline
 
 BASE_MODULE = "rbc.coordinates.pipelines._base"
@@ -39,6 +41,29 @@ def eia_csv_dir(tmp_path: Path) -> Path:
     csv_dir = Path(tmp_path, "eia", "1h")
     csv_dir.mkdir(parents=True)
     return csv_dir
+
+
+def _make_candidate() -> MatchCandidate:
+    """Build a minimal GEM candidate for the fuzzy step to write into the df.
+
+    Returns:
+        MatchCandidate: One candidate with the fields `_write_candidate_into_df` needs.
+    """
+    return MatchCandidate(
+        name="Plant A",
+        primary_name="Plant A",
+        norm_name="plant a",
+        wt_string="plant:1.0",
+        source="gem",
+        id="gem-1",
+        fueltype="hydro",
+        capacity=None,
+        status=None,
+        url=None,
+        lat=1.0,
+        lon=2.0,
+        country="Brazil",
+    )
 
 
 class _DummyPipeline(BasePipeline):
@@ -136,6 +161,36 @@ class TestBasePipelineFuzzyMatch:
             pipeline._step_fuzzy_match(pd.DataFrame())
 
         assert mock_matcher.call_args.kwargs["region_reg"] is region_reg
+
+    @pytest.mark.parametrize("via", ["name_exact", "name_fuzzy"])
+    def test_match_method_names_the_approach(self, eia_csv_dir: Path, via: str) -> None:
+        """Happy path: the written match_method says how the name was matched.
+
+        The value has to distinguish a key hit from token scoring, since a reviewer
+        judges a match's trustworthiness by it (s. MATCH_METHOD_COLORS).
+
+        Args:
+            eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
+            via (str): Parametrized approach the matcher reports.
+        """
+        pipeline = _DummyPipeline(
+            input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
+        )
+        df = pd.DataFrame({SYSOP_NAME_COL: ["Plant A"], SYSOP_FUEL_COL: ["hydro"]})
+        candidate = _make_candidate()
+        result = SimpleNamespace(
+            matched=True,
+            candidate=candidate,
+            score=100.0,
+            matched_via=via,
+            to_dicts=lambda **kwargs: [],
+        )
+
+        with patch(f"{BASE_MODULE}.NameMatcher") as mock_matcher:
+            mock_matcher.return_value.match.return_value = result
+            out = pipeline._step_fuzzy_match(df)
+
+        assert out.loc[0, "gem.match_method"] == f"gem_{via}"
 
 
 class TestBasePipelineRunPipeline:
