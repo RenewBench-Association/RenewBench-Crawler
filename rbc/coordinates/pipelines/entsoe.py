@@ -6,15 +6,15 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-import rbc.coordinates.locators.eic_registry as eic
-from rbc.coordinates.locators.eic_registry import EICCodeRegistry
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.ppm import PPMLocator
+import rbc.coordinates.resources.eic as eic
 from rbc.coordinates.mappings import SYSOP_CODE_COL, SYSOP_NAME_COL
 from rbc.coordinates.matcher import NameMatcher
 from rbc.coordinates.pipelines._base import BasePipeline
+from rbc.coordinates.resources.eic import EICCodeRegistry
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.natural_earth import RegionRegistry
+from rbc.coordinates.resources.overpass import OverpassLocator
+from rbc.coordinates.resources.ppm import PPMLocator
 from rbc.coordinates.utils.values import normalize_name, strip_str
 
 # Constants for WCODE-related column headers

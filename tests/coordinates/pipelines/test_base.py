@@ -9,9 +9,6 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.mappings import (
     OPERATOR_COLUMNS,
     OPERATOR_METADATA,
@@ -24,6 +21,9 @@ from rbc.coordinates.mappings import (
 )
 from rbc.coordinates.match_schema import MatchCandidate
 from rbc.coordinates.pipelines._base import BasePipeline
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.natural_earth import RegionRegistry
+from rbc.coordinates.resources.osmpp import OSMPPLocator
 
 BASE_MODULE = "rbc.coordinates.pipelines._base"
 

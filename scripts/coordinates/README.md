@@ -131,7 +131,7 @@ folder may well be missing after a run.
    3. Sibling matching: Look at the power plants that have already been matched to see if
      the power plant is related to them.
 
-3. Fuzzy name matching with GEM, PPM (Europe)/ OSM-PP, and OSM.
+3. Name matching (exact / fuzzy) with GEM, PPM (Europe)/ OSM-PP, and OSM.
 
    The entity names from the raw energy source files are tokenized and weighted.
    Proper names are weighted more than other tokens (such as numerals or
@@ -158,7 +158,7 @@ folder may well be missing after a run.
    [`fuel.py`](../../rbc/coordinates/utils/fuel.py)), regions by point-in-polygon
    containment against Natural Earth's admin-1 polygons, buffered by 20 km to absorb
    border imprecision (offshore wind, hydro plants on border rivers, s.
-   [`natural_earth.py`](../../rbc/coordinates/locators/natural_earth.py)). Missing
+   [`natural_earth.py`](../../rbc/coordinates/resources/natural_earth.py)). Missing
    information never rejects a match: an operator that reports no region, or a region
    name with no polygon of that name, simply leaves the check unknown.
 

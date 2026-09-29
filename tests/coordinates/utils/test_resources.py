@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from rbc.coordinates.locators.eic_registry import EIC_CSV_FILE, EIC_CSV_URL
-from rbc.coordinates.locators.natural_earth import NE_ADMIN1_FILE, NE_ADMIN1_ZIP_URL
-from rbc.coordinates.locators.osmpp import OSMPP_CSV_FILE, OSMPP_CSV_URL
-from rbc.coordinates.locators.ppm import PPM_CSV_FILE, PPM_CSV_URL
+from rbc.coordinates.resources.eic import EIC_CSV_FILE, EIC_CSV_URL
+from rbc.coordinates.resources.natural_earth import NE_ADMIN1_FILE, NE_ADMIN1_ZIP_URL
+from rbc.coordinates.resources.osmpp import OSMPP_CSV_FILE, OSMPP_CSV_URL
+from rbc.coordinates.resources.ppm import PPM_CSV_FILE, PPM_CSV_URL
 from rbc.coordinates.utils.resources import fetch_resource
 
 URL = "https://example.invalid/resource.csv"

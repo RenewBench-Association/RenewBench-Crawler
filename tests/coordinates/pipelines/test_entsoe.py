@@ -8,10 +8,6 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locators.eic_registry import EICCodeRegistry
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA, SYSOP_CODE_COL
 from rbc.coordinates.match_schema import MatchCandidate
 from rbc.coordinates.pipelines.entsoe import (
@@ -19,6 +15,10 @@ from rbc.coordinates.pipelines.entsoe import (
     WCODE_PARENT,
     EntsoePipeline,
 )
+from rbc.coordinates.resources.eic import EICCodeRegistry
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.overpass import OverpassLocator
+from rbc.coordinates.resources.ppm import PPMLocator
 
 NAME_COL = OPERATOR_METADATA["entsoe"].get("name_col")
 CODE_COL = OPERATOR_METADATA["entsoe"].get("code_col")

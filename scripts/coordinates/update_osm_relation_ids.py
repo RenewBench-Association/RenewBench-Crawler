@@ -12,7 +12,7 @@ import country_converter as coco
 from loguru import logger
 
 import rbc.coordinates.mappings as mappings
-from rbc.coordinates.locators.osm_api import OVERPASS_SERVER_TIMEOUT, post_overpass
+from rbc.coordinates.resources.overpass import OVERPASS_SERVER_TIMEOUT, post_overpass
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
 
 VAR_NAME = "COUNTRY_OSM_RELATION_ID_MAP"

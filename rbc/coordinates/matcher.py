@@ -17,7 +17,6 @@ from functools import cached_property
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locators.natural_earth import RegionRegistry
 from rbc.coordinates.match_schema import (
     LOCATOR_RELIABILITY,
     LOCATOR_SCHEMAS,
@@ -25,6 +24,7 @@ from rbc.coordinates.match_schema import (
     MatchCandidate,
     MatchResult,
 )
+from rbc.coordinates.resources.natural_earth import RegionRegistry
 from rbc.coordinates.utils.country import normalize_operator_country_name
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import (

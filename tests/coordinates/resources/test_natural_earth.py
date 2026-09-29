@@ -1,4 +1,4 @@
-# tests/coordinates/locators/test_natural_earth.py
+# tests/coordinates/resources/test_natural_earth.py
 """Tests for the RegionRegistry's classification, caching and resource handling."""
 
 from pathlib import Path
@@ -9,13 +9,13 @@ import pytest
 from shapely.geometry import box
 from shapely.prepared import prep
 
-from rbc.coordinates.locators.natural_earth import (
+from rbc.coordinates.resources.natural_earth import (
     NE_ADMIN1_FILE,
     NE_ADMIN1_ZIP_URL,
     RegionRegistry,
 )
 
-NE_MODULE = "rbc.coordinates.locators.natural_earth"
+NE_MODULE = "rbc.coordinates.resources.natural_earth"
 
 
 # ----------------------------------

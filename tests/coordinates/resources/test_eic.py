@@ -1,4 +1,4 @@
-# tests/coordinates/locators/test_eic_registry.py
+# tests/coordinates/resources/test_eic.py
 """Tests for the EIC code registry locator (loading, indexing, parent matching)."""
 
 from pathlib import Path
@@ -9,7 +9,7 @@ from urllib.error import URLError
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locators.eic_registry import (
+from rbc.coordinates.resources.eic import (
     CODE_COL,
     DISPLAYNAME_COL,
     EIC_CSV_FILE,
@@ -24,7 +24,7 @@ from rbc.coordinates.locators.eic_registry import (
 )
 from rbc.energy.utils import InvalidError
 
-EIC_MODULE = "rbc.coordinates.locators.eic_registry"
+EIC_MODULE = "rbc.coordinates.resources.eic"
 
 MOCK_ROWS = [
     {

@@ -1,4 +1,4 @@
-# tests/coordinates/locators/test_osm_api.py
+# tests/coordinates/resources/test_overpass.py
 """Tests for the Overpass API client: endpoint fallback, caching and tag parsing."""
 
 import json
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locators.osm_api import (
+from rbc.coordinates.resources.overpass import (
     OVERPASS_URLS,
     OverpassLocator,
     _elements_to_df,
@@ -98,7 +98,7 @@ class TestPostOverpass:
         failed = _overpass_response(failed_body)
         succeeded = _overpass_response({"elements": [{"type": "node", "id": 1}]})
 
-        with patch("rbc.coordinates.locators.osm_api.requests.post") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.requests.post") as mock_post:
             mock_post.side_effect = [failed, succeeded]
             data = post_overpass(query="[out:json];", label="RO")
 
@@ -113,7 +113,7 @@ class TestPostOverpass:
         """
         failed = _overpass_response({"elements": [], "remark": TIMEOUT_REMARK})
 
-        with patch("rbc.coordinates.locators.osm_api.requests.post") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.requests.post") as mock_post:
             mock_post.return_value = failed
             data = post_overpass(query="[out:json];", label="RO")
 
@@ -127,7 +127,7 @@ class TestPostOverpass:
         """
         rejected = MagicMock(status_code=400, text="parse error: unknown statement")
 
-        with patch("rbc.coordinates.locators.osm_api.requests.post") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.requests.post") as mock_post:
             mock_post.return_value = rejected
             data = post_overpass(query="[out:json];", label="BR")
 
@@ -155,7 +155,7 @@ class TestOverpassLocator:
         )
         failed = _overpass_response({"elements": [], "remark": TIMEOUT_REMARK})
 
-        with patch("rbc.coordinates.locators.osm_api.requests.post") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.requests.post") as mock_post:
             mock_post.return_value = failed
             df = OverpassLocator(cache_dir=tmp_path, update=True).get_country_df("BR")
 
@@ -170,7 +170,7 @@ class TestOverpassLocator:
         """
         _cached_parquet(tmp_path, name="Cached Plant")
 
-        with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.post_overpass") as mock_post:
             df = OverpassLocator(cache_dir=tmp_path).get_country_df("BR")
 
         assert list(df["Name"]) == ["Cached Plant"]
@@ -185,7 +185,7 @@ class TestOverpassLocator:
         parquet_path = _cached_parquet(tmp_path, name="Old Plant")
         response = {"elements": [EGE]}
 
-        with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.post_overpass") as mock_post:
             mock_post.return_value = response
             df = OverpassLocator(cache_dir=tmp_path, update=True).get_country_df("BR")
 
@@ -200,7 +200,7 @@ class TestOverpassLocator:
         post_overpass returns None when every endpoint failed or answered without
         elements. OSM area IDs are the relation ID + 3600000000 (Brazil: 59470).
         """
-        with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.post_overpass") as mock_post:
             mock_post.side_effect = [None, {"elements": [EGE]}]
             df = OverpassLocator().get_country_df("BR")
 
@@ -230,7 +230,7 @@ class TestOverpassLocator:
         """
         locator = OverpassLocator()
 
-        with patch("rbc.coordinates.locators.osm_api.post_overpass") as mock_post:
+        with patch("rbc.coordinates.resources.overpass.post_overpass") as mock_post:
             mock_post.return_value = answer
             first = locator.get_country_df("BR")
             second = locator.get_country_df("br")  # country codes are case-insensitive

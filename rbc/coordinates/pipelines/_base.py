@@ -21,11 +21,6 @@ import country_converter as coco
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.osmpp import OSMPPLocator
-from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import (
     OPERATOR_COLUMNS,
     OPERATOR_METADATA,
@@ -36,6 +31,11 @@ from rbc.coordinates.mappings import (
 )
 from rbc.coordinates.match_schema import LOCATOR_RELIABILITY, MatchCandidate
 from rbc.coordinates.matcher import NameMatcher
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.natural_earth import RegionRegistry
+from rbc.coordinates.resources.osmpp import OSMPPLocator
+from rbc.coordinates.resources.overpass import OverpassLocator
+from rbc.coordinates.resources.ppm import PPMLocator
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
 from rbc.coordinates.utils.values import strip_str

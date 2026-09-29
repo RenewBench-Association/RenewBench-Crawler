@@ -8,15 +8,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from rbc.coordinates import pipelines
-from rbc.coordinates.locators.eic_registry import EICCodeRegistry
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.osmpp import OSMPPLocator
-from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.pipelines import build_shared_resources, make_pipeline
 from rbc.coordinates.pipelines.default import DefaultPipeline
 from rbc.coordinates.pipelines.entsoe import EntsoePipeline
+from rbc.coordinates.resources.eic import EICCodeRegistry
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.natural_earth import RegionRegistry
+from rbc.coordinates.resources.osmpp import OSMPPLocator
+from rbc.coordinates.resources.overpass import OverpassLocator
+from rbc.coordinates.resources.ppm import PPMLocator
 
 
 # ----------------------------------

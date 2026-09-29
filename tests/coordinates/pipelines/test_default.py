@@ -8,10 +8,10 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.pipelines.default import DefaultPipeline
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.osmpp import OSMPPLocator
+from rbc.coordinates.resources.overpass import OverpassLocator
 
 
 # ----------------------------------

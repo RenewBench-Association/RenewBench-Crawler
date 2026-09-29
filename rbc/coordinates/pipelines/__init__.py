@@ -10,16 +10,16 @@ and `build_shared_resources` to build the expensive, run-scoped resources
 from dataclasses import dataclass
 from pathlib import Path
 
-from rbc.coordinates.locators.eic_registry import EICCodeRegistry
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.osmpp import OSMPPLocator
-from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA
 from rbc.coordinates.pipelines._base import BasePipeline
 from rbc.coordinates.pipelines.default import DefaultPipeline
 from rbc.coordinates.pipelines.entsoe import EntsoePipeline
+from rbc.coordinates.resources.eic import EICCodeRegistry
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.natural_earth import RegionRegistry
+from rbc.coordinates.resources.osmpp import OSMPPLocator
+from rbc.coordinates.resources.overpass import OverpassLocator
+from rbc.coordinates.resources.ppm import PPMLocator
 
 __all__ = [
     "BasePipeline",

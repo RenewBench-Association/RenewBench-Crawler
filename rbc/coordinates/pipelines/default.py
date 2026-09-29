@@ -5,12 +5,12 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
-from rbc.coordinates.locators.gem import GEMLocator
-from rbc.coordinates.locators.natural_earth import RegionRegistry
-from rbc.coordinates.locators.osm_api import OverpassLocator
-from rbc.coordinates.locators.osmpp import OSMPPLocator
 from rbc.coordinates.mappings import SYSOP_NAME_COL
 from rbc.coordinates.pipelines._base import BasePipeline
+from rbc.coordinates.resources.gem import GEMLocator
+from rbc.coordinates.resources.natural_earth import RegionRegistry
+from rbc.coordinates.resources.osmpp import OSMPPLocator
+from rbc.coordinates.resources.overpass import OverpassLocator
 from rbc.coordinates.utils.values import strip_str
 
 

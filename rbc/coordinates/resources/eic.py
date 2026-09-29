@@ -69,7 +69,7 @@ def extract_prefix(name: str | None) -> str:
 
 
 class EICCodeRegistry:
-    """Name-enrichment locator backed by ENTSO-E's public EIC code registry.
+    """Name-enrichment registry backed by ENTSO-E's public EIC code registry.
 
     Reads the official EIC code publication from the local copy in `cache_dir`
     (downloaded on first use), or from its URL if no `cache_dir` was given. Provides

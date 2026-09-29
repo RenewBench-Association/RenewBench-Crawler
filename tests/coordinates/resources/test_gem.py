@@ -1,4 +1,4 @@
-# tests/coordinates/locators/test_gem.py
+# tests/coordinates/resources/test_gem.py
 """Tests for the GEM locator's file resolution, remote fallback and caching."""
 
 import os
@@ -10,9 +10,9 @@ import pandas as pd
 import pytest
 import requests
 
-from rbc.coordinates.locators.gem import _TRACKER_SPECS, GEMLocator
+from rbc.coordinates.resources.gem import _TRACKER_SPECS, GEMLocator
 
-GEM_MODULE = "rbc.coordinates.locators.gem"
+GEM_MODULE = "rbc.coordinates.resources.gem"
 
 
 def _fake_download(url: str, file_path: Path, update: bool = False) -> Path:
@@ -445,7 +445,7 @@ class TestGemLocatorCachedProperties:
             get_locator (Callable): Factory returning a GEMLocator without __init__.
         """
         with patch(
-            "rbc.coordinates.locators.gem.requests.get",
+            "rbc.coordinates.resources.gem.requests.get",
             side_effect=requests.RequestException("no route to host"),
         ):
             assert get_locator(None)._fallback_xlsx_urls == []
