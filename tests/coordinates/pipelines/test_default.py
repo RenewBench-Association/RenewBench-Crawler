@@ -169,7 +169,7 @@ class TestDefaultPipelineSteps:
 class TestDefaultPipelineHelpers:
     """Tests for DefaultPipeline's helper methods."""
 
-    def test_derive_plant_group_key_name(self, eia_pipeline: DefaultPipeline) -> None:
+    def test_derive_ege_group_key_name(self, eia_pipeline: DefaultPipeline) -> None:
         """Happy path: units sharing a base name get the same group key, others don't.
 
         Args:
@@ -184,13 +184,13 @@ class TestDefaultPipelineHelpers:
                 ]
             }
         )
-        keys = eia_pipeline._derive_plant_group_key_name(df)
+        keys = eia_pipeline._derive_ege_group_key_name(df)
         assert keys.iloc[0] == keys.iloc[1]  # same base name -> same key
         assert keys.iloc[2] != keys.iloc[0]  # unrelated plant -> different key
         assert keys.iloc[0] is not None and str(keys.iloc[0]).startswith("name_base:")
 
     @pytest.mark.parametrize("name", ["Unit 1", "Plant Q1"])
-    def test_derive_plant_group_key_name_all_generic_is_none(
+    def test_derive_ege_group_key_name_all_generic_is_none(
         self, eia_pipeline: DefaultPipeline, name: str
     ) -> None:
         """Failure path: a name with no discriminative tokens has no base key.
@@ -200,7 +200,7 @@ class TestDefaultPipelineHelpers:
             name (str): A name without any discriminative tokens in it.
         """
         df = pd.DataFrame({"sysop.name": [name]})
-        keys = eia_pipeline._derive_plant_group_key_name(df)
+        keys = eia_pipeline._derive_ege_group_key_name(df)
         assert keys.iloc[0] is None
 
     def test_sibling_fallback_core(self, eia_pipeline: DefaultPipeline) -> None:
@@ -228,8 +228,8 @@ class TestDefaultPipelineHelpers:
                 "osm.match_method": [None, None],
             }
         )
-        plant_group_key = pd.Series(["group:x", "group:x"])
-        result = eia_pipeline._sibling_fallback_core(df, plant_group_key)
+        ege_group_key = pd.Series(["group:x", "group:x"])
+        result = eia_pipeline._sibling_fallback_core(df, ege_group_key)
 
         # sibling inherits all donor's into correct locator's columns (except score)
         assert result.loc[1, "ppdb.lat"] == 40.0

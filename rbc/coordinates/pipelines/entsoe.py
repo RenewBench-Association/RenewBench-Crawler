@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+from loguru import logger
 
 import rbc.coordinates.locators.eic_registry as eic
 from rbc.coordinates.locators.eic_registry import EICCodeRegistry
@@ -34,10 +35,10 @@ class EntsoePipeline(BasePipeline):
     STEPS: list[str] = [
         "_step_entsoe_eic_lookup",
         "_step_entsoe_match_by_id",
-        "_step_entsoe_resolve_parent_unit",
+        "_step_entsoe_resolve_parent",
         "_step_entsoe_match_by_parent_id",
-        "_step_fuzzy_match",
-        "_step_sibling_fallback_eic",
+        "_step_name_match",
+        "_step_sibling_fallback_id",
     ]
 
     def __init__(
@@ -58,16 +59,16 @@ class EntsoePipeline(BasePipeline):
                 saved. Defaults to None.
             gem_loc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
                 None, in which case GEM is disabled.
-            ppm_loc (PPMLocator, optional): Pre-built PPM locator to reuse the pan-European
-                PPM CSV or global OSMPP CSV. Defaults to None, in which case a new locator
-                is built.
+            ppm_loc (PPMLocator, optional): Pre-built PPM locator to reuse the
+                pan-European PPM CSV. Defaults to None, in which case ppdb contributes
+                no candidates.
             osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse.
                 Defaults to None, in which case a new locator is built.
             region_reg (RegionRegistry, optional): Pre-built region registry to reuse.
                 Defaults to None, in which case a new registry is built.
-            eic_reg (EICCodeRegistry, optional): Pre-built EIC directory registry to reuse
-                and fetch the W_eicCodes.csv. Defaults to None, in which case a new
-                instance is constructed.
+            eic_reg (EICCodeRegistry, optional): Pre-built EIC directory registry to
+                reuse. Defaults to None, in which case the EIC enrichment and both EIC
+                matching steps find nothing (their columns are still published).
         """
         super().__init__(
             input_dir=input_dir,
@@ -78,13 +79,15 @@ class EntsoePipeline(BasePipeline):
             region_reg=region_reg,
         )
 
-        self.eic_reg: EICCodeRegistry | None = (
-            eic_reg
-            if eic_reg is not None
-            else EICCodeRegistry(cache_dir=self.output_dir)
-        )
-        self.ppdb_loc: PPMLocator = (  # type: ignore[assignment]
-            self.ppdb_loc if self.ppdb_loc is not None else PPMLocator()
+        # Entsoe's ppdb is always PPM: it alone has EIC codes `match_by_entsoe_id` needs
+        self.ppdb_loc: PPMLocator | None = ppm_loc  # type: ignore[assignment]
+        self.eic_reg: EICCodeRegistry | None = eic_reg
+
+        rs = [r for r in [gem_loc, ppm_loc, osm_loc, region_reg, eic_reg] if r]
+        logger.info(
+            f"Running EntsoePipeline for '{self.sysop}' ({self.country}) using "
+            "the resources:\n" + ", ".join(type(r).__name__ for r in rs) + "\n-----"
+            "----------------------------------------------------------------------------"
         )
 
     # ------------------------------------------------------------------
@@ -99,10 +102,17 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with enriched data).
         """
-        assert self.eic_reg is not None
-        wcode_fields = list(self.eic_reg.WCODE_FIELDS)
-        for col in wcode_fields:
+        wcode_fields = list(EICCodeRegistry.WCODE_FIELDS)
+        for (
+            col
+        ) in wcode_fields:  # published even without a registry (later steps read them)
             df[f"{WCODE_PREFIX}.{col}"] = None
+
+        if self.eic_reg is None:
+            logger.warning(
+                f"[{self.output_stem}] No EIC directory: skipping EIC enrichment."
+            )
+            return df
 
         for idx, row in df.iterrows():
             eic = strip_str(row.get(SYSOP_CODE_COL))
@@ -126,8 +136,6 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated dataframe (now with direct EIC code matches).
         """
-        assert self.ppdb_loc is not None
-
         for idx, row in df[self._still_unmatched(df)].iterrows():
             eic = strip_str(row.get(SYSOP_CODE_COL))
             parent_eic = strip_str(row.get(WCODE_PARENT))
@@ -144,12 +152,12 @@ class EntsoePipeline(BasePipeline):
                 method = "gem_id_parent_exact"
 
             # 3. ppdb (PPM) fallback: unit EIC directly
-            if candidate is None and eic:
+            if candidate is None and self.ppdb_loc and eic:
                 candidate = self.ppdb_loc.match_by_entsoe_id(eic)
                 method = "ppdb_id_exact"
 
             # 4. ppdb (PPM) fallback: parent EIC from wcode.EicParent
-            if candidate is None and parent_eic:
+            if candidate is None and self.ppdb_loc and parent_eic:
                 candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
                 method = "ppdb_id_parent_exact"
 
@@ -159,7 +167,7 @@ class EntsoePipeline(BasePipeline):
         self._log_step_result("Matched directly by EIC IDs", df=df)
         return df
 
-    def _step_entsoe_resolve_parent_unit(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _step_entsoe_resolve_parent(self, df: pd.DataFrame) -> pd.DataFrame:
         """Find parent-units through fuzzy matching within W_eicCodes ('wcode.parent.*' cols).
 
         Args:
@@ -168,10 +176,11 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated dataframe (now with parent units identified).
         """
-        assert self.eic_reg is not None
-
-        for col in self.eic_reg.MATCH_FIELDS:
+        for col in EICCodeRegistry.MATCH_FIELDS:
             df[f"{WCODE_PARENT_PREFIX}.{col}"] = None
+
+        if self.eic_reg is None:
+            return df
 
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent = self.eic_reg.find_parent_production_unit(
@@ -205,8 +214,6 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated dataframe (now with parent EIC code matches).
         """
-        assert self.ppdb_loc is not None
-
         for idx, row in df[self._still_unmatched(df)].iterrows():
             parent_eic = strip_str(row.get(WCODE_PARENT_EIC))
             if parent_eic is None:
@@ -221,7 +228,7 @@ class EntsoePipeline(BasePipeline):
                 self._write_candidate_into_df(
                     df, idx, candidate, match_method="gem_id_parent_fuzzy"
                 )
-            else:
+            elif self.ppdb_loc is not None:
                 candidate = self.ppdb_loc.match_by_entsoe_id(parent_eic)
                 if candidate is not None:
                     self._write_candidate_into_df(
@@ -231,7 +238,7 @@ class EntsoePipeline(BasePipeline):
         self._log_step_result("Fuzzy-matched by parent EIC IDs", df=df)
         return df
 
-    def _step_sibling_fallback_eic(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _step_sibling_fallback_id(self, df: pd.DataFrame) -> pd.DataFrame:
         """FALLBACK STEP --- Use EIC code matching of siblings as fallback option.
 
         Args:
@@ -240,9 +247,12 @@ class EntsoePipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with sibling EIC matches).
         """
-        return self._sibling_fallback_core(df, self._derive_plant_group_key_eic(df))
+        return self._sibling_fallback_core(df, self._derive_ege_group_key_id(df))
 
-    def _derive_plant_group_key_eic(self, df: pd.DataFrame) -> pd.Series:
+    # ------------------------------------------------------------------
+    # HELPER STEPS (for EntsoePipeline only)
+    # ------------------------------------------------------------------
+    def _derive_ege_group_key_id(self, df: pd.DataFrame) -> pd.Series:
         """Find 4-tier EIC-based sibling-unit grouping key.
 
         Fall back to the fuzzy-resolved parent EIC (wcode.parent.EicCode) ONLY when it differs

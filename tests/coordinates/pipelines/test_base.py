@@ -161,7 +161,7 @@ class TestBasePipelineFuzzyMatch:
         )
 
         with patch(f"{BASE_MODULE}.NameMatcher") as mock_matcher:
-            pipeline._step_fuzzy_match(pd.DataFrame())
+            pipeline._step_name_match(pd.DataFrame())
 
         assert mock_matcher.call_args.kwargs["region_reg"] is region_reg
 
@@ -187,7 +187,7 @@ class TestBasePipelineFuzzyMatch:
         )
 
         with patch(f"{BASE_MODULE}.NameMatcher") as mock_matcher:
-            pipeline._step_fuzzy_match(pd.DataFrame())
+            pipeline._step_name_match(pd.DataFrame())
 
         kwargs = mock_matcher.call_args.kwargs
         assert kwargs["gem_df"] is gem_frame
@@ -219,9 +219,36 @@ class TestBasePipelineFuzzyMatch:
 
         with patch(f"{BASE_MODULE}.NameMatcher") as mock_matcher:
             mock_matcher.return_value.match.return_value = result
-            out = pipeline._step_fuzzy_match(df)
+            out = pipeline._step_name_match(df)
 
         assert out.loc[0, "gem.match_method"] == f"gem_{via}"
+
+
+class TestBasePipelineValidateRegion:
+    """Tests for the region validation step's handling of an absent registry."""
+
+    def test_no_registry_skips_the_step(self, eia_csv_dir: Path) -> None:
+        """Happy path: without a region registry, no region validation is attempted.
+
+        A run without a `resources_dir` has no admin-1 data to check against, and that
+        must cost the operator its region columns rather than the whole run.
+
+        Args:
+            eia_csv_dir (Path): Path to the (empty) EIA CSV directory.
+        """
+        pipeline = _DummyPipeline(
+            input_dir=eia_csv_dir,
+            output_dir=None,
+            gem_loc=None,
+            ppdb_loc=None,
+            region_reg=None,
+        )
+        df = pd.DataFrame({SYSOP_REGION_COL: ["Sao Paulo"], "gem.lat": [1.0]})
+
+        out = pipeline._step_validate_region(df)
+
+        assert "region_match" not in out.columns
+        assert "region_match_level" not in out.columns
 
 
 class TestBasePipelineRunPipeline:

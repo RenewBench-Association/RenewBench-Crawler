@@ -91,11 +91,11 @@ class BasePipeline:
             ppdb_loc (PPMLocator | OSMPPLocator optional): Pre-built locator to reuse the
                 European PPM CSV or global OSMPP CSV. If None, CSV-based location is disabled.
             osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse
-                (loads each country only once per run). If None, a new locator is built
-                that caches its files in ``output_dir``.
+                (loads each country only once per run). If None, OSM contributes no
+                candidates.
             region_reg (RegionRegistry, optional): Pre-built region registry to reuse
-                (reads the admin-1 data only once per run). If None, a new registry is
-                built that reads its data from the web.
+                (reads the admin-1 data only once per run). If None, the region
+                validation step is skipped.
 
         Raises:
             TypeError: If this class is instantiated instead of using a subclass.
@@ -197,16 +197,10 @@ class BasePipeline:
         # Pre-build expensive-to-construct items: locators
         self.gem_loc: GEMLocator | None = gem_loc
         self.ppdb_loc: PPMLocator | OSMPPLocator | None = ppdb_loc
-        self.osm_loc: OverpassLocator = (
-            osm_loc
-            if osm_loc is not None
-            else OverpassLocator(cache_dir=self.output_dir)
-        )
-        self.region_reg: RegionRegistry = (
-            region_reg if region_reg is not None else RegionRegistry()
-        )
+        self.osm_loc: OverpassLocator | None = osm_loc
+        self.region_reg: RegionRegistry | None = region_reg
 
-        logger.info(
+        logger.debug(
             f"{type(self).__name__} initialized for '{self.sysop}' ({self.country})\n"
             f"{pformat(vars(self), indent=4, sort_dicts=False)}"
         )
@@ -405,8 +399,8 @@ class BasePipeline:
         self._create_match_method_columns(df)
         return df
 
-    def _step_fuzzy_match(self, df: pd.DataFrame) -> pd.DataFrame:
-        """FUZZY STEP --- Unified fuzzy name matching.
+    def _step_name_match(self, df: pd.DataFrame) -> pd.DataFrame:
+        """NAME MATCHING STEP --- Unified name matching (direct and with fuzzy logic).
 
         This step uses a various different sources depending on the pipeline.
         1. GEM -> used by all pipelines.
@@ -431,7 +425,7 @@ class BasePipeline:
         # build the country's OSM dataframe (the locator loads each country only once)
         osm_df = (
             self.osm_loc.get_country_df(self.country_code)
-            if self.country_code
+            if self.osm_loc is not None and self.country_code
             else pd.DataFrame()
         )
 
@@ -446,7 +440,7 @@ class BasePipeline:
         )
         self._add_alt_names(df, matcher)
 
-        return self._fuzzy_match_core(df, matcher)
+        return self._name_match_core(df, matcher)
 
     def _step_validate_fueltype(self, df: pd.DataFrame) -> pd.DataFrame:
         """VALIDATION STEP --- Fuel-type validation for all matched EGEs (from any source).
@@ -488,7 +482,7 @@ class BasePipeline:
         Returns:
             df (pd.DataFrame): The updated working dataframe (with validated coordinates).
         """
-        if SYSOP_REGION_COL not in df.columns:
+        if SYSOP_REGION_COL not in df.columns or self.region_reg is None:
             return df
 
         lats, lons = (self._matched_column(df, "lat"), self._matched_column(df, "lon"))
@@ -619,7 +613,7 @@ class BasePipeline:
                 note=f"from other temporal resolutions: {sorted(found.values())}",
             )
 
-    def _fuzzy_match_core(
+    def _name_match_core(
         self,
         df: pd.DataFrame,
         matcher: NameMatcher,
@@ -680,7 +674,7 @@ class BasePipeline:
         df_fuzzy_results = pd.DataFrame(fuzzy_results_list)
 
         if self.output_dir and not df_fuzzy_results.empty:
-            out_path = Path(self.output_dir, f"fuzzy_matches_{self.output_stem}.csv")
+            out_path = Path(self.output_dir, f"name_matches_{self.output_stem}.csv")
             df_fuzzy_results.to_csv(out_path, index=False)
             logger.info(
                 f"[{self.output_stem}] Debugging dataframe saved to '{out_path}'."
@@ -689,7 +683,7 @@ class BasePipeline:
         return df
 
     def _sibling_fallback_core(
-        self, df: pd.DataFrame, plant_group_keys: pd.Series
+        self, df: pd.DataFrame, ege_group_keys: pd.Series
     ) -> pd.DataFrame:
         """FALLBACK STEP HELPER --- Shared sibling-unit fallback (via prev-derived group key).
 
@@ -705,7 +699,7 @@ class BasePipeline:
 
         Args:
             df (pd.DataFrame): The working dataframe.
-            plant_group_keys (pd.Series): The previously-derived plant group keys.
+            ege_group_keys (pd.Series): The previously-derived plant group keys.
 
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with sibling matches).
@@ -726,9 +720,7 @@ class BasePipeline:
             )
 
         # 1. Helpers for getting sibling information
-        has_group = plant_group_keys.map(
-            lambda k: isinstance(k, str) and bool(k.strip())
-        )
+        has_group = ege_group_keys.map(lambda k: isinstance(k, str) and bool(k.strip()))
         already_matched = self._matched_column(df, "lat").notna()
 
         # 2. Define a lookup with all donor info (name, locator, fueltype, ...) by '_key'
@@ -738,7 +730,7 @@ class BasePipeline:
 
         donors = already_matched & has_group
         donor_lookup = (
-            pd.DataFrame({"_key": plant_group_keys[donors], "_idx": df.index[donors]})
+            pd.DataFrame({"_key": ege_group_keys[donors], "_idx": df.index[donors]})
             .dropna(subset=["_key"])
             .drop_duplicates(subset=["_key"])
             .set_index("_key")["_idx"]
@@ -747,7 +739,7 @@ class BasePipeline:
         # 3. Search for sibling matches for the still unmatched EGEs
         needs_sibling = ~already_matched & has_group
         for idx in df.index[needs_sibling]:
-            key = plant_group_keys.at[idx]
+            key = ege_group_keys.at[idx]
             if key not in donor_lookup.index:
                 continue
 

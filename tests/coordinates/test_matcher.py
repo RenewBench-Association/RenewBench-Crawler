@@ -15,6 +15,7 @@ from rbc.coordinates.match_schema import (
     MatchCandidate,
 )
 from rbc.coordinates.matcher import NameMatcher
+from rbc.coordinates.utils.tokenizer import NameTokenizer
 
 
 # ----------------------------------
@@ -144,6 +145,7 @@ def matcher(
     """
     return NameMatcher(
         country="Estonia",
+        tok=NameTokenizer(),
         gem_df=gem_df,
         ppdb_df=ppdb_df,
         osm_df=osm_df,
@@ -203,6 +205,7 @@ class TestLocatorSchemas:
         """
         m = NameMatcher(
             country="Germany",
+            tok=NameTokenizer(),
             ppdb_df=ppdb_df,
         )
         candidates = m._build_candidates(PPDB_SCHEMA)
@@ -234,7 +237,7 @@ class TestCandidateFrames:
         `_build_candidates` looks its frame up by `schema.locator`, so a schema with no
         slot contributes no candidates at all -- silently, since a missing key is None.
         """
-        matcher = NameMatcher(country="Estonia")
+        matcher = NameMatcher(country="Estonia", tok=NameTokenizer())
 
         assert set(matcher.candidate_dfs) == {s.locator for s in LOCATOR_SCHEMAS}
 
@@ -365,7 +368,7 @@ class TestNameMatcherCachedProperties:
 
     def test_candidate_index_empty_is_still_cached(self) -> None:
         """Failure path: If locators yield nothing, an empty index is cached."""
-        m = NameMatcher(country="Estonia")
+        m = NameMatcher(country="Estonia", tok=NameTokenizer())
         assert m._candidate_index == {}
         assert "_candidate_index" in m.__dict__
 
@@ -385,6 +388,7 @@ class TestNameMatcherTargetVariants:
         """
         matcher = NameMatcher(
             country="Brazil",
+            tok=NameTokenizer(),
             gem_df=gem_df,
         )
         result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
@@ -408,6 +412,7 @@ class TestNameMatcherTargetVariants:
         """
         matcher = NameMatcher(
             country="Brazil",
+            tok=NameTokenizer(),
             gem_df=gem_df,
         )
         result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
@@ -437,6 +442,7 @@ class TestNameMatcherMatchedVia:
         """
         matcher = NameMatcher(
             country="Estonia",
+            tok=NameTokenizer(),
             gem_df=gem_df,
         )
         result = matcher.match(target, target_fueltype="oil")
@@ -454,6 +460,7 @@ class TestNameMatcherMatchedVia:
         """
         matcher = NameMatcher(
             country="Estonia",
+            tok=NameTokenizer(),
             gem_df=gem_df,
         )
         exact = matcher.match("Auvere", target_fueltype="oil")
@@ -470,6 +477,7 @@ class TestNameMatcherMatchedVia:
         """
         matcher = NameMatcher(
             country="Estonia",
+            tok=NameTokenizer(),
             gem_df=gem_df,
         )
         result = matcher.match("Auvere jaam plant", target_fueltype="oil")
@@ -483,6 +491,6 @@ class TestNameMatcherHelpers:
 
     def test_build_candidates_missing_locator_returns_empty(self) -> None:
         """Failure path: A matcher with no locator wired up returns no candidates."""
-        m = NameMatcher(country="Estonia")
+        m = NameMatcher(country="Estonia", tok=NameTokenizer())
         assert m._build_candidates(PPDB_SCHEMA) == []
         assert m._build_candidates(GEM_SCHEMA) == []

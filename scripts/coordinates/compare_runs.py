@@ -3,7 +3,7 @@
 
 Diffs a "before" run (typically an archive folder) against an "after" run (the live
 output folder) for one operator, reporting how many EGEs gained, lost or changed their
-match, which locator won, and how the fuzzy scores moved.
+match, which locator won, and how the name-match scores moved.
 
 Run after every matching change so each step's effect is visible in isolation:
     $ python -m scripts.coordinates.compare_runs -s entsoe --detail 20
@@ -114,9 +114,9 @@ def main() -> None:
         load(before_dir, "coordinates"),
         load(after_dir, "coordinates"),
     )
-    fuzzy_b, fuzzy_a = (
-        load(before_dir, "fuzzy_matches"),
-        load(after_dir, "fuzzy_matches"),
+    names_b, names_a = (
+        load(before_dir, "name_matches", legacy_stem="fuzzy_matches"),
+        load(after_dir, "name_matches", legacy_stem="fuzzy_matches"),
     )
 
     tasks = sorted(set(coords_b) & set(coords_a))
@@ -132,16 +132,18 @@ def main() -> None:
             sysop=args.sysop,
         )
 
-        if task in fuzzy_b and task in fuzzy_a:
-            compare_fuzzy(before=fuzzy_b[task], after=fuzzy_a[task])
+        if task in names_b and task in names_a:
+            compare_name_matches(before=names_b[task], after=names_a[task])
         else:
-            print("\n  fuzzy candidates: not available in both runs")
+            print("\n  name-match candidates: not available in both runs")
 
 
 # ------------------------------------------------------------------
 # Primary helpers
 # ------------------------------------------------------------------
-def load(directory: Path, stem: str) -> dict[str, pd.DataFrame]:
+def load(
+    directory: Path, stem: str, legacy_stem: str | None = None
+) -> dict[str, pd.DataFrame]:
     """Load every `<stem>_<task-descriptors>.csv` in a run dir, keyed by CSV descriptors.
 
     Task descriptors are of the shape: <tres>_<bz> (for ENTSOE) or <tres> (for ONS).
@@ -149,15 +151,21 @@ def load(directory: Path, stem: str) -> dict[str, pd.DataFrame]:
 
     Args:
         directory (Path): Run directory holding the CSVs.
-        stem (str): File stem to look for ("coordinates" or "fuzzy_matches").
+        stem (str): File stem to look for ("coordinates" or "name_matches").
+        legacy_stem (str | None): Stem this file had in earlier runs, so older archives
+            stay comparable. Defaults to None. The current stem wins where a directory
+            happens to hold both.
 
     Returns:
         dict[str, pd.DataFrame]: Descriptor -> dataframe (empty dict if none found).
     """
-    frames = {}
-    for path in sorted(directory.glob(f"{stem}_*.csv")):
-        task_descriptor = path.stem.removeprefix(f"{stem}_")
-        frames[task_descriptor] = pd.read_csv(path, low_memory=False)
+    frames: dict[str, pd.DataFrame] = {}
+    for file_stem in (stem, legacy_stem):
+        if file_stem is None:
+            continue
+        for path in sorted(directory.glob(f"{file_stem}_*.csv")):
+            task_descriptor = path.stem.removeprefix(f"{file_stem}_")
+            frames.setdefault(task_descriptor, pd.read_csv(path, low_memory=False))
     return frames
 
 
@@ -274,14 +282,14 @@ def compare_coordinates(
                 print(f"        moved {moved:,.1f} km")  # how much an EGE has moved
 
 
-def compare_fuzzy(before: pd.DataFrame, after: pd.DataFrame) -> None:
-    """Report how the fuzzy candidate pool (debug file) and its scores moved between two runs.
+def compare_name_matches(before: pd.DataFrame, after: pd.DataFrame) -> None:
+    """Report how the name-match candidate pool (debug file) and its scores moved.
 
     Args:
-        before (pd.DataFrame): fuzzy_matches dataframe from the earlier run.
-        after (pd.DataFrame): fuzzy_matches dataframe from the later run.
+        before (pd.DataFrame): name_matches dataframe from the earlier run.
+        after (pd.DataFrame): name_matches dataframe from the later run.
     """
-    print("\n  fuzzy candidates:")
+    print("\n  name-match candidates:")
     for label, df in (("before", before), ("after", after)):
         scored = df[df["candidate.score"].notna()]
         targets = df["target.idx"].nunique() if "target.idx" in df else float("nan")

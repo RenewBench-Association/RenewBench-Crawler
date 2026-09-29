@@ -14,7 +14,11 @@ from rbc.coordinates.locators.osm_api import OverpassLocator
 from rbc.coordinates.locators.ppm import PPMLocator
 from rbc.coordinates.mappings import OPERATOR_METADATA, SYSOP_CODE_COL
 from rbc.coordinates.match_schema import MatchCandidate
-from rbc.coordinates.pipelines.entsoe import WCODE_PARENT, EntsoePipeline
+from rbc.coordinates.pipelines.entsoe import (
+    WCODE_LONGNAME,
+    WCODE_PARENT,
+    EntsoePipeline,
+)
 
 NAME_COL = OPERATOR_METADATA["entsoe"].get("name_col")
 CODE_COL = OPERATOR_METADATA["entsoe"].get("code_col")
@@ -179,6 +183,25 @@ class TestEntsoePipelineRunPipeline:
 class TestEntsoePipelineSteps:
     """Tests for EntsoePipeline's step methods."""
 
+    def test_eic_lookup_without_a_registry_still_publishes_columns(
+        self, entsoe_input_dir: Path
+    ) -> None:
+        """Failure path: with no EIC directory, enrichment is skipped, its columns not.
+
+        Later steps read the `wcode.*` columns directly, so they have to exist even when
+        nothing could be looked up.
+
+        Args:
+            entsoe_input_dir (Path): The synthetic "entsoe/10YNL----------L" zone dir.
+        """
+        pipeline = EntsoePipeline(input_dir=entsoe_input_dir, eic_reg=None)
+        df = pd.DataFrame([{SYSOP_CODE_COL: "11W-UNIT"}])
+
+        out = pipeline._step_entsoe_eic_lookup(df)
+
+        assert WCODE_LONGNAME in out.columns
+        assert out[WCODE_LONGNAME].isna().all()
+
     @pytest.mark.parametrize(
         "locator, hit_code, expected",
         [
@@ -247,7 +270,7 @@ class TestEntsoePipelineSteps:
 class TestEntsoePipelineHelpers:
     """Tests for EntsoePipeline's helper methods."""
 
-    def test_derive_plant_group_key_eic(self, entsoe_pipeline: EntsoePipeline) -> None:
+    def test_derive_ege_group_key_id(self, entsoe_pipeline: EntsoePipeline) -> None:
         """Happy path: units sharing a resolved parent EIC get the same group key.
 
         Args:
@@ -266,6 +289,6 @@ class TestEntsoePipelineHelpers:
                 "wcode.EicDisplayName": [None, None, None],
             }
         )
-        keys = entsoe_pipeline._derive_plant_group_key_eic(df)
+        keys = entsoe_pipeline._derive_ege_group_key_id(df)
         assert keys.iloc[0] == keys.iloc[1]  # same resolved parent EIC -> same key
         assert keys.iloc[2] != keys.iloc[0]  # unrelated plant -> different key

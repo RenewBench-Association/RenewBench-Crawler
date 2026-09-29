@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pandas as pd
+from loguru import logger
 
 from rbc.coordinates.locators.gem import GEMLocator
 from rbc.coordinates.locators.natural_earth import RegionRegistry
@@ -17,7 +18,7 @@ class DefaultPipeline(BasePipeline):
     """Default location/coordinate finding pipeline."""
 
     STEPS: list[str] = [
-        "_step_fuzzy_match",
+        "_step_name_match",
         "_step_sibling_fallback_name",
     ]
 
@@ -39,8 +40,8 @@ class DefaultPipeline(BasePipeline):
             gem_loc (GEMLocator, optional): Pre-built GEM locator to reuse. Defaults to
                 None, in which case GEM is disabled.
             osmpp_loc (OSMPPLocator, optional): Pre-built global OSMPP locator to reuse as
-                the power plant database (ppdb). Defaults to None, in which case a new locator
-                is built.
+                the power plant database (ppdb). Defaults to None, in which case ppdb
+                contributes no candidates.
             osm_loc (OverpassLocator, optional): Pre-built Overpass locator to reuse.
                 Defaults to None, in which case a new locator is built.
             region_reg (RegionRegistry, optional): Pre-built region registry to reuse.
@@ -55,8 +56,11 @@ class DefaultPipeline(BasePipeline):
             region_reg=region_reg,
         )
 
-        self.ppdb_loc: OSMPPLocator = (  # type: ignore[assignment]
-            self.ppdb_loc if self.ppdb_loc is not None else OSMPPLocator()
+        rs = [r for r in [gem_loc, osmpp_loc, osm_loc, region_reg] if r is not None]
+        logger.info(
+            f"Running DefaultPipeline for '{self.sysop}' ({self.country}) using "
+            "the resources:\n" + ", ".join(type(r).__name__ for r in rs) + "\n-----"
+            "----------------------------------------------------------------------------"
         )
 
     # ------------------------------------------------------------------
@@ -66,7 +70,7 @@ class DefaultPipeline(BasePipeline):
         """FALLBACK STEP --- Use name matching of siblings as fallback option.
 
         NOTE: THIS IS OBSOLETE IN ITS CURRENT FORM BECAUSE FUZZY NAME MATCHING HAS IMPROVED!
-        The plant_group_key is derived from exact "discriminator" matches. If a match was
+        The ege_group_key is derived from exact "discriminator" matches. If a match was
         found for one EGE via fuzzy name matching, then a sibling (one with the exact same
         "discriminator" tokens) will have 100% been matched in name matching before...
         So this does nothing at the moment...
@@ -77,18 +81,18 @@ class DefaultPipeline(BasePipeline):
         Returns:
             df (pd.DataFrame): The updated working dataframe (now with sibling name matches).
         """
-        return self._sibling_fallback_core(df, self._derive_plant_group_key_name(df))
+        return self._sibling_fallback_core(df, self._derive_ege_group_key_name(df))
 
     # ------------------------------------------------------------------
     # HELPER STEPS (for DefaultPipeline only)
     # ------------------------------------------------------------------
-    def _derive_plant_group_key_name(self, df: pd.DataFrame) -> pd.Series:
+    def _derive_ege_group_key_name(self, df: pd.DataFrame) -> pd.Series:
         """Find name-based sibling-unit grouping key for SysOps with no EIC codes.
 
         Reduces each unit's name to its discriminative tokens, so e.g. "Plant X Unit 1" and
         "Plant X Unit 2" group together.
-        Known, accepted limitation: two genuinely different plants that reduce to the same
-        base name will incorrectly group (if there is no unique per-plant ID to fall back on).
+        Known, accepted limitation: two genuinely different EGEs that reduce to the
+        same base name group incorrectly, absent a unique per-EGE ID to fall back on.
 
         todo: we may have other kinds of unique IDs aside from EIC/WeicCodes; not sure if
          these can be used to form groups though!

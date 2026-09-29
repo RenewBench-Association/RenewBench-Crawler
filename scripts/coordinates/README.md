@@ -147,7 +147,7 @@ folder may well be missing after a run.
 
 4. Validation of every match, by fuel type and by region.
 
-   Each candidate is checked against what the operator itself reports. During fuzzy
+   Each candidate is checked against what the operator itself reports. During name
    matching, a candidate whose fuel type or region contradicts that data is rejected
    outright, while one that agrees earns a small score bonus (s.
    [`matcher.py`](../../rbc/coordinates/matcher.py)). After all matching steps, every
@@ -194,8 +194,9 @@ Optional arguments are:
 
 A successful run returns several new files:
 - a `coordinates_....csv` with the matched coordinates
-- a `fuzzy_matching_...csv` with a larger list of all identified potential candidate
-  matches in fuzzy name matching and reasons for not matching - helpful for debugging
+- a `name_matches_...csv` with a larger list of all identified potential candidate
+  matches in name matching (direct and fuzzy) and reasons for not matching - helpful for
+  debugging
 - a `map_coordinates.html` map overview of all identified target locations.
 
 > [!WARNING]

@@ -72,8 +72,8 @@ class NameMatcher:
 
     Example:
         >>> matcher = NameMatcher(
-        ...     country="Germany", gem_df=gem_loc.df, ppdb_df=ppm_loc.df, osm_df=osm_df,
-        ...     region_reg=region_reg, tok=tok, style_policy="code"
+        ...     country="Germany", tok=tok, gem_df=gem_loc.df, ppdb_df=ppm_loc.df,
+        ...     osm_df=osm_df, region_reg=region_reg, style_policy="code"
         ... )
         >>> result = matcher.match("Enguri Unit 5",target_fueltype="hydro")
         >>> if result.matched:
@@ -84,11 +84,11 @@ class NameMatcher:
     def __init__(
         self,
         country: str,
+        tok: NameTokenizer,
         gem_df: pd.DataFrame | None = None,
         ppdb_df: pd.DataFrame | None = None,
         osm_df: pd.DataFrame | None = None,
         region_reg: RegionRegistry | None = None,
-        tok: NameTokenizer | None = None,
         style_policy: str = "real",
     ) -> None:
         """Initialize the name matcher.
@@ -96,6 +96,7 @@ class NameMatcher:
         Args:
             country (str): Target country name for hard filtering (prevents cross-country
                 matches).
+            tok (NameTokenizer): Tokenizer carrying the operator's name/fuel vocabulary.
             gem_df (pd.DataFrame | None): GEM's candidate rows. Defaults to None, in
                 which case GEM contributes no candidates.
             ppdb_df (pd.DataFrame | None): Candidate rows of the power plant database
@@ -104,15 +105,15 @@ class NameMatcher:
                 country (Overpass is queried per country). Defaults to None.
             region_reg (RegionRegistry | None): Region registry to check a candidate's
                 coordinate against the target's region with. Defaults to None, in which
-                case a new registry is created (which reads its data from the web).
-            tok (NameTokenizer | None): NameTokenizer instance for tokenization. Defaults
-                to None, in which case a vocabulary-less tokenizer is created (generic
-                tokens only, no operator/country name translations).
+                case the region check is skipped.
             style_policy (str): The style used by the operator in target EGE naming, defining
                 how to handle matching. Options are "real" or "code". Defaults to "code".
         """
         self.target_country = country
         self.norm_target_country = normalize_operator_country_name(country)
+
+        # Tokenizer (carries the operator's vocabulary, s. BasePipeline.__init__)
+        self.tok: NameTokenizer = tok
 
         # Candidate rows per locator, keyed as that locator's LocatorSchema names it
         self.candidate_dfs: dict[str, pd.DataFrame | None] = {
@@ -122,12 +123,7 @@ class NameMatcher:
         }
 
         # Region lookup (reads its data lazily, on the first target that names a region)
-        self.region_reg: RegionRegistry = (
-            region_reg if region_reg is not None else RegionRegistry()
-        )
-
-        # Tokenizer
-        self.tok: NameTokenizer = tok if tok is not None else NameTokenizer()
+        self.region_reg: RegionRegistry | None = region_reg
 
         # Operator-dependent naming convention style
         style = STYLE_POLICY.get(style_policy, STYLE_POLICY["code"])
@@ -491,7 +487,7 @@ def _compare_fuel(target_fuel: str | None, cand_fuel: str | None) -> tuple[bool,
 
 
 def _compare_region(
-    region_reg: RegionRegistry,
+    region_reg: RegionRegistry | None,
     country: str,
     target_region: str | None,
     cand_coord: tuple[float, float],
@@ -499,7 +495,8 @@ def _compare_region(
     """Whether the candidate coordinate lies within the target region or not.
 
     Args:
-        region_reg (RegionRegistry): Region lookup to classify the coordinate with.
+        region_reg (RegionRegistry | None): Region lookup to classify the coordinate
+            with. If None, no region is known, so nothing is vetoed.
         country (str): The target / candidate country name.
         target_region (str | None): The target region.
         cand_coord (tuple[float, float]): The candidate coordinate (lat, lon).
@@ -507,6 +504,9 @@ def _compare_region(
     Returns:
         tuple[bool, float]: Whether it's in the region, and the score bonus to add.
     """
+    if region_reg is None:  # no registry, so the check cannot rule anything out
+        return True, 0.0
+
     level = region_reg.classify_match(country, target_region, cand_coord)
     if level == "unknown":  # the most common case! Most have no region info...
         return True, 0.0
