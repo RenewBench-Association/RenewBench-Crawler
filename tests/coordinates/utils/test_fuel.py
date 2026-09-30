@@ -81,8 +81,12 @@ class TestClassifyFueltypeMatch:
             ("coal", "Lignite"),
             ("gas", "LNG"),
             ("hydro", "Hydroelectric"),
+            # ENTSO-E's own label for storage is "storage" (B25 / "Energy storage") while
+            # every locator writes "Battery", and a locator's label never passes through an
+            # operator's fuel_mapping - only the "battery" synonym bridges the two
+            ("storage", "Battery"),
         ],
-        ids=["wind", "coal", "gas", "hydro"],
+        ids=["wind", "coal", "gas", "hydro", "storage_vs_battery"],
     )
     def test_exact_is_match(self, sysop_type: str, loc_type: str) -> None:
         """Happy path: All exact label matches are classified as expected ("exact").
@@ -104,8 +108,19 @@ class TestClassifyFueltypeMatch:
             ("industrial waste", "bioenergy: agri waste (solids)"),
             ("diesel oil", "fossil fuel: diesel oil"),
             ("industrial waste", "bioenergy: paper mill wastes"),
+            # the "battery" synonym's price: a battery reads as compatible with any other
+            # storage technology, since "battery" itself normalizes to the "storage" token
+            ("battery", "Mechanical Storage"),
         ],
-        ids=["gas1", "gas2", "gas3", "waste", "oil", "waste_plural"],
+        ids=[
+            "gas1",
+            "gas2",
+            "gas3",
+            "waste",
+            "oil",
+            "waste_plural",
+            "battery_vs_other_storage",
+        ],
     )
     def test_compatible_is_match(self, sysop_type: str, loc_type: str) -> None:
         """Happy path: All overlapping label are classified as expected ("compatible").

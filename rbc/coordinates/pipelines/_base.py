@@ -298,7 +298,10 @@ class BasePipeline:
         """INITIALIZATION STEP --- Load raw SysOp CSVs, dedupe to one row per unique EGE.
 
         Dedupes code_col when given (i.e. aeso, entsoe); falls back to name_col otherwise
-        for SysOp sources that have no unique code (i.e. epias).
+        for SysOp sources that have no unique code (i.e. epias). Fuel values are mapped and
+        the distinct subtypes an EGE reports across its rows are combined into one (e.g.
+        "natural gas, diesel oil") - dedupe would otherwise keep whichever came first. The
+        fuel veto/classification compares token sets, so combining widens the overlap.
 
         Args:
             df (pd.DataFrame): The empty dataframe to be populated here. Unused input is
@@ -325,6 +328,21 @@ class BasePipeline:
             relevant_cols.append(col)
 
         dedupe_subset = [self.code_col] if self.code_col else [self.name_col]
+
+        # normalized keys, so a lookup can't miss on case/accents (as NameTokenizer does)
+        if self.fuel_mapping:
+            fuel_mapping = {normalize_name(k): v for k, v in self.fuel_mapping.items()}
+            for fuel_col in (self.fuel_col, self.fuel_sub_col):
+                if fuel_col and fuel_col in df_all.columns:
+                    df_all[fuel_col] = df_all[fuel_col].map(
+                        lambda x: fuel_mapping.get(normalize_name(x) or "")
+                    )
+
+        # keep every subtype an EGE reports (e.g. CEN's per-configuration rows)
+        if self.fuel_sub_col and self.fuel_sub_col in df_all.columns:
+            df_all[self.fuel_sub_col] = df_all.groupby(dedupe_subset[0], dropna=False)[
+                self.fuel_sub_col
+            ].transform(lambda s: ", ".join(dict.fromkeys(s.dropna())) or None)
 
         # Operators may report the same EGE with & without its name, so define the unique
         # winner by sorting (named before nameless) & code existence, not appearance
@@ -359,6 +377,9 @@ class BasePipeline:
     def _step_prepare_matching(self, df: pd.DataFrame) -> pd.DataFrame:
         """PREP STEP --- Rename columns with a "sysop." prefix and flesh out the fuel column.
 
+        The fuel values themselves were mapped in `_step_load_and_dedupe`, so only the
+        refinement with the subtype happens here.
+
         Args:
             df (pd.DataFrame): The working dataframe of SysOp data.
 
@@ -368,29 +389,13 @@ class BasePipeline:
         # 1. rename relevant columns to generic "sysop.*" (e.g. 'nom_usina' → 'sysop.name')
         df = df.rename(columns=self.sysop_cols)
 
-        # normalize fuel mapping, so lookup isn't case-sensitive (equivalent to Tokenizer)
-        fuel_mapping = {normalize_name(k): v for k, v in self.fuel_mapping.items()}
-
         # 2. create SysOp fuel column with None values if fuel column is missing/unconfigured
         if SYSOP_FUEL_COL not in df.columns:
             df[SYSOP_FUEL_COL] = None
 
-        # 3. if a mapping exists, normalize mapping and apply it to SysOp fuel column
-        elif fuel_mapping:
-            # apply to the column
-            df[SYSOP_FUEL_COL] = df[SYSOP_FUEL_COL].map(
-                lambda x: fuel_mapping.get(normalize_name(x) or "")
-            )
-
-        # 4. refine the fuel type with the subtype data if it exists & they agree
+        # 3. refine the fuel type with the subtype data if it exists & they agree
         if SYSOP_FUEL_SUB_COL in df.columns:
-            subtypes = df[SYSOP_FUEL_SUB_COL].map(
-                lambda x: (
-                    fuel_mapping.get(normalize_name(x) or "")
-                    if fuel_mapping
-                    else strip_str(x)
-                )
-            )
+            subtypes = df[SYSOP_FUEL_SUB_COL]
             # check where the two fueltypes agree, use the second (detailed) in those cases
             refine = pd.Series(
                 [
@@ -405,7 +410,7 @@ class BasePipeline:
             # remove the sub fueltype (served its purpose, no need to keep it)
             df = df.drop(columns=[SYSOP_FUEL_SUB_COL])
 
-        # 5. ensure the required columns for matching algorithms are created
+        # 4. ensure the required columns for matching algorithms are created
         self._create_match_method_columns(df)
         return df
 
