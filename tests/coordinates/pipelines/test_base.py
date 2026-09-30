@@ -106,22 +106,55 @@ class _StopsEarlyPipeline(BasePipeline):
 # ----------------------------------
 # Tests
 # ----------------------------------
-def test_operator_pipelines() -> None:
-    """Happy path for mappings, checking that only entsoe uses a non-"default" pipeline."""
-    assert OPERATOR_METADATA["entsoe"].get("pipeline", "default") == "entsoe"
-    assert OPERATOR_METADATA["eia"].get("pipeline", "default") == "default"
-    assert OPERATOR_METADATA["adme"].get("pipeline", "default") == "default"
+class TestOperatorMetadata:
+    """Tests for the invariants OPERATOR_METADATA has to satisfy."""
 
+    def test_operator_pipelines(self) -> None:
+        """Happy path for mappings, checking that only entsoe uses a non-"default" pipeline."""
+        assert OPERATOR_METADATA["entsoe"].get("pipeline", "default") == "entsoe"
+        assert OPERATOR_METADATA["eia"].get("pipeline", "default") == "default"
+        assert OPERATOR_METADATA["adme"].get("pipeline", "default") == "default"
 
-def test_operator_columns_are_operatorinfo_keys() -> None:
-    """Happy path: every OPERATOR_COLUMNS key must be a key of OperatorInfo.
+    def test_operator_columns_are_operatorinfo_keys(self) -> None:
+        """Happy path: every OPERATOR_COLUMNS key must be a key of OperatorInfo.
 
-    Each key is looked up on an operator's metadata to find its column. A key that doesn't
-    exist on OperatorInfo finds nothing for every operator, silently dropping that column
-    from matching and the output (as happened twice: "name_col" vs "entity_col", then
-    "fuel_sub_col" vs "fuel_subtype_col").
-    """
-    assert set(OPERATOR_COLUMNS) <= set(OperatorInfo.__annotations__)
+        Each key is looked up on an operator's metadata to find its column. A key that doesn't
+        exist on OperatorInfo finds nothing for every operator, silently dropping that column
+        from matching and the output (as happened twice: "name_col" vs "entity_col", then
+        "fuel_sub_col" vs "fuel_subtype_col").
+        """
+        assert set(OPERATOR_COLUMNS) <= set(OperatorInfo.__annotations__)
+
+    def test_operators_with_fuel_sub_col_need_a_fuel_col(self) -> None:
+        """Happy path: an operator declaring a fuel subtype declares its main fuel type too.
+
+        The subtype only ever refines the main type (s. `_step_prepare_matching`), so one
+        without the other is a metadata error - and one that would otherwise surface only when
+        that operator happens to be run.
+        """
+        offenders = {
+            op: meta["fuel_sub_col"]
+            for op, meta in OPERATOR_METADATA.items()
+            if meta.get("fuel_sub_col") and not meta.get("fuel_col")
+        }
+        assert not offenders
+
+    def test_operators_have_a_name_col(self) -> None:
+        """Failure path: Operators that need coordinate finding require a name_col def.
+
+        `BasePipeline.__init__` raises MissingDataError on an empty `name_col`, so an operator
+        marked as needing coordinates without one fails mid-run rather than at definition
+        time. ADME is a structural exception: its raw CSVs have a MultiIndex (two-row)
+        column header (s. its downloader's `header=[0, 1]`), which the pipeline's
+        flat-header loading cannot read, so no single column name can be declared here.
+        A new operator joining this set is a metadata error.
+        """
+        unready = {
+            op
+            for op, meta in OPERATOR_METADATA.items()
+            if meta["needs_coordinates"] and not meta["name_col"]
+        }
+        assert unready == {"adme"}
 
 
 class TestBasePipelineInit:

@@ -38,7 +38,7 @@ from rbc.coordinates.resources.overpass import OverpassLocator
 from rbc.coordinates.resources.ppm import PPMLocator
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
-from rbc.coordinates.utils.values import strip_str
+from rbc.coordinates.utils.values import normalize_name, strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
 from rbc.energy.utils import DownloadTask, MissingDataError, load_df_from_file
 
@@ -145,9 +145,15 @@ class BasePipeline:
             self.region_col = meta.get("region_col")
 
             if self.name_col == "":
-                raise MissingDataError(
+                raise ValueError(
                     f"No 'name_col' name defined in OPERATOR_METADATA for "
                     f"'{[self.sysop]}':\n{meta}"
+                )
+
+            if self.fuel_col is None and self.fuel_sub_col is not None:
+                raise ValueError(
+                    f"fuel_sub_col '{self.fuel_sub_col}' defined without a fuel_col in "
+                    f"OPERATOR_METADATA for '{[self.sysop]}'! No sub allowed without a fuel!"
                 )
 
             self.country_code: str | None = None
@@ -183,7 +189,7 @@ class BasePipeline:
                 f"No country match found in Europe for '{self.input_dir}': {e}"
             )
 
-        except MissingDataError as e:
+        except ValueError as e:
             raise e
 
         # Pre-build tokenizer for later use
@@ -362,22 +368,26 @@ class BasePipeline:
         # 1. rename relevant columns to generic "sysop.*" (e.g. 'nom_usina' → 'sysop.name')
         df = df.rename(columns=self.sysop_cols)
 
+        # normalize fuel mapping, so lookup isn't case-sensitive (equivalent to Tokenizer)
+        fuel_mapping = {normalize_name(k): v for k, v in self.fuel_mapping.items()}
+
         # 2. create SysOp fuel column with None values if fuel column is missing/unconfigured
         if SYSOP_FUEL_COL not in df.columns:
             df[SYSOP_FUEL_COL] = None
 
-        # 3. apply mapping to SysOp fuel column if mapping was provided
-        elif self.fuel_mapping:
+        # 3. if a mapping exists, normalize mapping and apply it to SysOp fuel column
+        elif fuel_mapping:
+            # apply to the column
             df[SYSOP_FUEL_COL] = df[SYSOP_FUEL_COL].map(
-                lambda x: self.fuel_mapping.get(strip_str(x) or "")
+                lambda x: fuel_mapping.get(normalize_name(x) or "")
             )
 
         # 4. refine the fuel type with the subtype data if it exists & they agree
         if SYSOP_FUEL_SUB_COL in df.columns:
             subtypes = df[SYSOP_FUEL_SUB_COL].map(
                 lambda x: (
-                    self.fuel_mapping.get(strip_str(x) or "")
-                    if self.fuel_mapping
+                    fuel_mapping.get(normalize_name(x) or "")
+                    if fuel_mapping
                     else strip_str(x)
                 )
             )
