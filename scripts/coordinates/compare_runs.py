@@ -342,6 +342,9 @@ def _keys(df: pd.DataFrame, sysop: str) -> pd.Series:
 
     OPERATOR_METADATA used to identify columns of EGE names and codes. These are combined
     to create a Series of unique keys: "<name> [<code>]" (e.g. "Flores 3 [FLOR3]").
+    Missing name/code values are filled first: pandas 3 keeps them missing through
+    astype(str), so one EGE without a code keys as NaN - and every such EGE shares that
+    one key, which makes the per-EGE `.loc` lookups return the wrong number of rows.
 
     Args:
         df (pd.DataFrame): Coordinates dataframe from one run.
@@ -354,16 +357,23 @@ def _keys(df: pd.DataFrame, sysop: str) -> pd.Series:
     code_col = _sysop_col(df, sysop, OPERATOR_COLUMNS["code_col"], "code_col")
 
     if name_col and name_col in df.columns:
-        names = df[name_col].astype(str)
+        keys = df[name_col].astype(str).fillna("")
         if code_col and code_col in df.columns:
-            return names + " [" + df[code_col].astype(str) + "]"
-        return names
+            keys = keys + " [" + df[code_col].astype(str).fillna("") + "]"
+    else:
+        # no configured name column in this run: any unique sysop column beats the bare index
+        keys = pd.Series(df.index.astype(str), index=df.index)
+        for col in df.columns:
+            if col.startswith("sysop.") and df[col].is_unique and df[col].notna().all():
+                keys = df[col].astype(str)
+                break
 
-    # no configured name column in this run: any unique sysop column beats the bare index
-    for col in df.columns:
-        if col.startswith("sysop.") and df[col].is_unique and df[col].notna().all():
-            return df[col].astype(str)
-    return pd.Series(df.index.astype(str), index=df.index)
+    duplicates = int(keys.duplicated().sum())
+    if duplicates:
+        print(
+            f"  WARNING: {duplicates} duplicate EGE key(s) - changed matches may be wrong."
+        )
+    return keys
 
 
 def _methods(df: pd.DataFrame) -> pd.Series:

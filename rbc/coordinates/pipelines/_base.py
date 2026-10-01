@@ -38,7 +38,7 @@ from rbc.coordinates.resources.overpass import OverpassLocator
 from rbc.coordinates.resources.ppm import PPMLocator
 from rbc.coordinates.utils.fuel import classify_fueltype_match
 from rbc.coordinates.utils.tokenizer import NameTokenizer
-from rbc.coordinates.utils.values import normalize_name, strip_str
+from rbc.coordinates.utils.values import is_missing, normalize_name, strip_str
 from rbc.energy.entsoe.mappings import ACTIVE_ZONES_METADATA
 from rbc.energy.utils import DownloadTask, MissingDataError, load_df_from_file
 
@@ -297,11 +297,12 @@ class BasePipeline:
     def _step_load_and_dedupe(self, df: pd.DataFrame) -> pd.DataFrame:
         """INITIALIZATION STEP --- Load raw SysOp CSVs, dedupe to one row per unique EGE.
 
-        Dedupes code_col when given (i.e. aeso, entsoe); falls back to name_col otherwise
-        for SysOp sources that have no unique code (i.e. epias). Fuel values are mapped and
-        the distinct subtypes an EGE reports across its rows are combined into one (e.g.
-        "natural gas, diesel oil") - dedupe would otherwise keep whichever came first. The
-        fuel veto/classification compares token sets, so combining widens the overlap.
+        EGE identity is defined by the code_col value where it exists and name_col where not
+        - per row, since some EGEs don't have one (e.g. CEN provides none for its batteries).
+        Rows with neither name nor code are dropped (can't be matched!). Fuel values are
+        mapped and the distinct subtypes an EGE reports across its rows are combined into one
+        (e.g. "natural gas, diesel oil") - dedupe would otherwise keep whichever came first.
+        The fuel veto/classification compares token sets, so combining widens the overlap.
 
         Args:
             df (pd.DataFrame): The empty dataframe to be populated here. Unused input is
@@ -327,7 +328,29 @@ class BasePipeline:
                 raise MissingDataError(f"No '{col}' column in '{self.input_dir}' CSVs!")
             relevant_cols.append(col)
 
-        dedupe_subset = [self.code_col] if self.code_col else [self.name_col]
+        # get one row per EGE: code identifies it, name stands in where a code is missing.
+        # (deduping on code alone would collapse every row where code_col=NaN into one!)
+        dedupe_key = "_dedupe_key"
+        if self.code_col:
+            codes = df_all[self.code_col]
+            no_codes = codes.map(is_missing)
+            df_all[dedupe_key] = codes.where(~no_codes, df_all[self.name_col])
+            if named := int(df_all.loc[no_codes, dedupe_key].nunique()):
+                logger.warning(
+                    f"[{self.output_stem}] {named} EGEs have no code in '{self.code_col}'"
+                    f" - identified by name value in '{self.name_col}' instead."
+                )
+        else:
+            df_all[dedupe_key] = df_all[self.name_col]
+
+        # remove any EGEs that have no dedupe_key (no code or name!)
+        no_keys = df_all[dedupe_key].map(is_missing)
+        if no_keys.any():
+            logger.warning(
+                f"[{self.output_stem}] Dropping {int(no_keys.sum())} of {len(df_all)} "
+                f"row(s) with neither a code nor a name - no identity to count EGEs by!"
+            )
+            df_all = df_all[~no_keys]
 
         # normalized keys, so a lookup can't miss on case/accents (as NameTokenizer does)
         if self.fuel_mapping:
@@ -340,7 +363,7 @@ class BasePipeline:
 
         # keep every subtype an EGE reports (e.g. CEN's per-configuration rows)
         if self.fuel_sub_col and self.fuel_sub_col in df_all.columns:
-            df_all[self.fuel_sub_col] = df_all.groupby(dedupe_subset[0], dropna=False)[
+            df_all[self.fuel_sub_col] = df_all.groupby(dedupe_key, dropna=False)[
                 self.fuel_sub_col
             ].transform(lambda s: ", ".join(dict.fromkeys(s.dropna())) or None)
 
@@ -353,8 +376,9 @@ class BasePipeline:
             )
 
         df_unique = (
-            df_all[relevant_cols]
-            .drop_duplicates(subset=dedupe_subset)
+            df_all[[*relevant_cols, dedupe_key]]
+            .drop_duplicates(subset=[dedupe_key])
+            .drop(columns=dedupe_key)
             .reset_index(drop=True)
         )
 

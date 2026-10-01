@@ -46,6 +46,50 @@ def eia_csv_dir(tmp_path: Path) -> Path:
     return csv_dir
 
 
+@pytest.fixture
+def cen_csv_dir(tmp_path: Path) -> Path:
+    """A real "cen" operator directory holding one CSV with every identity case.
+
+    CEN is used because it declares both a code_col and a fuel_sub_col, so one fixture
+    covers identity and subtype grouping. The rows cover: an EGE with a code reporting two
+    subtypes, two EGEs with no code at all, a second EGE sharing a name under a different
+    code, and a row with neither code nor name.
+
+    Args:
+        tmp_path (Path): Pytest-provided temporary directory.
+
+    Returns:
+        Path: The CEN CSV directory.
+    """
+    csv_dir = Path(tmp_path, "cen", "1h")
+    csv_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "id_central": [1, 1, None, None, None, 2, None],
+            "central": [
+                "TER ALPHA",
+                "TER ALPHA",
+                "BESS BETA",
+                "BESS BETA",
+                "BESS GAMMA",
+                "TER ALPHA",
+                None,
+            ],
+            "tipo_tecnologia": ["Térmica"] * 2 + ["BESS"] * 3 + ["Térmica"] * 2,
+            "subtipo_tecnologia": [
+                "Diésel",
+                "Fuel Oil",
+                "Inyección",
+                "Retiro",
+                "Inyección",
+                "Diésel",
+                "Diésel",
+            ],
+        }
+    ).to_csv(Path(csv_dir, "2025-01-01.csv"), index=False)
+    return csv_dir
+
+
 def _make_candidate() -> MatchCandidate:
     """Build a minimal GEM candidate for the fuzzy step to write into the df.
 
@@ -101,6 +145,12 @@ class _StopsEarlyPipeline(BasePipeline):
     def _step_flag(self, df: pd.DataFrame) -> pd.DataFrame:
         self.later_step_called = True
         return df
+
+
+class _RealLoadPipeline(BasePipeline):
+    """Concrete subclass adding no steps of its own, to exercise the real shared steps."""
+
+    STEPS: list[str] = []
 
 
 # ----------------------------------
@@ -170,6 +220,101 @@ class TestBasePipelineInit:
             BasePipeline(
                 input_dir=eia_csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
             )
+
+
+class TestBasePipelineLoadAndDedupe:
+    """Tests for BasePipeline's shared load & dedupe step."""
+
+    @staticmethod
+    def _load(csv_dir: Path) -> pd.DataFrame:
+        """Run the real load & dedupe step on an operator directory.
+
+        Args:
+            csv_dir (Path): The operator's CSV directory.
+
+        Returns:
+            pd.DataFrame: The deduplicated frame, one row per unique EGE.
+        """
+        pipeline = _RealLoadPipeline(
+            input_dir=csv_dir, output_dir=None, gem_loc=None, ppdb_loc=None
+        )
+        return pipeline._step_load_and_dedupe(pd.DataFrame())
+
+    def test_rows_without_code_use_name_as_id(self, cen_csv_dir: Path) -> None:
+        """Happy path: rows with no code are identified by name, one EGE each.
+
+        Deduping on the code column alone collapses every code-less row into a single EGE,
+        because drop_duplicates treats all missing values as the same value. CEN leaves
+        `id_central` empty for all 31 of its batteries, which published them as one row.
+
+        Args:
+            cen_csv_dir (Path): Path to the synthetic CEN CSV directory.
+        """
+        df = self._load(cen_csv_dir)
+
+        assert sorted(df["central"]) == [
+            "BESS BETA",
+            "BESS GAMMA",
+            "TER ALPHA",
+            "TER ALPHA",
+        ]
+
+    def test_rows_without_code_or_name_are_dropped(self, cen_csv_dir: Path) -> None:
+        """Happy path: a row with neither a code nor a name is dropped, not kept as an EGE.
+
+        Such a row cannot be identified or matched, so keeping it invents an EGE that
+        inherits whatever the first row of its group happened to hold.
+
+        Args:
+            cen_csv_dir (Path): Path to the synthetic CEN CSV directory.
+        """
+        df = self._load(cen_csv_dir)
+
+        assert len(df) == 4
+        assert df["central"].notna().all()
+
+    def test_ege_with_diff_code_same_name_stay_separate(
+        self, cen_csv_dir: Path
+    ) -> None:
+        """Happy path: the code stays authoritative where a row has one.
+
+        Names are not unique (3 ONS EGEs share one), so the name may only ever stand in
+        for a missing code - never replace it.
+
+        Args:
+            cen_csv_dir (Path): Path to the synthetic CEN CSV directory.
+        """
+        df = self._load(cen_csv_dir)
+
+        alpha = df[df["central"] == "TER ALPHA"]
+        assert sorted(alpha["id_central"]) == [1.0, 2.0]
+
+    def test_ege_fuel_subtypes_are_grouped(self, cen_csv_dir: Path) -> None:
+        """Happy path: an EGE's combined fuel subtypes are its own, not its whole group's.
+
+        The subtypes are combined over the same identity used for deduping, so a wrong
+        identity leaks one EGE's fuels into another's (CEN's single code-less row reported
+        "diesel oil, battery storage discharge injection, battery storage charge
+        withdrawal", the union of every battery plus an unrelated diesel plant).
+
+        Args:
+            cen_csv_dir (Path): Path to the synthetic CEN CSV directory.
+        """
+        df = self._load(cen_csv_dir)
+        subtypes = {
+            name: set(str(sub).split(", "))
+            for name, sub in zip(df["central"], df["subtipo_tecnologia"])
+            if name.startswith("BESS")
+        }
+
+        # BETA reports two subtypes, GAMMA only the one of them that is its own
+        assert len(subtypes["BESS BETA"]) == 2
+        assert subtypes["BESS GAMMA"] < subtypes["BESS BETA"]
+
+        # the same holds for the two coded EGEs sharing a name
+        alpha = df[df["central"] == "TER ALPHA"].set_index("id_central")
+        assert len(alpha.at[1.0, "subtipo_tecnologia"].split(", ")) == 2
+        assert len(alpha.at[2.0, "subtipo_tecnologia"].split(", ")) == 1
 
 
 class TestBasePipelineFuzzyMatch:
