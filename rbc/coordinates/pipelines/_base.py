@@ -301,7 +301,8 @@ class BasePipeline:
         - per row, since some EGEs don't have one (e.g. CEN provides none for its batteries).
         Rows with neither name nor code are dropped (can't be matched!). Fuel values are
         mapped and the distinct subtypes an EGE reports across its rows are combined into one
-        (e.g. "natural gas, diesel oil") - dedupe would otherwise keep whichever came first.
+        sorted value (e.g. "diesel oil, natural gas") - dedupe would otherwise keep whichever
+        came first, and an unsorted value would depend on which CSV happened to load first.
         The fuel veto/classification compares token sets, so combining widens the overlap.
 
         Args:
@@ -365,7 +366,7 @@ class BasePipeline:
         if self.fuel_sub_col and self.fuel_sub_col in df_all.columns:
             df_all[self.fuel_sub_col] = df_all.groupby(dedupe_key, dropna=False)[
                 self.fuel_sub_col
-            ].transform(lambda s: ", ".join(dict.fromkeys(s.dropna())) or None)
+            ].transform(lambda s: ", ".join(sorted(set(s.dropna()))) or None)
 
         # Operators may report the same EGE with & without its name, so define the unique
         # winner by sorting (named before nameless) & code existence, not appearance
