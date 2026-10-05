@@ -72,9 +72,13 @@ def normalize_locator_countries(
         return df
 
     unique_countries = df[country_col].unique()
-    short_countries: list[str] = coco.convert(
-        names=list(unique_countries), to="short_name"
+
+    # coco returns a bare string for a single name, which would zip char-by-char below
+    converted = coco.convert(names=list(unique_countries), to="short_name")
+    short_countries: list[str] = (
+        [converted] if isinstance(converted, str) else converted
     )
+
     normalized_country_mapping: dict[str, str] = {}
 
     for original, short in zip(unique_countries, short_countries):
