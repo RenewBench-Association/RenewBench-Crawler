@@ -34,7 +34,7 @@ from rbc.coordinates.utils.values import strip_str
 # ------------------------------------------------------------------------
 # Per-XLSX map: file attributes (file name, sheet name, fuel data location) → specs for file
 # "fuel_default" is EITHER a tracker's constant type OR None for a per-row "fuel" column
-_TRACKER_SPECS: dict[str, dict[str, str | None]] = {
+TRACKER_SPECS: dict[str, dict[str, str | None]] = {
     "coal": {
         "file_name": "Global-Coal-Plant-Tracker-*.xlsx",
         "sheet": "Units",
@@ -79,7 +79,7 @@ _TRACKER_SPECS: dict[str, dict[str, str | None]] = {
 
 # Per-XLSX map: column name → canonical column names.
 # Only columns that differ from canonical are listed, rest as is. Handled by _first_present().
-_COLUMN_ALIASES: dict[str, dict[str, list[str]]] = {
+COLUMN_ALIASES: dict[str, dict[str, list[str]]] = {
     "coal": {
         "plant_name": ["Plant name"],
         "unit_name": ["Unit name"],
@@ -141,31 +141,32 @@ _COLUMN_ALIASES: dict[str, dict[str, list[str]]] = {
 }
 
 # Fallback: Public GEM files source for fallback if manual weren't downloaded
-_FALLBACK_CONFIG_URL = (
+FALLBACK_CONFIG_URL = (
     "https://raw.githubusercontent.com/PyPSA/powerplantmatching/master/powerplantmatching/"
     "package_data/config.yaml"
 )
 
 # Global map: GEM column name → (dtype, source). If source = None: use per-tracker col alias.
-_GEM_COLUMN_ALTERNATIVES: dict[str, tuple[str, list[str] | None]] = {
-    "plant_name": ("str", None),
+GEM_COLUMNS = GEM_SCHEMA.columns
+GEM_COLUMN_ALTERNATIVES: dict[str, tuple[str, list[str] | None]] = {
+    GEM_SCHEMA.name_col: ("str", None),
     "unit_name": ("str", None),
-    "gem_unit_id": ("str", None),
+    GEM_SCHEMA.id_col: ("str", None),
     "other_ids_unit": ("str", None),  # raw "Other IDs", for ENTSO-E code extraction
     "other_ids_location": ("str", None),
     "gem_location_id": ("str", ["GEM location ID"]),
     # hydro uses "Country/Area 1"/"Area 2" → default to 1 to prevent silent row dropping
-    "Country": ("str", ["Country/Area", "Country/Area 1"]),
-    "other_names": ("str", ["Other Name(s)", "Other name(s)"]),  # for better matching
-    "Status": ("str", ["Status"]),
-    "wiki_url": ("str", ["Wiki URL"]),
+    GEM_SCHEMA.country_col: ("str", ["Country/Area", "Country/Area 1"]),
+    GEM_SCHEMA.other_names_col: ("str", ["Other Name(s)", "Other name(s)"]),
+    GEM_SCHEMA.status_col: ("str", ["Status"]),
+    GEM_SCHEMA.url_col: ("str", ["Wiki URL"]),
     "Capacity": ("num", ["Capacity (MW)", "Unit Capacity (MW)"]),
     "lat": ("num", ["Latitude"]),
     "lon": ("num", ["Longitude"]),
 }
 
 # Pattern to extract ENTSO-E EIC codes out of GEM's "Other IDs (...)" multi-value strings
-_ENTSOE_ID_PATTERN = re.compile(r"ENTSO-E:\s*([^\s,]+)")
+ENTSOE_ID_PATTERN = re.compile(r"ENTSO-E:\s*([^\s,]+)")
 
 
 # ------------------------------------------------------------------------
@@ -203,6 +204,36 @@ def _first_present_str(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
     """
     series = _first_present(df, candidates)
     return series.astype("string")
+
+
+def _strip_own_country_from_names(names: pd.Series, countries: pd.Series) -> pd.Series:
+    """Remove GEM's "(<country>)" addition from its EGE names.
+
+    GEM adds the country to the name (as a suffix or mid-name) wherever the EGE's name isn't
+    unique in the data (e.g. "San Isidro power station (Chile)", "Royal (Spain) wind farm").
+    This becomes a full-weight discriminator and may cause a mismatch in fuzzy name matching
+    (e.g. target "PMGD TER CHILE" scores 100 against "San Isidro power station (Chile)").
+    Candidates are already filtered by the "Country" column so this is only a hindrance.
+
+    The function checks the name and removes the row's OWN country in "(...)" if it exists.
+    Any other words in brackets stay (e.g. "Mitchell Steam Generating Plant (Georgia)" is
+    in the US state Georgia, "Satara (Panama) wind farm" is in India, "Collinsville (Shine
+    Energy) power station" is just additional information).
+
+    Args:
+        names (pd.Series): Column of GEM EGE names to clean.
+        countries (pd.Series): Column of each row's own country.
+
+    Returns:
+        pd.Series: The names, with their own "(<country>)" and the gap it leaves removed.
+    """
+    cleaned = [
+        re.sub(r"\s+", " ", name.replace(f"({country})", "")).strip()
+        if isinstance(name, str) and isinstance(country, str) and f"({country})" in name
+        else name
+        for name, country in zip(names, countries)
+    ]
+    return pd.Series(cleaned, index=names.index, dtype=names.dtype)
 
 
 # ------------------------------------------------------------------------
@@ -248,6 +279,9 @@ class GEMLocator:
                 Defaults to None, in which case `gem_dir` is used to store the parquet.
             update (bool, optional): Re-download the fallback trackers and rebuild the
                 combined cache. Defaults to False.
+
+        Raises:
+            ValueError: If loaded GEM dataframe does not contain required columns.
         """
         self.gem_dir = Path(gem_dir) if gem_dir else None
         self.cache_dir = Path(cache_dir) if cache_dir else self.gem_dir
@@ -259,6 +293,19 @@ class GEMLocator:
 
         self.df: pd.DataFrame = pd.DataFrame()
         self._load()
+        if not self.df.empty:
+            if not set(GEM_COLUMNS).issubset(self.df.columns):
+                raise ValueError(
+                    f"Loaded GEM dataframe does not contain required columns: "
+                    f"{GEM_COLUMNS}. Existing columns are: {list(self.df.columns)}."
+                )
+
+            # clean up names in GEM dataframe
+            for col in (GEM_SCHEMA.name_col, GEM_SCHEMA.other_names_col):
+                self.df[col] = _strip_own_country_from_names(
+                    self.df[col], self.df[GEM_SCHEMA.country_col]
+                )
+
         logger.info(f"GEMLocator initialized: {len(self.df)} entries")
 
     # ------------------------------------------------------------------
@@ -300,7 +347,7 @@ class GEMLocator:
         if tracker_files:
             logger.info(
                 f"GEMLocator: Parsing {len(tracker_files)} of "
-                f"{len(_TRACKER_SPECS)} GEM tracker xlsx file(s)..."
+                f"{len(TRACKER_SPECS)} GEM tracker xlsx file(s)..."
             )
             self.df = self._normalize_xlsx_into_df(tracker_files)
 
@@ -344,7 +391,7 @@ class GEMLocator:
 
         local: dict[str, Path] = {}
         from_fallback: list[str] = []
-        for tracker, spec in _TRACKER_SPECS.items():
+        for tracker, spec in TRACKER_SPECS.items():
             file = str(spec.get("file_name"))
 
             for folder in folders:
@@ -385,7 +432,7 @@ class GEMLocator:
         resolved: dict[str, Path | str] = dict(local_trackers)
         fetched: list[str] = []
 
-        for tracker, spec in _TRACKER_SPECS.items():
+        for tracker, spec in TRACKER_SPECS.items():
             if tracker in resolved:
                 continue
 
@@ -415,11 +462,11 @@ class GEMLocator:
                 f"GEMLocator: No manually downloaded file for {len(fetched)} "
                 f"tracker(s) ({', '.join(fetched)}) — taking PPM's cloud copies, which "
                 f"are outdated compared to GEM's current release. If you want the "
-                f"newest versions, download all {len(_TRACKER_SPECS)} trackers from "
+                f"newest versions, download all {len(TRACKER_SPECS)} trackers from "
                 f"https://globalenergymonitor.org/download-data into '{self.gem_dir}'."
             )
 
-        missing = [t for t in _TRACKER_SPECS if t not in resolved]
+        missing = [t for t in TRACKER_SPECS if t not in resolved]
         if missing:
             logger.warning(
                 f"GEMLocator: No file at all for {len(missing)} tracker(s) "
@@ -441,8 +488,8 @@ class GEMLocator:
         normalized_dfs: list[pd.DataFrame] = []
 
         for tracker, path in tracker_files.items():
-            spec = _TRACKER_SPECS[tracker]
-            aliases = _COLUMN_ALIASES[tracker]
+            spec = TRACKER_SPECS[tracker]
+            aliases = COLUMN_ALIASES[tracker]
             try:
                 df_raw = pd.read_excel(path, sheet_name=str(spec["sheet"]))
             except Exception as e:
@@ -453,7 +500,7 @@ class GEMLocator:
 
             # Normalize each columns' values (find true column equivalents via mappings)
             # 1. All except "tracker" and "Fueltype"
-            for col, (dtype, alt) in _GEM_COLUMN_ALTERNATIVES.items():
+            for col, (dtype, alt) in GEM_COLUMN_ALTERNATIVES.items():
                 candidates = alt if alt is not None else aliases.get(col, [])
                 if dtype == "num":
                     df_norm[col] = pd.to_numeric(
@@ -494,7 +541,7 @@ class GEMLocator:
         """
         try:
             response = requests.get(
-                _FALLBACK_CONFIG_URL, allow_redirects=True, timeout=60
+                FALLBACK_CONFIG_URL, allow_redirects=True, timeout=60
             )
             response.raise_for_status()
 
@@ -534,7 +581,7 @@ class GEMLocator:
         for pos, (unit_val, location_val) in enumerate(zip(unit_ids, location_ids)):
             for val in (unit_val, location_val):
                 if isinstance(val, str):
-                    for eic in _ENTSOE_ID_PATTERN.findall(val):
+                    for eic in ENTSOE_ID_PATTERN.findall(val):
                         index.setdefault(eic, pos)
 
         return index

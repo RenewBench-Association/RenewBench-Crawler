@@ -19,6 +19,7 @@ import requests
 from loguru import logger
 
 from rbc.coordinates.mappings import COUNTRY_OSM_RELATION_ID_MAP
+from rbc.coordinates.match_schema import OSM_SCHEMA
 
 OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
@@ -36,17 +37,7 @@ HEADER = {
     "Accept": "application/json",
 }
 
-OUT_COLUMNS = [
-    "Name",
-    "Fueltype",
-    "lat",
-    "lon",
-    "OSM_ID",
-    "OSM_Type",
-    "OSM_URL",
-    "Status",
-    "Capacity",
-]
+OSM_COLUMNS = OSM_SCHEMA.columns
 
 
 class OverpassLocator:
@@ -175,7 +166,7 @@ class OverpassLocator:
             f"All Overpass endpoints failed for country '{country_code}', "
             "and no usable cache was found."
         )
-        return pd.DataFrame(columns=OUT_COLUMNS)  # empty df
+        return pd.DataFrame(columns=OSM_COLUMNS)  # empty df
 
     # ------------------------------------------------------------------
     # Public API
@@ -408,9 +399,9 @@ def _elements_to_df(data: dict) -> pd.DataFrame:
 
     df = pd.DataFrame(results)
     if len(df) == 0:
-        return pd.DataFrame(columns=OUT_COLUMNS)  # empty df
+        return pd.DataFrame(columns=OSM_COLUMNS)  # empty df
 
-    return df[OUT_COLUMNS]  # ensure correct ordering
+    return df[OSM_COLUMNS]  # ensure columns exist
 
 
 def _parse_tag_information(tags: dict) -> tuple[str, list[str], dict]:

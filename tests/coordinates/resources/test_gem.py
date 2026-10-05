@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import requests
 
-from rbc.coordinates.resources.gem import _TRACKER_SPECS, GEMLocator
+from rbc.coordinates.resources.gem import GEM_COLUMNS, TRACKER_SPECS, GEMLocator
 
 GEM_MODULE = "rbc.coordinates.resources.gem"
 
@@ -31,6 +31,25 @@ def _fake_download(url: str, file_path: Path, update: bool = False) -> Path:
     return file_path
 
 
+def _gem_df(name: str, lat: float, lon: float) -> pd.DataFrame:
+    """Build a one-plant GEM frame holding every column `GEM_COLUMNS` requires.
+
+    `GEMLocator.__init__` rejects a loaded frame that is missing one of them, so a
+    stand-in for loaded GEM data has to carry them all.
+
+    Args:
+        name (str): The plant's name, to tell frames apart.
+        lat (float): The plant's latitude.
+        lon (float): The plant's longitude.
+
+    Returns:
+        pd.DataFrame: Frame with one plant and all of `GEM_COLUMNS`.
+    """
+    row: dict[str, object] = dict.fromkeys(GEM_COLUMNS, "")
+    row.update({"plant_name": name, "lat": lat, "lon": lon, "Country": "Germany"})
+    return pd.DataFrame([row])
+
+
 def _make_cache(cache_dir: Path) -> Path:
     """Write a combined-data parquet cache holding one recognizable plant.
 
@@ -41,8 +60,7 @@ def _make_cache(cache_dir: Path) -> Path:
         Path: Path of the written parquet cache.
     """
     cache_path = Path(cache_dir, "gem_combined.parquet")
-    cached = pd.DataFrame([{"plant_name": "Cached Plant", "lat": 1.0, "lon": 2.0}])
-    cached.to_parquet(cache_path, index=False)
+    _gem_df("Cached Plant", 1.0, 2.0).to_parquet(cache_path, index=False)
     return cache_path
 
 
@@ -55,7 +73,7 @@ def _fake_rebuild(tracker_files: dict[str, Path | str]) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Frame with one plant, distinguishable from the cached one.
     """
-    return pd.DataFrame([{"plant_name": "Rebuilt Plant", "lat": 3.0, "lon": 4.0}])
+    return _gem_df("Rebuilt Plant", 3.0, 4.0)
 
 
 def _resolve(locator: GEMLocator) -> dict[str, Path | str]:
@@ -128,12 +146,10 @@ class TestGemLocatorLoad:
         Args:
             tmp_path (Path): Pytest-provided temporary directory, used as `cache_dir`.
         """
-        cached = pd.DataFrame([{"plant_name": "Cached Plant", "lat": 1.0, "lon": 2.0}])
-        cached.to_parquet(Path(tmp_path, "gem_combined.parquet"), index=False)
+        _make_cache(tmp_path)
 
         with patch.object(GEMLocator, "_fallback_xlsx_urls", new=FAKE_URLS):
             locator = GEMLocator(gem_dir=None, cache_dir=tmp_path)
-            print(locator.df)
             assert list(locator.df["plant_name"]) == ["Cached Plant"]
 
     def test_cache_is_used_without_resolving_remote_trackers(
@@ -146,8 +162,7 @@ class TestGemLocatorLoad:
         Args:
             tmp_path (Path): Temporary directory (used as gem_dir and cache_dir).
         """
-        cached = pd.DataFrame([{"plant_name": "Cached Plant", "lat": 1.0, "lon": 2.0}])
-        cached.to_parquet(Path(tmp_path, "gem_combined.parquet"), index=False)
+        _make_cache(tmp_path)
 
         with (
             patch.object(GEMLocator, "_fallback_xlsx_urls", new=FAKE_URLS),
@@ -281,7 +296,7 @@ class TestGemLocatorXlsxFiles:
         with patch.object(GEMLocator, "_fallback_xlsx_urls", new=FAKE_URLS):
             resolved = _resolve(get_locator(None))
 
-            assert set(resolved) == set(_TRACKER_SPECS)
+            assert set(resolved) == set(TRACKER_SPECS)
             assert all(isinstance(v, str) for v in resolved.values())
             assert not any("Kraftwerksliste" in str(v) for v in resolved.values())
 

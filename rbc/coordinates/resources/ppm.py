@@ -24,6 +24,8 @@ PPM_URL = (
 PPM_CSV_FILE = "powerplants.csv"
 PPM_CSV_URL = PPM_URL + PPM_CSV_FILE
 
+PPM_COLUMNS = PPDB_SCHEMA.columns
+
 
 class PPMLocator:
     """Coordinate locator using powerplantsmatching package.
@@ -47,6 +49,9 @@ class PPMLocator:
                 Defaults to None, in which case the CSV is read from its URL every time.
             update (bool, optional): Download a fresh copy of the CSV, even if one
                 exists locally. Defaults to False.
+
+        Raises:
+            ValueError: If loaded PPM dataframe does not contain required columns.
         """
         source: Path | str = PPM_CSV_URL
         if cache_dir is not None:
@@ -57,6 +62,12 @@ class PPMLocator:
         # All energy entities in Europe that "make the cut" according to ppm
         self.df: pd.DataFrame = load_df_from_file(source)
         self.df = normalize_locator_countries(self.df)  # normalize the country values
+
+        if not set(PPM_COLUMNS).issubset(self.df.columns):
+            raise ValueError(
+                f"Loaded PPM dataframe does not contain required columns: {PPM_COLUMNS}. "
+                f"Existing columns are: {self.df.columns}."
+            )
 
         logger.info(f"PPMLocator initialized: {len(self.df)} entries")
 

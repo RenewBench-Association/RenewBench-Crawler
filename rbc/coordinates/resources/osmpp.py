@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from rbc.coordinates.match_schema import PPDB_SCHEMA
 from rbc.coordinates.utils.country import normalize_locator_countries
 from rbc.coordinates.utils.resources import fetch_resource
 from rbc.energy.utils import load_df_from_file
@@ -19,6 +20,8 @@ OSMPP_URL = (
 OSMPP_CSV_FILE = "osm_global.csv.gz"
 OSMPP_CSV_URL = OSMPP_URL + OSMPP_CSV_FILE
 OSMPP_REJECTED_CSV_URL = OSMPP_URL + "osm_global_rejected_plants.csv.gz"
+
+OSMPP_COLUMNS = PPDB_SCHEMA.columns
 
 
 class OSMPPLocator:
@@ -42,6 +45,9 @@ class OSMPPLocator:
                 CSV. Defaults to None, in which case the CSV is read from its URL.
             update (bool, optional): Download a fresh copy of the CSV, even if one
                 exists locally. Defaults to False.
+
+        Raises:
+            ValueError: If loaded OSMPP dataframe does not contain required columns.
         """
         source: Path | str = OSMPP_CSV_URL
         if cache_dir is not None:
@@ -56,4 +62,11 @@ class OSMPPLocator:
         # # Energy entities that are filtered out by osm-pp due to missing data
         # self.df_rejected: pd.DataFrame = load_df_from_file(OSMPP_REJECTED_CSV_URL)
         # self.df_rejected = normalize_locator_countries(self.df_rejected)
+
+        if not set(OSMPP_COLUMNS).issubset(self.df.columns):
+            raise ValueError(
+                f"Loaded OSMPP dataframe does not contain required columns: {OSMPP_COLUMNS}. "
+                f"Existing columns are: {self.df.columns}."
+            )
+
         logger.info(f"OSMPPLocator initialized: {len(self.df)} entries")

@@ -20,23 +20,45 @@ class LocatorSchema:
     locator: str  # locator name 'ppdb' (= ppm/osmpp), 'gem', 'osm'
     reliability: int  # reliability score for name matching (the higher, the better!)
     name_col: str
-    other_names_col: str | None  # comma-separated alternative names (only GEM)
+    # an optional column is "" where the locator hasn't got it, never None, so that every
+    # mapping stays a str (a key of `str | None` can't index a dataframe)
+    other_names_col: str  # comma-separated alternative names (only GEM)
     id_col: str
-    country_col: str | None  # None if the locator has no country column (e.g. OSM)
-    status_col: str | None
-    url_col: str | None
+    country_col: str  # "" if the locator has no country column (e.g. OSM)
+    status_col: str
+    url_col: str
     extra_cols: tuple[str, ...]  # extra columns of data to propagate (only OSM)
     fueltype_col: str = "Fueltype"
     capacity_col: str = "Capacity"
     lat_col: str = "lat"
     lon_col: str = "lon"
 
+    @property
+    def columns(self) -> list[str]:
+        """Every column the schema names, in the order the fields are declared above.
+
+        Use to check a loaded dataframe for correctness. Unset mappings are skipped,
+        as not every locator has every column (e.g. OSM has no country, PPDB no other names).
+
+        Returns:
+            list[str]: The schema's configured column names.
+        """
+        cols: list[str] = []
+        for schema_field in fields(self):
+            if not schema_field.name.endswith(("_col", "_cols")):
+                continue
+
+            value = getattr(self, schema_field.name)
+            cols.extend(value if isinstance(value, tuple) else [value] if value else [])
+
+        return cols
+
 
 GEM_SCHEMA = LocatorSchema(
     locator="gem",
     reliability=3,
     name_col="plant_name",
-    other_names_col="other_names",  # todo: these seem to be unused?
+    other_names_col="other_names",
     id_col="gem_unit_id",
     country_col="Country",
     status_col="Status",
@@ -51,8 +73,8 @@ PPDB_SCHEMA = LocatorSchema(
     other_names_col="",
     id_col="id",
     country_col="Country",
-    status_col=None,
-    url_col=None,
+    status_col="",
+    url_col="",
     extra_cols=(),
 )
 
@@ -62,7 +84,7 @@ OSM_SCHEMA = LocatorSchema(
     name_col="Name",
     other_names_col="",
     id_col="OSM_ID",
-    country_col=None,  # no country column; relies on the matrix-level filter
+    country_col="",  # no country column; relies on the matrix-level filter
     status_col="Status",
     url_col="OSM_URL",
     extra_cols=("OSM_Type",),
