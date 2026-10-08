@@ -36,6 +36,9 @@ ROMAN_UNIT_NUMERALS: frozenset[str] = frozenset(
     "i ii iii iv v vi vii viii ix x xi xii xiii xiv xv xvi xvii xviii xix xx".split()
 )
 
+# Pattern: an operator's record-state marker in square brackets (e.g. "[NO_MOSTRAR]")
+BRACKETED_MARKER_PATTERN = re.compile(r"\[[^\]]*\]")
+
 EXCLUDE_WEIGHT = 0.0
 DEMOTE_WEIGHT = 0.1
 DESIGNATOR_WEIGHT = 0.15  # tokens that are unit designators (e.g. '6', 'III', 'G1')
@@ -99,6 +102,28 @@ def split_glued_generic_tokens(normalized: str | None) -> str:
         lambda m: " ".join(group for group in m.groups() if group), normalized
     )
     return new if new != normalized else ""
+
+
+def strip_square_brackets(raw: str | None) -> str:
+    """Remove an operator's added information in square brackets from an EGE name.
+
+    Some operators like CEN flag an EGE's state via square bracket terms in its name
+    (e.g. "TER VENTANAS [No_Mostrar]", "HP LA CONFIANZA [EN_REVISION]"). These terms become
+    full-weight discriminators that no candidate can/should match, costing 33-50 score points.
+    Only square brackets are removed. Round ones may hold former / alternative names and
+    important information (e.g. "PMGD PFV DON JORGE (EX PERALILLO)", "Red Dragon (Unit 4)").
+
+    Args:
+        raw (str | None): The raw (un-normalized) name to strip.
+
+    Returns:
+        str: The name without its markers, or '' if there were none to remove.
+    """
+    if not raw:
+        return ""
+
+    new = re.sub(r"\s+", " ", BRACKETED_MARKER_PATTERN.sub("", raw)).strip()
+    return new if new != raw else ""
 
 
 # ---------------------------------------------------------------------------

@@ -418,6 +418,48 @@ class TestNameMatcherTargetVariants:
         result = matcher.match("Mauá Bloco 6", target_fueltype="hydro")
         assert len(result.top_matches) == 2
 
+    def test_stripped_variant_comes_last(self, gem_df: pd.DataFrame) -> None:
+        """Happy path: The square-brackets-stripped variant comes at end (after full names).
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (unused here, matcher needs a frame).
+        """
+        matcher = NameMatcher(country="Brazil", tok=NameTokenizer(), gem_df=gem_df)
+        variants = matcher._generate_target_variants("Mauá 6 power plant [NO_MOSTRAR]")
+
+        stripped = [i for i, v in enumerate(variants) if "mostrar" not in v.lower()]
+        full = [i for i, v in enumerate(variants) if "mostrar" in v.lower()]
+        assert full and stripped
+        assert min(stripped) > max(full)
+
+    def test_name_w_brackets_matches_strip_variant(self, gem_df: pd.DataFrame) -> None:
+        """Happy path: Square brackets in a name no longer block the true name's match.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (here using the Brazilian ones).
+        """
+        matcher = NameMatcher(country="Brazil", tok=NameTokenizer(), gem_df=gem_df)
+        result = matcher.match("Mauá 6 plant [NO_MOSTRAR]", target_fueltype="hydro")
+
+        assert result.matched
+        assert result.candidate is not None
+        assert result.candidate.id == "gem-maua-6"
+
+    def test_name_wo_brackets_has_no_extra_variant(self, gem_df: pd.DataFrame) -> None:
+        """Happy path: A name without square bracket terms gets no extra variant.
+
+        `strip_bracketed_markers` returns '' when there is nothing to strip, so the
+        variant is skipped instead of repeating the normalized name.
+
+        Args:
+            gem_df (pd.DataFrame): Synthetic GEM rows (unused here, matcher needs a frame).
+        """
+        matcher = NameMatcher(country="Brazil", tok=NameTokenizer(), gem_df=gem_df)
+        variants = matcher._generate_target_variants("Mauá 6 power plant")
+
+        assert len(variants) == len(set(variants))
+        assert all(v for v in variants)
+
 
 class TestNameMatcherMatchedVia:
     """Tests for `matched_via`, which names the approach the winning match came from."""

@@ -32,6 +32,7 @@ from rbc.coordinates.utils.tokenizer import (
     get_weighted_token_score,
     split_camelcase,
     split_glued_generic_tokens,
+    strip_square_brackets,
 )
 from rbc.coordinates.utils.values import is_missing, normalize_name
 
@@ -401,11 +402,16 @@ class NameMatcher:
         4. Normalized --- lowercase, no diacritics/special char ("ENGURUNIT_5" -> "engurunit)
         5. Glue-split --- separates glued generic unit words ("ENGURIUNIT_5" -> "enguri
            unit 5"), which would otherwise stay one unmatchable token
+        6. Square-brackets-stripped --- drops an operator's status info in square brackets
+           ("TER VENTANAS [No_Mostrar]" -> "ter ventanas").
 
-        Methods 4.-5. also include token-expanded variants, where abbreviations are turned
+        Methods 4.-6. also include token-expanded variants, where abbreviations are turned
         into full names. Method 5. is also applied to the normalized camelcase variant.
-        No variant drops information: every part of a name survives into
-        ``get_weighted_token_score``, which alone decides what counts.
+        Up to method 6.: no information is dropped, every name part survives into
+        ``get_weighted_token_score``, which decides what counts.
+        Method 6.: only variant that drops information, specifically status information that
+        the tokenizer has no chance of identifying as such (s. ``strip_square_brackets``).
+        This variant comes last to give the full name every chance first.
 
         Args:
             name: The base target name to generate variants for.
@@ -457,6 +463,11 @@ class NameMatcher:
         split_glued_cc = split_glued_generic_tokens(normalized=normalized_cc)
         add(split_glued_cc)
         add(" ".join(self.tok.tokenize(split_glued_cc)))  # tokenized variant
+
+        # 6. Name without the operator's status markers in square brackets
+        unmarked = normalize_name(strip_square_brackets(raw=name))
+        add(unmarked)
+        add(" ".join(self.tok.tokenize(unmarked)))  # tokenized variant
 
         # Store to cache and return
         logger.debug(f"Target variants for {name}:\t{' | '.join(variants)}.")

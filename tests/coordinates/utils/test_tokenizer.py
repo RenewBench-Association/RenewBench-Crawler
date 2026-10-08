@@ -13,6 +13,7 @@ from rbc.coordinates.utils.tokenizer import (
     normalize_name,
     split_camelcase,
     split_glued_generic_tokens,
+    strip_square_brackets,
 )
 
 # Synthetic vocabulary, deliberately NOT imported from rbc.energy.<operator>.mappings:
@@ -151,6 +152,73 @@ class TestSplitHelpers:
             raw (str): Real name starting with (or barely exceeding) a generic token.
         """
         assert split_glued_generic_tokens(normalize_name(raw)) == ""
+
+
+class TestStripHelpers:
+    """Tests for strip_square_brackets."""
+
+    @pytest.mark.parametrize(
+        "raw, expected_output",
+        [
+            ("TER VENTANAS [No_Mostrar]", "TER VENTANAS"),
+            ("TER BOCAMINA [NO_MOSTRAR]", "TER BOCAMINA"),
+            ("HP LA CONFIANZA  [En_Revision]", "HP LA CONFIANZA"),
+            ("PFV LOMA LOS COLORADOS [EN_REVISION]", "PFV LOMA LOS COLORADOS"),
+            ("[NO_MOSTRAR] TER RENCA", "TER RENCA"),
+            ("TER A [X] B [Y]", "TER A B"),
+        ],
+        ids=["suffix", "upper", "double_space", "multi_word", "prefix", "two_markers"],
+    )
+    def test_markers_are_removed(self, raw: str, expected_output: str) -> None:
+        """Happy path: the marker and the gap it leaves both go, wherever it sits.
+
+        Args:
+            raw (str): Raw operator name carrying a bookkeeping marker.
+            expected_output (str): Expected name without the marker.
+        """
+        assert strip_square_brackets(raw) == expected_output
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "PMGD PFV DON JORGE (EX PERALILLO)",
+            "Red Dragon (Unit 4)",
+            "San Isidro power station (Chile)",
+            "PMGD HP EL MANZANO (MELIPEUCO)",
+        ],
+    )
+    def test_round_brackets_are_kept(self, raw: str) -> None:
+        """Failure path: round brackets hold former/alternative names and real detail.
+
+        Removing those would drop a name part the locators may match on, so only square
+        brackets count as bookkeeping.
+
+        Args:
+            raw (str): Real name with round brackets that must survive untouched.
+        """
+        assert strip_square_brackets(raw) == ""
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["TER PETROPOWER", "Ventanas power station", "", None],
+        ids=["no_marker", "candidate_name", "empty", "none"],
+    )
+    def test_nothing_to_strip_returns_empty(self, raw: str | None) -> None:
+        """Failure path: a name without a marker yields '', i.e. no variant to add.
+
+        Args:
+            raw (str | None): Raw name with no bookkeeping marker.
+        """
+        assert strip_square_brackets(raw) == ""
+
+    def test_a_name_that_is_only_a_marker_yields_nothing(self) -> None:
+        """Failure path: stripping everything yields '', not a name matching anything.
+
+        An empty variant added to the list would tokenize to no tokens, which
+        `get_weighted_token_score` scores as 0 - but it must never become a variant that
+        an unrelated candidate could win against.
+        """
+        assert strip_square_brackets("[NO_MOSTRAR]") == ""
 
 
 class TestGetWeightedTokenScore:
