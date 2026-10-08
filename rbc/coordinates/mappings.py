@@ -7,14 +7,12 @@ modules and utility helpers.
 
 from typing import Literal, NotRequired, TypedDict
 
+from rbc.energy.cen.mappings import EGE_NAME_TRANSLATIONS as CEN_NAME_TRANSLATIONS
+from rbc.energy.cen.mappings import FUELTYPE_MAPPING as CEN_FUEL_MAPPINGS
 from rbc.energy.entsoe.mappings import EGE_NAME_TRANSLATIONS as ENTSOE_NAME_TRANSLATIONS
 from rbc.energy.entsoe.mappings import FUELTYPE_CODE_MAPPINGS as ENTSOE_FUEL_MAPPINGS
-from rbc.energy.ons.mappings import (
-    EGE_NAME_TRANSLATIONS as ONS_NAME_TRANSLATIONS,
-)
-from rbc.energy.ons.mappings import (
-    FUELTYPE_MAPPING as ONS_FUEL_MAPPINGS,
-)
+from rbc.energy.ons.mappings import EGE_NAME_TRANSLATIONS as ONS_NAME_TRANSLATIONS
+from rbc.energy.ons.mappings import FUELTYPE_MAPPING as ONS_FUEL_MAPPINGS
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +56,7 @@ OPERATOR_COLUMNS: dict[str, str] = {
 OPERATOR_METADATA: dict[str, OperatorInfo] = {
     "adme": OperatorInfo(  # todo: check if other name_str_style def required
         country="Uruguay",
-        name_col="",
+        name_col="",  # double-column format, no clear name
         needs_coordinates=True,
     ),
     "aemo": OperatorInfo(
@@ -73,10 +71,14 @@ OPERATOR_METADATA: dict[str, OperatorInfo] = {
         fuel_col="Fuel Type",
         needs_coordinates=True,
     ),
-    "cen": OperatorInfo(  # todo: check if other name_str_style def required
+    "cen": OperatorInfo(
         country="Chile",
         name_col="central",
+        name_str_style="real",
+        name_mapping=CEN_NAME_TRANSLATIONS,
         fuel_col="tipo_tecnologia",
+        fuel_sub_col="subtipo_tecnologia",
+        fuel_mapping=CEN_FUEL_MAPPINGS,
         code_col="id_central",
         needs_coordinates=True,
     ),
